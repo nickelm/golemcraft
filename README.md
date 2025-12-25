@@ -32,7 +32,7 @@ golemcraft/
 │   └── utils/
 │       └── fps-counter.js # Performance monitoring
 ├── public/
-│   └── terrain3.png      # Minecraft-style texture atlas
+│   └── terrain3.png      # Texture atlas
 ├── index.html            # HTML entry point
 ├── package.json
 └── README.md
