@@ -4,6 +4,7 @@ import { TerrainGenerator, BLOCK_TYPES, createBlockGeometry, WATER_LEVEL } from 
 import { ObjectGenerator } from './objects.js';
 import { Hero, Golem, EnemyUnit } from './entities.js';
 import { FPSCounter } from './utils/fps-counter.js';
+import { TouchControls } from './utils/touch-controls.js';
 
 export class Game {
     constructor() {
