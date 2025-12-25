@@ -27,7 +27,7 @@ export class Game {
         this.controls.dampingFactor = 0.05;
         this.controls.maxPolarAngle = Math.PI / 2.5;
 
-        this.terrain = new TerrainGenerator();
+        this.terrain = new TerrainGenerator(Math.random() * 10000);
         this.objectGenerator = null; // Created after terrain
         this.entities = [];
         this.playerEntities = [];
