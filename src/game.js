@@ -41,6 +41,9 @@ export class Game {
         // FPS Counter
         this.fpsCounter = new FPSCounter();
 
+        // Touch controls (for phones and tablets)
+        this.touchControls = new TouchControls(this);
+
         // Load terrain texture
         const textureLoader = new THREE.TextureLoader();
         this.terrainTexture = textureLoader.load('./terrain3.png', () => {
@@ -294,6 +297,7 @@ export class Game {
     }
 
     update(deltaTime) {
+        this.touchControls.update(deltaTime);
         this.handleInput(deltaTime);
         
         this.entities.forEach(entity => {

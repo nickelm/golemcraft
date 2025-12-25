@@ -202,7 +202,7 @@ export class TouchControls {
         
         // Forward/backward based on Y axis
         if (currentY < -0.2) {
-            this.game.hero.moveForward(deltaTime * Math.abs(currentY));
+            this.game.hero.moveForward(16 * deltaTime * Math.abs(currentY));
         } else if (currentY > 0.2) {
             this.game.hero.moveBackward(deltaTime * Math.abs(currentY));
         }
