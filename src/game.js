@@ -42,7 +42,7 @@ export class Game {
 
         // Load terrain texture
         const textureLoader = new THREE.TextureLoader();
-        this.terrainTexture = textureLoader.load('/terrain3.png', () => {
+        this.terrainTexture = textureLoader.load('./terrain3.png', () => {
             this.init();
             this.setupEventListeners();
             this.animate();
