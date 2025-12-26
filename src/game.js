@@ -8,7 +8,10 @@ import { TouchControls } from './utils/touch-controls.js';
 import { CameraController } from './camera.js';
 
 export class Game {
-    constructor() {
+    constructor(worldData = null) {
+        this.worldData = worldData;
+        this.gameTime = worldData?.gameTime || 0;
+        
         this.scene = new THREE.Scene();
         this.camera = new THREE.PerspectiveCamera(
             60,
@@ -28,7 +31,10 @@ export class Game {
         this.controls.dampingFactor = 0.05;
         this.controls.maxPolarAngle = Math.PI / 2.5;
 
-        this.terrain = new TerrainGenerator(Math.random() * 10000);
+        // Use seed from world data, or generate random
+        const seed = worldData?.seed ?? Math.floor(Math.random() * 100000);
+        console.log('Using terrain seed:', seed);
+        this.terrain = new TerrainGenerator(seed);
         this.objectGenerator = null; // Created after terrain
         this.entities = [];
         this.playerEntities = [];
@@ -80,7 +86,6 @@ export class Game {
         this.scene.add(this.directionalLight);
         
         // Torch (point light) - follows hero, visible at night
-        // this.torchLight = new THREE.PointLight(0xff9944, 0, 100, 1);
         this.torchLight = new THREE.PointLight(0xffd478, 0, 50, 1);
         this.torchLight.castShadow = false; // Performance: skip torch shadows
         this.scene.add(this.torchLight);
@@ -96,27 +101,55 @@ export class Game {
         this.objectGenerator = new ObjectGenerator(this.terrain);
         this.objectGenerator.generate(this.scene, 500, 500, WATER_LEVEL);
 
-        // Find a good spawn point (above water, not too high)
-        const spawnPos = this.findSpawnPoint();
+        // Determine spawn position - use saved position or find new one
+        let spawnPos;
+        let spawnRotation = 0;
+        
+        if (this.worldData?.heroPosition) {
+            // Restore saved position
+            const saved = this.worldData.heroPosition;
+            spawnPos = new THREE.Vector3(saved.x, saved.y, saved.z);
+            spawnRotation = this.worldData.heroRotation || 0;
+            console.log('Restoring hero position:', spawnPos);
+        } else {
+            // Find a good spawn point (above water, not too high)
+            spawnPos = this.findSpawnPoint();
+            console.log('New spawn position:', spawnPos);
+        }
         
         // Create hero
         this.hero = new Hero(this.scene, spawnPos.clone());
+        this.hero.rotation = spawnRotation;
         
         this.entities.push(this.hero);
         this.playerEntities.push(this.hero);
 
-        // Create golems near hero
-        for (let i = 0; i < 3; i++) {
-            const golemPos = spawnPos.clone();
-            golemPos.x += -3 + i * 3;
-            golemPos.z -= 3;
-            const golem = new Golem(this.scene, golemPos);
-            this.hero.addGolem(golem);
-            this.entities.push(golem);
-            this.playerEntities.push(golem);
+        // Restore or create golems
+        if (this.worldData?.golems && this.worldData.golems.length > 0) {
+            // Restore saved golems
+            this.worldData.golems.forEach(golemData => {
+                const golemPos = new THREE.Vector3(golemData.x, golemData.y, golemData.z);
+                const golem = new Golem(this.scene, golemPos);
+                golem.health = golemData.health || 100;
+                this.hero.addGolem(golem);
+                this.entities.push(golem);
+                this.playerEntities.push(golem);
+            });
+            console.log('Restored', this.worldData.golems.length, 'golems');
+        } else {
+            // Create new golems near hero
+            for (let i = 0; i < 3; i++) {
+                const golemPos = spawnPos.clone();
+                golemPos.x += -3 + i * 3;
+                golemPos.z -= 3;
+                const golem = new Golem(this.scene, golemPos);
+                this.hero.addGolem(golem);
+                this.entities.push(golem);
+                this.playerEntities.push(golem);
+            }
         }
 
-        // Create enemies in a different area
+        // Create enemies in a different area (always fresh on load)
         const enemySpawn = this.findSpawnPoint(20, 20);
         for (let i = 0; i < 4; i++) {
             const enemyPos = enemySpawn.clone();
