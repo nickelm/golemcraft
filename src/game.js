@@ -351,17 +351,17 @@ export class Game {
     }
 
     // Check if a block is visible (has at least one exposed face)
-    // Water blocks are transparent, so blocks next to water are also visible
+    // Water and ice are treated as air - they don't hide neighboring blocks
     isBlockVisible(x, y, z) {
-        const isTransparent = (type) => type === null || type === 'water' || type === 'water_full';
+        const isAirOrWater = (type) => type === null || type === 'water' || type === 'water_full' || type === 'ice';
         
-        // Check all 6 neighbors - if any is air or water, this block is visible
-        if (isTransparent(this.terrain.getBlockType(x, y + 1, z))) return true;
-        if (isTransparent(this.terrain.getBlockType(x, y - 1, z))) return true;
-        if (isTransparent(this.terrain.getBlockType(x + 1, y, z))) return true;
-        if (isTransparent(this.terrain.getBlockType(x - 1, y, z))) return true;
-        if (isTransparent(this.terrain.getBlockType(x, y, z + 1))) return true;
-        if (isTransparent(this.terrain.getBlockType(x, y, z - 1))) return true;
+        // Check all 6 neighbors - if any is air/water/ice, this block is visible
+        if (isAirOrWater(this.terrain.getBlockType(x, y + 1, z))) return true;
+        if (isAirOrWater(this.terrain.getBlockType(x, y - 1, z))) return true;
+        if (isAirOrWater(this.terrain.getBlockType(x + 1, y, z))) return true;
+        if (isAirOrWater(this.terrain.getBlockType(x - 1, y, z))) return true;
+        if (isAirOrWater(this.terrain.getBlockType(x, y, z + 1))) return true;
+        if (isAirOrWater(this.terrain.getBlockType(x, y, z - 1))) return true;
         
         // Completely surrounded by solid blocks - not visible
         return false;
@@ -392,7 +392,10 @@ export class Game {
                     const blockType = this.terrain.getBlockType(x, y, z);
                     if (blockType) {
                         totalBlocks++;
-                        if (this.isBlockVisible(x, y, z)) {
+                        // Always render water blocks (no culling) to avoid gaps when viewed from angles
+                        // For solid blocks, only render if visible (has exposed face)
+                        const isWater = blockType === 'water' || blockType === 'water_full';
+                        if (isWater || this.isBlockVisible(x, y, z)) {
                             blockPositions[blockType].push({ x, y, z });
                             blockCounts[blockType]++;
                             visibleBlocks++;
@@ -419,7 +422,7 @@ export class Game {
                 material = new THREE.MeshLambertMaterial({
                     map: this.terrainTexture,
                     transparent: true,
-                    opacity: 0.7,
+                    opacity: 0.8,
                     side: THREE.DoubleSide
                 });
             } else if (blockType === 'ice') {
@@ -437,6 +440,11 @@ export class Game {
             
             const instancedMesh = new THREE.InstancedMesh(geometry, material, count);
             instancedMesh.receiveShadow = true;
+            
+            // Water must render after opaque terrain to show sand underneath
+            if (blockType === 'water' || blockType === 'water_full' || blockType === 'ice') {
+                instancedMesh.renderOrder = 1;
+            }
             
             const matrix = new THREE.Matrix4();
             const positions = blockPositions[blockType];
