@@ -295,13 +295,13 @@ export class Game {
             this.hero.turn(-1, deltaTime);
         }
         if (this.keys['w']) {
-            this.hero.moveForward(18 * deltaTime);
+            this.hero.moveForward(12 * deltaTime);
         }
         if (this.keys['s']) {
-            this.hero.moveBackward(5*deltaTime);
+            this.hero.moveBackward(6 * deltaTime);
         }
         if (this.keys[' ']) {
-            this.hero.jump(14);
+            this.hero.jump(10);
         }
     }
 

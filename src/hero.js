@@ -165,20 +165,21 @@ export class HeroMount {
         group.userData.heroHead = heroHead;
         group.userData.visor = visor;
         
-        // Arms (2 boxes) - hanging down naturally
-        const armGeo = new THREE.BoxGeometry(0.12, 0.5, 0.12);
+        // Arms (2 boxes) - attached at shoulders
+        // Torso is 0.4 wide (extends to x=±0.2), 0.6 tall (top at y=2.12)
+        const armGeo = new THREE.BoxGeometry(0.12, 0.45, 0.12);
         // Translate so pivot is at top (shoulder)
-        armGeo.translate(0, -0.25, 0);
+        armGeo.translate(0, -0.225, 0);
         
         const leftArm = new THREE.Mesh(armGeo, heroMat);
-        leftArm.position.set(-0.3, 2.1 + yOffset, 0); // At shoulder height
-        leftArm.rotation.z = -0.15; // Slight outward angle (negative for left)
+        leftArm.position.set(-0.2, 2.05 + yOffset, 0); // At edge of torso, shoulder height
+        leftArm.rotation.z = -0.2; // Slight outward angle
         leftArm.castShadow = true;
         group.add(leftArm);
         
         const rightArm = new THREE.Mesh(armGeo, heroMat);
-        rightArm.position.set(0.3, 2.1 + yOffset, 0); // At shoulder height
-        rightArm.rotation.z = 0.15; // Slight outward angle (positive for right)
+        rightArm.position.set(0.2, 2.05 + yOffset, 0); // At edge of torso, shoulder height
+        rightArm.rotation.z = 0.2; // Slight outward angle
         rightArm.castShadow = true;
         group.add(rightArm);
         

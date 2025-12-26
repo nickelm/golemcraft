@@ -132,11 +132,12 @@ export class ObjectGenerator {
         const trunkColor = 0x8B4513; // Brown
         const foliageColor = isSnowy ? 0x228B22 : 0x2E8B2E; // Dark green, slightly different shades
 
-        // Create trunk instances
+        // Create trunk instances - trunk is 1.2 tall
         const trunkGeometry = new THREE.CylinderGeometry(0.15, 0.2, 1.2, 6);
         const trunkMaterial = new THREE.MeshLambertMaterial({ color: trunkColor });
         const trunkMesh = new THREE.InstancedMesh(trunkGeometry, trunkMaterial, positions.length);
         trunkMesh.castShadow = true;
+        trunkMesh.receiveShadow = true;
 
         // Create foliage instances (cone for regular, sphere-ish for snowy)
         let foliageGeometry;
@@ -150,6 +151,7 @@ export class ObjectGenerator {
         const foliageMaterial = new THREE.MeshLambertMaterial({ color: foliageColor });
         const foliageMesh = new THREE.InstancedMesh(foliageGeometry, foliageMaterial, positions.length);
         foliageMesh.castShadow = true;
+        foliageMesh.receiveShadow = true;
 
         const matrix = new THREE.Matrix4();
         const rotation = new THREE.Euler();
@@ -159,17 +161,22 @@ export class ObjectGenerator {
         positions.forEach((pos, i) => {
             const sizeVar = 0.8 + pos.variation * 0.4; // 0.8 to 1.2 size
             
-            // Trunk
+            // Trunk - cylinder is 1.2 tall, center it so bottom touches ground
+            // pos.y is already at height + 1 (top of terrain block)
+            // Trunk center should be at pos.y + (0.6 * sizeVar) - 0.5 to sit on block
             scale.set(sizeVar, sizeVar, sizeVar);
+            const trunkY = pos.y + 0.6 * sizeVar - 1;
             matrix.compose(
-                new THREE.Vector3(pos.x, pos.y + 0.6 * sizeVar, pos.z),
+                new THREE.Vector3(pos.x, trunkY, pos.z),
                 quaternion,
                 scale
             );
             trunkMesh.setMatrixAt(i, matrix);
 
             // Foliage (on top of trunk)
-            const foliageY = isSnowy ? pos.y + 1.5 * sizeVar : pos.y + 1.8 * sizeVar;
+            // Trunk top is at trunkY + 0.6 * sizeVar
+            const trunkTop = trunkY + 0.6 * sizeVar;
+            const foliageY = isSnowy ? trunkTop + 0.9 * sizeVar : trunkTop + 0.4 * sizeVar;
             matrix.compose(
                 new THREE.Vector3(pos.x, foliageY, pos.z),
                 quaternion,
@@ -191,13 +198,16 @@ export class ObjectGenerator {
             const snowMaterial = new THREE.MeshLambertMaterial({ color: 0xFFFFFF });
             const snowMesh = new THREE.InstancedMesh(snowGeometry, snowMaterial, positions.length);
             snowMesh.castShadow = true;
+            snowMesh.receiveShadow = true;
 
             positions.forEach((pos, i) => {
                 const sizeVar = 0.8 + pos.variation * 0.4;
-                // Position snow cone to cover upper portion of green foliage
-                // Green foliage center is at pos.y + 1.5 * sizeVar, height 1.8
-                // Snow should sit on top, covering upper 2/3
-                const snowY = pos.y + 1.7 * sizeVar;
+                // Match the foliage calculation from above
+                const trunkY = pos.y + 0.6 * sizeVar - 1;
+                const trunkTop = trunkY + 0.6 * sizeVar;
+                const foliageY = trunkTop + 0.9 * sizeVar;
+                // Snow sits slightly higher than foliage center
+                const snowY = foliageY + 0.2 * sizeVar;
                 matrix.compose(
                     new THREE.Vector3(pos.x, snowY, pos.z),
                     quaternion,
@@ -222,6 +232,7 @@ export class ObjectGenerator {
         const material = new THREE.MeshLambertMaterial({ color: rockColor });
         const mesh = new THREE.InstancedMesh(geometry, material, positions.length);
         mesh.castShadow = true;
+        mesh.receiveShadow = true;
 
         const matrix = new THREE.Matrix4();
         const quaternion = new THREE.Quaternion();
