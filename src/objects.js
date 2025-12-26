@@ -6,25 +6,25 @@ export const OBJECT_TYPES = {
         name: 'Tree',
         biomes: ['plains'],
         density: 0.03,
-        hasCollision: true
+        hasCollision: false
     },
     snowTree: {
         name: 'Snow Tree',
         biomes: ['snow'],
         density: 0.025,
-        hasCollision: true
+        hasCollision: false
     },
     rock: {
         name: 'Rock',
         biomes: ['plains', 'mountains', 'snow'],
         density: 0.015,
-        hasCollision: true
+        hasCollision: false
     },
     boulder: {
         name: 'Boulder',
         biomes: ['mountains'],
         density: 0.02,
-        hasCollision: true
+        hasCollision: false
     },
     grass: {
         name: 'Grass',
@@ -36,7 +36,7 @@ export const OBJECT_TYPES = {
         name: 'Cactus',
         biomes: ['desert'],
         density: 0.02,
-        hasCollision: true
+        hasCollision: false
     }
 };
 

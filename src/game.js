@@ -87,6 +87,7 @@ export class Game {
         
         // Create hero
         this.hero = new Hero(this.scene, spawnPos.clone());
+        
         this.entities.push(this.hero);
         this.playerEntities.push(this.hero);
 

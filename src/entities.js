@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { HeroMount } from './hero.js';
 
 // Base entity class
 export class Entity {
@@ -111,9 +112,10 @@ export class Entity {
     }
 }
 
-// Hero riding a mount
+// Hero riding a mount - now using HeroMount visual
 export class Hero extends Entity {
     constructor(scene, position) {
+        // Don't create visual mesh in Entity - we'll use HeroMount instead
         super(scene, position, 0x0066cc, 1.2);
         this.team = 'player';
         this.commandedGolems = [];
@@ -121,22 +123,47 @@ export class Hero extends Entity {
         this.moveSpeed = 12; // Faster than other units
         this.turnSpeed = 3; // Radians per second
         
-        // Add mount visual (slightly larger base)
-        const mountGeometry = new THREE.BoxGeometry(1.5, 0.8, 2);
-        const mountMaterial = new THREE.MeshLambertMaterial({ 
-            color: 0x8b4513,
-            flatShading: true 
-        });
-        this.mountMesh = new THREE.Mesh(mountGeometry, mountMaterial);
-        this.mountMesh.position.y = -0.5;
-        this.mesh.add(this.mountMesh);
+        // Remove the basic Entity mesh
+        this.scene.remove(this.mesh);
+        
+        // Create HeroMount for visuals
+        this.heroMount = new HeroMount(this.scene, position);
+        this.mesh = this.heroMount.mesh; // Use HeroMount's mesh as our entity mesh
+        
+        // Track movement state for animation
+        this.isMoving = false;
+        this.isJumping = false;
+        this.oldRotation = 0; // Track rotation for turn animation
     }
     
-    update(deltaTime, terrain) {
-        super.update(deltaTime, terrain);
+    update(deltaTime, terrain, objectGenerator = null) {
+        // Store old position and rotation for movement detection
+        const oldPos = this.position.clone();
+        const oldRot = this.oldRotation;
+        
+        // Update physics from Entity base class
+        super.update(deltaTime, terrain, objectGenerator);
+        
+        // Sync HeroMount mesh position with entity position (including bob offset)
+        this.heroMount.mesh.position.copy(this.position);
+        this.heroMount.mesh.position.y += this.heroMount.bobOffset;
         
         // Update mesh rotation to face direction
-        this.mesh.rotation.y = this.rotation;
+        this.heroMount.setRotation(this.rotation);
+        
+        // Detect if we actually moved or turned (for animation)
+        const moved = this.position.distanceTo(oldPos) > 0.01;
+        const turned = Math.abs(this.rotation - oldRot) > 0.01;
+        this.isMoving = moved || turned || this.velocity.length() > 0.1;
+        
+        // Show jump animation whenever airborne (jumping or falling)
+        this.isJumping = !this.onGround;
+        
+        // Update HeroMount animation
+        this.heroMount.update(deltaTime, this.isMoving, this.isJumping);
+        
+        // Store rotation for next frame
+        this.oldRotation = this.rotation;
     }
     
     turn(direction, deltaTime) {
@@ -163,6 +190,14 @@ export class Hero extends Entity {
         this.velocity.x -= direction.x * this.moveSpeed * 0.6 * deltaTime; // Slower backward
         this.velocity.z -= direction.z * this.moveSpeed * 0.6 * deltaTime;
     }
+    
+    jump(force = 8) {
+        if (this.onGround) {
+            this.velocity.y = force;
+            this.onGround = false;
+            this.isJumping = true;
+        }
+    }
 
     commandGolems(target) {
         // Command all golems to move to target
@@ -174,6 +209,11 @@ export class Hero extends Entity {
     addGolem(golem) {
         this.commandedGolems.push(golem);
         golem.team = 'player';
+    }
+    
+    die() {
+        this.heroMount.destroy();
+        // Don't call super.die() since we already removed the mesh
     }
 }
 
