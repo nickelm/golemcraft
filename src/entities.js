@@ -63,12 +63,12 @@ export class Entity {
             }
         }
         
-        // Ground collision
+        // Ground collision - use interpolated height for smooth movement
         if (terrain) {
-            const groundHeight = terrain.getHeight(
-                Math.floor(this.position.x),
-                Math.floor(this.position.z)
-            );
+            // Use interpolated height for smooth terrain following
+            const groundHeight = terrain.getInterpolatedHeight 
+                ? terrain.getInterpolatedHeight(this.position.x, this.position.z)
+                : terrain.getHeight(Math.floor(this.position.x), Math.floor(this.position.z));
             
             const minY = groundHeight + this.groundOffset + 0.5; // Entity offset + half block
             

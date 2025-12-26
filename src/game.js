@@ -54,16 +54,25 @@ export class Game {
         // Camera controller (initialized after hero creation)
         this.cameraController = null;
 
-        // Load terrain texture
+        // Load terrain texture with mipmapping for better distance rendering
         const textureLoader = new THREE.TextureLoader();
-        this.terrainTexture = textureLoader.load('./terrain3.png', () => {
+        this.terrainTexture = textureLoader.load('./terrain-atlas.png', () => {
             this.init();
             this.setupEventListeners();
             this.animate();
         });
         
+        // Texture filtering configuration:
+        // - magFilter: NearestFilter preserves pixel art when close
+        // - minFilter: LinearMipmapLinearFilter (trilinear) for smooth distance rendering
+        // - Gutters in atlas prevent bleeding between tiles during mipmap blending
+        // - anisotropicFiltering: improves quality at oblique angles
         this.terrainTexture.magFilter = THREE.NearestFilter;
-        this.terrainTexture.minFilter = THREE.NearestFilter;
+        this.terrainTexture.minFilter = THREE.LinearMipmapLinearFilter;
+        this.terrainTexture.generateMipmaps = true;
+        
+        // Enable anisotropic filtering (max supported by GPU)
+        this.terrainTexture.anisotropy = this.renderer.capabilities.getMaxAnisotropy();
     }
 
     init() {
@@ -183,9 +192,9 @@ export class Game {
         `;
         
         const times = [
-            { id: 'day', label: '☀️ Day', shortcut: 'Y' },
-            { id: 'sunset', label: '🌅 Sunset', shortcut: 'U' },
-            { id: 'night', label: '🌙 Night', shortcut: 'I' }
+            { id: 'day', label: 'â˜€ï¸ Day', shortcut: 'Y' },
+            { id: 'sunset', label: 'ðŸŒ… Sunset', shortcut: 'U' },
+            { id: 'night', label: 'ðŸŒ™ Night', shortcut: 'I' }
         ];
         
         this.timeButtons = {};
@@ -250,11 +259,11 @@ export class Game {
     
     updateTorchButton() {
         if (this.torchEnabled) {
-            this.torchButton.textContent = '🔦 Torch ON [T]';
+            this.torchButton.textContent = 'ðŸ”¦ Torch ON [T]';
             this.torchButton.style.background = 'rgba(180, 100, 0, 0.8)';
             this.torchButton.style.borderColor = 'rgba(255, 180, 100, 0.8)';
         } else {
-            this.torchButton.textContent = '🔦 Torch OFF [T]';
+            this.torchButton.textContent = 'ðŸ”¦ Torch OFF [T]';
             this.torchButton.style.background = 'rgba(0, 0, 0, 0.6)';
             this.torchButton.style.borderColor = 'rgba(255, 255, 255, 0.3)';
         }

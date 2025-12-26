@@ -136,6 +136,35 @@ export class TerrainGenerator {
         return lakeNoise < 0.2;
     }
 
+    /**
+     * Get interpolated height at any world position (for smooth entity movement)
+     * Uses bilinear interpolation between the four surrounding block heights
+     */
+    getInterpolatedHeight(x, z) {
+        // Get the four surrounding integer coordinates
+        const x0 = Math.floor(x);
+        const z0 = Math.floor(z);
+        const x1 = x0 + 1;
+        const z1 = z0 + 1;
+        
+        // Fractional position within the cell
+        const fx = x - x0;
+        const fz = z - z0;
+        
+        // Get heights at the four corners
+        const h00 = this.getHeight(x0, z0);
+        const h10 = this.getHeight(x1, z0);
+        const h01 = this.getHeight(x0, z1);
+        const h11 = this.getHeight(x1, z1);
+        
+        // Bilinear interpolation
+        const h0 = h00 * (1 - fx) + h10 * fx;  // Interpolate along x at z0
+        const h1 = h01 * (1 - fx) + h11 * fx;  // Interpolate along x at z1
+        const height = h0 * (1 - fz) + h1 * fz; // Interpolate along z
+        
+        return height;
+    }
+
     // Generate height at position
     getHeight(x, z) {
         const key = `${x},${z}`;
@@ -255,34 +284,35 @@ export class TerrainGenerator {
 }
 
 // Block type definitions with tileset coordinates
+// Atlas is 720x720 pixels (10x10 grid of 72x72 cells, each with 64x64 tile + 4px gutter)
 export const BLOCK_TYPES = {
     grass: { 
         name: 'Grass',
-        tile: [5, 0]
+        tile: [0, 0]
     },
     dirt: { 
         name: 'Dirt',
-        tile: [9, 7]
+        tile: [3, 0]
     },
     stone: { 
         name: 'Stone',
-        tile: [4, 3]
+        tile: [1, 0]
     },
     snow: { 
         name: 'Snow',
-        tile: [5, 2]
+        tile: [2, 0]
     },
     sand: { 
         name: 'Sand',
-        tile: [4, 7]
+        tile: [5, 0]
     },
     water: { 
         name: 'Water',
-        tile: [9, 1]
+        tile: [4, 0]
     },
     ice: {
         name: 'Ice',
-        tile: [6, 2]
+        tile: [6, 0]
     }
 };
 
@@ -291,18 +321,20 @@ export function createBlockGeometry(blockType) {
     const geometry = new THREE.BoxGeometry(1, 1, 1);
     const uvs = geometry.attributes.uv.array;
     
-    const textureWidth = 10 * 77;
-    const textureHeight = 8 * 77;
-    const tileSize = 74;
-    const border = 3;
-    const tileTotalSize = 77;
+    // Atlas: 10×10 grid of 72×72 cells = 720×720 pixels
+    // Each cell has 64×64 tile centered with 4px gutter on each side
+    const cellSize = 72;
+    const tileSize = 64;
+    const gutter = 4;
+    const textureSize = 720;
     
     const [col, row] = BLOCK_TYPES[blockType].tile;
     
-    const uMin = (col * tileTotalSize + border) / textureWidth;
-    const uMax = (col * tileTotalSize + border + tileSize) / textureWidth;
-    const vMin = 1 - ((row + 1) * tileTotalSize) / textureHeight;
-    const vMax = 1 - (row * tileTotalSize + border) / textureHeight;
+    // UV coordinates sample the inner 64×64 tile, skipping the 4px gutter
+    const uMin = (col * cellSize + gutter) / textureSize;
+    const uMax = (col * cellSize + gutter + tileSize) / textureSize;
+    const vMax = 1 - (row * cellSize + gutter) / textureSize;
+    const vMin = 1 - (row * cellSize + gutter + tileSize) / textureSize;
     
     function setFaceUVs(faceIndex) {
         const offset = faceIndex * 4 * 2;
