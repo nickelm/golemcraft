@@ -351,22 +351,19 @@ export class Game {
     }
 
     // Check if a block is visible (has at least one exposed face)
+    // Water blocks are transparent, so blocks next to water are also visible
     isBlockVisible(x, y, z) {
-        // Check all 6 neighbors - if any is air/null, this block is visible
+        const isTransparent = (type) => type === null || type === 'water' || type === 'water_full';
         
-        // Above
-        if (this.terrain.getBlockType(x, y + 1, z) === null) return true;
+        // Check all 6 neighbors - if any is air or water, this block is visible
+        if (isTransparent(this.terrain.getBlockType(x, y + 1, z))) return true;
+        if (isTransparent(this.terrain.getBlockType(x, y - 1, z))) return true;
+        if (isTransparent(this.terrain.getBlockType(x + 1, y, z))) return true;
+        if (isTransparent(this.terrain.getBlockType(x - 1, y, z))) return true;
+        if (isTransparent(this.terrain.getBlockType(x, y, z + 1))) return true;
+        if (isTransparent(this.terrain.getBlockType(x, y, z - 1))) return true;
         
-        // Below
-        if (this.terrain.getBlockType(x, y - 1, z) === null) return true;
-        
-        // Four horizontal directions
-        if (this.terrain.getBlockType(x + 1, y, z) === null) return true;
-        if (this.terrain.getBlockType(x - 1, y, z) === null) return true;
-        if (this.terrain.getBlockType(x, y, z + 1) === null) return true;
-        if (this.terrain.getBlockType(x, y, z - 1) === null) return true;
-        
-        // Completely surrounded - not visible
+        // Completely surrounded by solid blocks - not visible
         return false;
     }
 
@@ -416,9 +413,9 @@ export class Game {
             
             const geometry = createBlockGeometry(blockType);
             
-            // Special material for water (transparent)
+            // Special material for water types (transparent)
             let material;
-            if (blockType === 'water') {
+            if (blockType === 'water' || blockType === 'water_full') {
                 material = new THREE.MeshLambertMaterial({
                     map: this.terrainTexture,
                     transparent: true,

@@ -246,7 +246,12 @@ export class TerrainGenerator {
             if (biome === 'snow' && y === WATER_LEVEL) {
                 return 'ice';
             }
-            return 'water';
+            // Surface water (top level) - uses surface geometry (top face only)
+            if (y === WATER_LEVEL) {
+                return 'water';
+            }
+            // Deeper water or waterfall - full cube
+            return 'water_full';
         }
         
         // Surface block
@@ -307,8 +312,16 @@ export const BLOCK_TYPES = {
         tile: [5, 0]
     },
     water: { 
-        name: 'Water',
-        tile: [4, 0]
+        name: 'Water Surface',
+        tile: [4, 0],
+        geometry: 'surface',  // top face only, pushed down
+        transparent: true
+    },
+    water_full: {
+        name: 'Water Full',
+        tile: [4, 0],
+        geometry: 'cube',
+        transparent: true
     },
     ice: {
         name: 'Ice',
@@ -316,13 +329,11 @@ export const BLOCK_TYPES = {
     }
 };
 
-// Helper to create UV-mapped box geometry for a specific block type
-export function createBlockGeometry(blockType) {
-    const geometry = new THREE.BoxGeometry(1, 1, 1);
-    const uvs = geometry.attributes.uv.array;
-    
-    // Atlas: 10×10 grid of 72×72 cells = 720×720 pixels
-    // Each cell has 64×64 tile centered with 4px gutter on each side
+// Blocks that count as transparent for visibility culling
+export const TRANSPARENT_BLOCKS = ['water', 'water_full'];
+
+// Get UV coordinates for a block type
+function getBlockUVs(blockType) {
     const cellSize = 72;
     const tileSize = 64;
     const gutter = 4;
@@ -330,11 +341,39 @@ export function createBlockGeometry(blockType) {
     
     const [col, row] = BLOCK_TYPES[blockType].tile;
     
-    // UV coordinates sample the inner 64×64 tile, skipping the 4px gutter
-    const uMin = (col * cellSize + gutter) / textureSize;
-    const uMax = (col * cellSize + gutter + tileSize) / textureSize;
-    const vMax = 1 - (row * cellSize + gutter) / textureSize;
-    const vMin = 1 - (row * cellSize + gutter + tileSize) / textureSize;
+    return {
+        uMin: (col * cellSize + gutter) / textureSize,
+        uMax: (col * cellSize + gutter + tileSize) / textureSize,
+        vMax: 1 - (row * cellSize + gutter) / textureSize,
+        vMin: 1 - (row * cellSize + gutter + tileSize) / textureSize
+    };
+}
+
+// Create a top-face-only geometry for water surface (pushed down slightly)
+function createSurfaceGeometry(blockType) {
+    // PlaneGeometry facing up, pushed down 0.2 units from top of block
+    const geometry = new THREE.PlaneGeometry(1, 1);
+    geometry.rotateX(-Math.PI / 2);  // Face upward
+    geometry.translate(0, 0.3, 0);    // Push down from y=0.5 to y=0.3
+    
+    const uvs = geometry.attributes.uv.array;
+    const { uMin, uMax, vMin, vMax } = getBlockUVs(blockType);
+    
+    // PlaneGeometry has 4 vertices
+    uvs[0] = uMin;  uvs[1] = vMax;   // top-left
+    uvs[2] = uMax;  uvs[3] = vMax;   // top-right
+    uvs[4] = uMin;  uvs[5] = vMin;   // bottom-left
+    uvs[6] = uMax;  uvs[7] = vMin;   // bottom-right
+    
+    geometry.attributes.uv.needsUpdate = true;
+    return geometry;
+}
+
+// Create standard cube geometry with UV mapping
+function createCubeGeometry(blockType) {
+    const geometry = new THREE.BoxGeometry(1, 1, 1);
+    const uvs = geometry.attributes.uv.array;
+    const { uMin, uMax, vMin, vMax } = getBlockUVs(blockType);
     
     function setFaceUVs(faceIndex) {
         const offset = faceIndex * 4 * 2;
@@ -350,4 +389,15 @@ export function createBlockGeometry(blockType) {
     
     geometry.attributes.uv.needsUpdate = true;
     return geometry;
+}
+
+// Helper to create UV-mapped geometry for a specific block type
+export function createBlockGeometry(blockType) {
+    const blockDef = BLOCK_TYPES[blockType];
+    
+    if (blockDef.geometry === 'surface') {
+        return createSurfaceGeometry(blockType);
+    }
+    
+    return createCubeGeometry(blockType);
 }
