@@ -155,6 +155,10 @@ export class HeroMount {
         visor.position.set(0, 2.65, 0.14);
         group.add(visor);
         
+        // Store references for first-person visibility toggle
+        group.userData.heroHead = heroHead;
+        group.userData.visor = visor;
+        
         // Arms (2 boxes) - hanging down naturally
         const armGeo = new THREE.BoxGeometry(0.15, 0.6, 0.15);
         // Translate so pivot is at top (shoulder)
@@ -277,6 +281,17 @@ export class HeroMount {
      */
     setRotation(rotationY) {
         this.mesh.rotation.y = rotationY;
+    }
+    
+    /**
+     * Set visibility of hero's head (for first-person mode)
+     * @param {boolean} visible - Whether head should be visible
+     */
+    setHeadVisible(visible) {
+        const heroHead = this.mesh.userData.heroHead;
+        const visor = this.mesh.userData.visor;
+        if (heroHead) heroHead.visible = visible;
+        if (visor) visor.visible = visible;
     }
     
     /**

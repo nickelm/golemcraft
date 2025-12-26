@@ -5,6 +5,7 @@ import { ObjectGenerator } from './objects.js';
 import { Hero, Golem, EnemyUnit } from './entities.js';
 import { FPSCounter } from './utils/fps-counter.js';
 import { TouchControls } from './utils/touch-controls.js';
+import { CameraController } from './camera.js';
 
 export class Game {
     constructor() {
@@ -43,6 +44,9 @@ export class Game {
 
         // Touch controls (for phones and tablets)
         this.touchControls = new TouchControls(this);
+
+        // Camera controller (initialized after hero creation)
+        this.cameraController = null;
 
         // Load terrain texture
         const textureLoader = new THREE.TextureLoader();
@@ -117,6 +121,9 @@ export class Game {
         this.camera.position.set(spawnPos.x, spawnPos.y + 20, spawnPos.z + 30);
         this.camera.lookAt(spawnPos);
         this.controls.target.copy(spawnPos);
+        
+        // Initialize camera controller
+        this.cameraController = new CameraController(this.camera, this.controls, this.hero);
     }
 
     findSpawnPoint(startX = 0, startZ = 0) {
@@ -313,11 +320,8 @@ export class Game {
         this.playerEntities = this.playerEntities.filter(e => e.health > 0);
         this.enemyEntities = this.enemyEntities.filter(e => e.health > 0);
 
-        const heroPos = this.hero.position.clone();
-        const delta = heroPos.clone().sub(this.controls.target);
-        
-        this.controls.target.copy(heroPos);
-        this.camera.position.add(delta);
+        // Update camera
+        this.cameraController.update(deltaTime);
         
         this.controls.update();
         this.updateUI();
@@ -329,11 +333,13 @@ export class Game {
             Math.floor(this.hero.position.x),
             Math.floor(this.hero.position.z)
         );
+        const cameraMode = this.cameraController ? this.cameraController.mode : 'orbit';
         stats.innerHTML = `
             Hero Health: ${Math.max(0, Math.floor(this.hero.health))}/${this.hero.maxHealth}<br>
             Golems: ${this.hero.commandedGolems.filter(g => g.health > 0).length}<br>
             Enemies: ${this.enemyEntities.length}<br>
-            Biome: ${biome}
+            Biome: ${biome}<br>
+            Camera: ${cameraMode}
         `;
     }
 
