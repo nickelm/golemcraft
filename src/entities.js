@@ -13,7 +13,7 @@ export class Entity {
         this.maxHealth = 100;
         this.team = 'neutral';
         this.onGround = false;
-        this.gravity = -20; // m/s^2
+        this.gravity = -35; // m/s^2 - snappy, responsive feel
         
         this.mesh = this.createMesh();
         this.scene.add(this.mesh);

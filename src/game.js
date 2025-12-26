@@ -71,13 +71,16 @@ export class Game {
         const directionalLight = new THREE.DirectionalLight(0xffffff, 0.8);
         directionalLight.position.set(50, 100, 50);
         directionalLight.castShadow = true;
-        directionalLight.shadow.camera.left = -50;
-        directionalLight.shadow.camera.right = 50;
-        directionalLight.shadow.camera.top = 50;
-        directionalLight.shadow.camera.bottom = -50;
-        directionalLight.shadow.mapSize.width = 1024;
-        directionalLight.shadow.mapSize.height = 1024;
+        directionalLight.shadow.camera.left = -40;
+        directionalLight.shadow.camera.right = 40;
+        directionalLight.shadow.camera.top = 40;
+        directionalLight.shadow.camera.bottom = -40;
+        directionalLight.shadow.mapSize.width = 2048;
+        directionalLight.shadow.mapSize.height = 2048;
         this.scene.add(directionalLight);
+        
+        // Store reference so shadow follows hero
+        this.directionalLight = directionalLight;
 
         // Generate terrain
         this.generateTerrain(500, 500);
@@ -295,13 +298,13 @@ export class Game {
             this.hero.turn(-1, deltaTime);
         }
         if (this.keys['w']) {
-            this.hero.moveForward(12 * deltaTime);
+            this.hero.moveForward(8 * deltaTime);
         }
         if (this.keys['s']) {
             this.hero.moveBackward(6 * deltaTime);
         }
         if (this.keys[' ']) {
-            this.hero.jump(10);
+            this.hero.jump(14);
         }
     }
 
@@ -323,6 +326,14 @@ export class Game {
 
         // Update camera
         this.cameraController.update(deltaTime);
+        
+        // Move shadow light to follow hero (keeps shadows working everywhere)
+        if (this.directionalLight) {
+            const heroPos = this.hero.position;
+            this.directionalLight.position.set(heroPos.x + 30, heroPos.y + 80, heroPos.z + 30);
+            this.directionalLight.target.position.copy(heroPos);
+            this.directionalLight.target.updateMatrixWorld();
+        }
         
         this.controls.update();
         this.updateUI();

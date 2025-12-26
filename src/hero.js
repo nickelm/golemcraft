@@ -39,6 +39,7 @@ export class HeroMount {
         this.rightArm = this.mesh.userData.rightArm;
         this.body = this.mesh.userData.body;
         this.tail = this.mesh.userData.tail;
+        this.neckGroup = this.mesh.userData.neckGroup;
     }
     
     createMesh() {
@@ -61,33 +62,39 @@ export class HeroMount {
         // Store reference on group for animation
         group.userData.body = body;
         
-        // Neck - angled forward
+        // Neck+Head group for animation (bobs forward/back while walking)
+        const neckGroup = new THREE.Group();
+        neckGroup.position.set(0, 1.0 + yOffset, 0.7); // Pivot point at base of neck
+        group.add(neckGroup);
+        group.userData.neckGroup = neckGroup;
+        
+        // Neck - angled forward (positions relative to neckGroup)
         const neckGeo = new THREE.BoxGeometry(0.25, 0.6, 0.25);
         const neck = new THREE.Mesh(neckGeo, bodyMat);
         neck.rotation.x = Math.PI / 3; // Angled forward
-        neck.position.set(0, 1.2 + yOffset, 0.8);
+        neck.position.set(0, 0.2, 0.1);
         neck.castShadow = true;
-        group.add(neck);
+        neckGroup.add(neck);
         
         // Head - longer and thinner for horse-like appearance
         const headGeo = new THREE.BoxGeometry(0.22, 0.3, 0.65);
-        const head = new THREE.Mesh(headGeo, bodyMat);
-        head.position.set(0, 1.35 + yOffset, 1.25);
-        head.rotation.x = Math.PI / 8; // Angled down slightly
-        head.castShadow = true;
-        group.add(head);
+        const horseHead = new THREE.Mesh(headGeo, bodyMat);
+        horseHead.position.set(0, 0.35, 0.55);
+        horseHead.rotation.x = Math.PI / 8; // Angled down slightly
+        horseHead.castShadow = true;
+        neckGroup.add(horseHead);
 
         // Ears - small pyramids pointing up, positioned on top of head
         const earGeo = new THREE.ConeGeometry(0.06, 0.18, 4);
         const leftEar = new THREE.Mesh(earGeo, bodyMat);
-        leftEar.position.set(0.08, 1.55 + yOffset, 0.95);
+        leftEar.position.set(0.08, 0.62, 0.35);
         leftEar.castShadow = true;
-        group.add(leftEar);
+        neckGroup.add(leftEar);
         
         const rightEar = new THREE.Mesh(earGeo, bodyMat);
-        rightEar.position.set(-0.08, 1.55 + yOffset, 0.95);
+        rightEar.position.set(-0.08, 0.62, 0.35);
         rightEar.castShadow = true;
-        group.add(rightEar);
+        neckGroup.add(rightEar);
         
         // Legs (4 boxes) - store for animation
         // Legs are 1.0 tall, attached at body bottom (y=0.6), extending to y=0
@@ -166,7 +173,7 @@ export class HeroMount {
         group.userData.visor = visor;
         
         // Arms (2 boxes) - attached at shoulders
-        // Torso is 0.4 wide (extends to x=±0.2), 0.6 tall (top at y=2.12)
+        // Torso is 0.4 wide (extends to x=Â±0.2), 0.6 tall (top at y=2.12)
         const armGeo = new THREE.BoxGeometry(0.12, 0.45, 0.12);
         // Translate so pivot is at top (shoulder)
         armGeo.translate(0, -0.225, 0);
@@ -236,6 +243,12 @@ export class HeroMount {
 
             // Body bob up and down during walk - store as offset
             this.bobOffset = Math.sin(this.animationTime * 8) * 0.05;
+            
+            // Neck/head bobs forward and back while walking (like a real horse)
+            if (this.neckGroup) {
+                const neckBob = Math.sin(this.animationTime * 8) * 0.15;
+                this.neckGroup.rotation.x = neckBob;
+            }
 
             // Arms swing back and forth (forward/backward, not side to side)
             if (this.leftArm && this.rightArm) {
@@ -262,6 +275,11 @@ export class HeroMount {
             
             // Reset body bob offset
             this.bobOffset *= 0.9;
+            
+            // Neck returns to rest
+            if (this.neckGroup) {
+                this.neckGroup.rotation.x *= 0.9;
+            }
             
             // Arms return to rest
             if (this.leftArm && this.rightArm) {

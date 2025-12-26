@@ -5,14 +5,16 @@ export const OBJECT_TYPES = {
     tree: {
         name: 'Tree',
         biomes: ['plains'],
-        density: 0.03,
-        hasCollision: false
+        density: 0.08,  // Higher base density, modulated by forest noise
+        hasCollision: false,
+        usesForestNoise: true  // Trees cluster into forests
     },
     snowTree: {
         name: 'Snow Tree',
         biomes: ['snow'],
-        density: 0.025,
-        hasCollision: false
+        density: 0.06,
+        hasCollision: false,
+        usesForestNoise: true
     },
     rock: {
         name: 'Rock',
@@ -53,6 +55,37 @@ export class ObjectGenerator {
         let h = this.seed + salt + x * 374761393 + z * 668265263;
         h = (h ^ (h >> 13)) * 1274126177;
         return ((h ^ (h >> 16)) & 0xffffffff) / 0xffffffff;
+    }
+    
+    // Smooth noise for forest clustering (creates patches of forest vs open plains)
+    forestNoise(x, z) {
+        // Low frequency noise creates large forest patches
+        const scale = 0.04;  // Larger = smaller patches
+        const X = Math.floor(x * scale);
+        const Z = Math.floor(z * scale);
+        const fx = (x * scale) - X;
+        const fz = (z * scale) - Z;
+        
+        // Smoothstep interpolation
+        const u = fx * fx * (3 - 2 * fx);
+        const v = fz * fz * (3 - 2 * fz);
+        
+        // Hash corners with forest-specific salt
+        const salt = 99999;
+        const a = this.hash(X, Z, salt);
+        const b = this.hash(X + 1, Z, salt);
+        const c = this.hash(X, Z + 1, salt);
+        const d = this.hash(X + 1, Z + 1, salt);
+        
+        // Bilinear interpolation
+        const noise = a * (1 - u) * (1 - v) +
+                      b * u * (1 - v) +
+                      c * (1 - u) * v +
+                      d * u * v;
+        
+        // Sharpen the transition: values below 0.45 become sparse, above become dense
+        // This creates distinct forest patches with clear meadows between
+        return Math.pow(noise, 0.7);  // Slightly boost forest coverage
     }
 
     // Check if position should have an object
@@ -99,7 +132,17 @@ export class ObjectGenerator {
                     if (!config.biomes.includes(biome)) continue;
                     
                     const salt = type.charCodeAt(0) * 1000;
-                    if (this.shouldPlaceObject(x, z, config.density, salt)) {
+                    
+                    // Apply forest noise to tree density - creates clustered forests
+                    let effectiveDensity = config.density;
+                    if (config.usesForestNoise) {
+                        const forestValue = this.forestNoise(x, z);
+                        // In forest areas (high noise): full density
+                        // In meadow areas (low noise): very sparse (5% of normal)
+                        effectiveDensity = config.density * (0.05 + 0.95 * forestValue);
+                    }
+                    
+                    if (this.shouldPlaceObject(x, z, effectiveDensity, salt)) {
                         const variation = this.getVariation(x, z, salt + 1);
                         objects[type].push({ x, y, z, variation });
                         
