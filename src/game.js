@@ -192,9 +192,9 @@ export class Game {
         `;
         
         const times = [
-            { id: 'day', label: 'â˜€ï¸ Day', shortcut: 'Y' },
-            { id: 'sunset', label: 'ðŸŒ… Sunset', shortcut: 'U' },
-            { id: 'night', label: 'ðŸŒ™ Night', shortcut: 'I' }
+            { id: 'day', label: '☀️ Day', shortcut: 'Y' },
+            { id: 'sunset', label: '🌅 Sunset', shortcut: 'U' },
+            { id: 'night', label: '🌙 Night', shortcut: 'I' }
         ];
         
         this.timeButtons = {};
@@ -259,11 +259,11 @@ export class Game {
     
     updateTorchButton() {
         if (this.torchEnabled) {
-            this.torchButton.textContent = 'ðŸ”¦ Torch ON [T]';
+            this.torchButton.textContent = '🔦 Torch ON [T]';
             this.torchButton.style.background = 'rgba(180, 100, 0, 0.8)';
             this.torchButton.style.borderColor = 'rgba(255, 180, 100, 0.8)';
         } else {
-            this.torchButton.textContent = 'ðŸ”¦ Torch OFF [T]';
+            this.torchButton.textContent = '🔦 Torch OFF [T]';
             this.torchButton.style.background = 'rgba(0, 0, 0, 0.6)';
             this.torchButton.style.borderColor = 'rgba(255, 255, 255, 0.3)';
         }
