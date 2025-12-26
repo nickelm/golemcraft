@@ -51,7 +51,7 @@ export class HeroMount {
         
         // === MOUNT (Horse) ===
         // Body - box along Z axis (facing forward)
-        const bodyGeo = new THREE.BoxGeometry(0.8, 0.8, 1.4);
+        const bodyGeo = new THREE.BoxGeometry(0.6, 0.8, 1.4);
         const bodyMat = new THREE.MeshLambertMaterial({ color: 0x8B4513 });
         const body = new THREE.Mesh(bodyGeo, bodyMat);
         body.position.set(0, 1.0 + yOffset, 0);
@@ -87,12 +87,12 @@ export class HeroMount {
         // Ears - small pyramids pointing up, positioned on top of head
         const earGeo = new THREE.ConeGeometry(0.06, 0.18, 4);
         const leftEar = new THREE.Mesh(earGeo, bodyMat);
-        leftEar.position.set(0.08, 0.62, 0.35);
+        leftEar.position.set(0.08, 0.7, 0.35);
         leftEar.castShadow = true;
         neckGroup.add(leftEar);
         
         const rightEar = new THREE.Mesh(earGeo, bodyMat);
-        rightEar.position.set(-0.08, 0.62, 0.35);
+        rightEar.position.set(-0.08, 0.7, 0.35);
         rightEar.castShadow = true;
         neckGroup.add(rightEar);
         
@@ -104,10 +104,10 @@ export class HeroMount {
         
         const legMat = new THREE.MeshLambertMaterial({ color: 0x8B4513 }); // Same as body
         const legPositions = [
-            { pos: [-0.25, 0.6 + yOffset, 0.45], name: 'frontLeft', isFront: true },
-            { pos: [0.25, 0.6 + yOffset, 0.45], name: 'frontRight', isFront: true },
-            { pos: [-0.25, 0.6 + yOffset, -0.45], name: 'backLeft', isFront: false },
-            { pos: [0.25, 0.6 + yOffset, -0.45], name: 'backRight', isFront: false }
+            { pos: [-0.2, 0.6 + yOffset, 0.45], name: 'frontLeft', isFront: true },
+            { pos: [0.2, 0.6 + yOffset, 0.45], name: 'frontRight', isFront: true },
+            { pos: [-0.2, 0.6 + yOffset, -0.45], name: 'backLeft', isFront: false },
+            { pos: [0.2, 0.6 + yOffset, -0.45], name: 'backRight', isFront: false }
         ];
         
         const legs = [];
@@ -126,6 +126,7 @@ export class HeroMount {
 
         // Tail - attached to back of body (body extends to z=-0.7)
         const tailGeo = new THREE.BoxGeometry(0.1, 0.6, 0.1);
+
         // Translate so pivot is at base (top attachment point)
         tailGeo.translate(0, -0.3, 0);
         const tail = new THREE.Mesh(tailGeo, bodyMat);
