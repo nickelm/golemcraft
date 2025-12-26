@@ -80,7 +80,8 @@ export class Game {
         this.scene.add(this.directionalLight);
         
         // Torch (point light) - follows hero, visible at night
-        this.torchLight = new THREE.PointLight(0xff9944, 0, 60, 1.2);
+        // this.torchLight = new THREE.PointLight(0xff9944, 0, 100, 1);
+        this.torchLight = new THREE.PointLight(0xffd478, 0, 50, 1);
         this.torchLight.castShadow = false; // Performance: skip torch shadows
         this.scene.add(this.torchLight);
         
@@ -228,7 +229,7 @@ export class Game {
     
     applyTorchState() {
         // Get base torch intensity for current time of day
-        const torchIntensities = { day: 0, sunset: 0.5, night: 4.0 };
+        const torchIntensities = { day: 0, sunset: 1.0, night: 6.0 };
         const baseIntensity = torchIntensities[this.timeOfDay] || 0;
         this.torchLight.intensity = this.torchEnabled ? baseIntensity : 0;
     }
