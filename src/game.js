@@ -64,23 +64,29 @@ export class Game {
         this.scene.background = new THREE.Color(0x87ceeb);
         this.scene.fog = new THREE.Fog(0x87ceeb, 50, 150);
 
-        // Lighting
-        const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
-        this.scene.add(ambientLight);
+        // Lighting - store references for day/night cycle
+        this.ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
+        this.scene.add(this.ambientLight);
 
-        const directionalLight = new THREE.DirectionalLight(0xffffff, 0.8);
-        directionalLight.position.set(50, 100, 50);
-        directionalLight.castShadow = true;
-        directionalLight.shadow.camera.left = -40;
-        directionalLight.shadow.camera.right = 40;
-        directionalLight.shadow.camera.top = 40;
-        directionalLight.shadow.camera.bottom = -40;
-        directionalLight.shadow.mapSize.width = 2048;
-        directionalLight.shadow.mapSize.height = 2048;
-        this.scene.add(directionalLight);
+        this.directionalLight = new THREE.DirectionalLight(0xffffff, 0.8);
+        this.directionalLight.position.set(50, 100, 50);
+        this.directionalLight.castShadow = true;
+        this.directionalLight.shadow.camera.left = -40;
+        this.directionalLight.shadow.camera.right = 40;
+        this.directionalLight.shadow.camera.top = 40;
+        this.directionalLight.shadow.camera.bottom = -40;
+        this.directionalLight.shadow.mapSize.width = 2048;
+        this.directionalLight.shadow.mapSize.height = 2048;
+        this.scene.add(this.directionalLight);
         
-        // Store reference so shadow follows hero
-        this.directionalLight = directionalLight;
+        // Torch (point light) - follows hero, visible at night
+        this.torchLight = new THREE.PointLight(0xff9944, 0, 60, 1.2);
+        this.torchLight.castShadow = false; // Performance: skip torch shadows
+        this.scene.add(this.torchLight);
+        
+        // Time of day system
+        this.timeOfDay = 'day';
+        this.createTimeControls();
 
         // Generate terrain
         this.generateTerrain(500, 500);
@@ -127,6 +133,159 @@ export class Game {
         
         // Initialize camera controller
         this.cameraController = new CameraController(this.camera, this.controls, this.hero);
+    }
+    
+    createTimeControls() {
+        const container = document.createElement('div');
+        container.id = 'time-controls';
+        container.style.cssText = `
+            position: absolute;
+            top: 60px;
+            right: 10px;
+            display: flex;
+            flex-direction: column;
+            gap: 5px;
+            z-index: 1000;
+        `;
+        
+        const times = [
+            { id: 'day', label: '☀️ Day', shortcut: 'Y' },
+            { id: 'sunset', label: '🌅 Sunset', shortcut: 'U' },
+            { id: 'night', label: '🌙 Night', shortcut: 'I' }
+        ];
+        
+        this.timeButtons = {};
+        
+        times.forEach(({ id, label, shortcut }) => {
+            const btn = document.createElement('button');
+            btn.textContent = `${label} [${shortcut}]`;
+            btn.dataset.time = id;
+            btn.style.cssText = `
+                padding: 8px 12px;
+                background: rgba(0, 0, 0, 0.6);
+                color: white;
+                border: 2px solid rgba(255, 255, 255, 0.3);
+                border-radius: 4px;
+                cursor: pointer;
+                font-family: monospace;
+                font-size: 12px;
+                transition: all 0.2s;
+            `;
+            
+            btn.addEventListener('click', () => this.setTimeOfDay(id));
+            container.appendChild(btn);
+            this.timeButtons[id] = btn;
+        });
+        
+        // Torch toggle button
+        this.torchEnabled = true;
+        this.torchButton = document.createElement('button');
+        this.torchButton.style.cssText = `
+            padding: 8px 12px;
+            background: rgba(0, 0, 0, 0.6);
+            color: white;
+            border: 2px solid rgba(255, 255, 255, 0.3);
+            border-radius: 4px;
+            cursor: pointer;
+            font-family: monospace;
+            font-size: 12px;
+            transition: all 0.2s;
+            margin-top: 10px;
+        `;
+        this.torchButton.addEventListener('click', () => this.toggleTorch());
+        container.appendChild(this.torchButton);
+        this.updateTorchButton();
+        
+        document.body.appendChild(container);
+        this.updateTimeButtons();
+        
+        // Keyboard shortcuts
+        window.addEventListener('keydown', (e) => {
+            if (e.key.toLowerCase() === 'y') this.setTimeOfDay('day');
+            if (e.key.toLowerCase() === 'u') this.setTimeOfDay('sunset');
+            if (e.key.toLowerCase() === 'i') this.setTimeOfDay('night');
+            if (e.key.toLowerCase() === 't') this.toggleTorch();
+        });
+    }
+    
+    toggleTorch() {
+        this.torchEnabled = !this.torchEnabled;
+        this.updateTorchButton();
+        this.applyTorchState();
+    }
+    
+    updateTorchButton() {
+        if (this.torchEnabled) {
+            this.torchButton.textContent = '🔦 Torch ON [T]';
+            this.torchButton.style.background = 'rgba(180, 100, 0, 0.8)';
+            this.torchButton.style.borderColor = 'rgba(255, 180, 100, 0.8)';
+        } else {
+            this.torchButton.textContent = '🔦 Torch OFF [T]';
+            this.torchButton.style.background = 'rgba(0, 0, 0, 0.6)';
+            this.torchButton.style.borderColor = 'rgba(255, 255, 255, 0.3)';
+        }
+    }
+    
+    applyTorchState() {
+        // Get base torch intensity for current time of day
+        const torchIntensities = { day: 0, sunset: 0.5, night: 4.0 };
+        const baseIntensity = torchIntensities[this.timeOfDay] || 0;
+        this.torchLight.intensity = this.torchEnabled ? baseIntensity : 0;
+    }
+    
+    updateTimeButtons() {
+        Object.entries(this.timeButtons).forEach(([id, btn]) => {
+            if (id === this.timeOfDay) {
+                btn.style.background = 'rgba(0, 100, 200, 0.8)';
+                btn.style.borderColor = 'rgba(100, 180, 255, 0.8)';
+            } else {
+                btn.style.background = 'rgba(0, 0, 0, 0.6)';
+                btn.style.borderColor = 'rgba(255, 255, 255, 0.3)';
+            }
+        });
+    }
+    
+    setTimeOfDay(time) {
+        this.timeOfDay = time;
+        this.updateTimeButtons();
+        
+        // Lighting presets
+        const presets = {
+            day: {
+                ambient: { color: 0xffffff, intensity: 0.6 },
+                directional: { color: 0xffffff, intensity: 0.8 },
+                sky: 0x87ceeb,
+                fog: 0x87ceeb
+            },
+            sunset: {
+                ambient: { color: 0xffa366, intensity: 0.4 },
+                directional: { color: 0xff7733, intensity: 0.6 },
+                sky: 0xff6b35,
+                fog: 0xd4a574
+            },
+            night: {
+                ambient: { color: 0x334466, intensity: 0.15 },
+                directional: { color: 0x6688bb, intensity: 0.1 },
+                sky: 0x0a0a1a,
+                fog: 0x0a0a1a
+            }
+        };
+        
+        const p = presets[time];
+        
+        // Apply lighting
+        this.ambientLight.color.setHex(p.ambient.color);
+        this.ambientLight.intensity = p.ambient.intensity;
+        
+        this.directionalLight.color.setHex(p.directional.color);
+        this.directionalLight.intensity = p.directional.intensity;
+        
+        // Apply torch based on toggle state
+        this.applyTorchState();
+        
+        // Apply sky/fog
+        this.scene.background.setHex(p.sky);
+        this.scene.fog.color.setHex(p.fog);
     }
 
     findSpawnPoint(startX = 0, startZ = 0) {
@@ -298,13 +457,13 @@ export class Game {
             this.hero.turn(-1, deltaTime);
         }
         if (this.keys['w']) {
-            this.hero.moveForward(8 * deltaTime);
+            this.hero.moveForward(12 * deltaTime);
         }
         if (this.keys['s']) {
             this.hero.moveBackward(6 * deltaTime);
         }
         if (this.keys[' ']) {
-            this.hero.jump(14);
+            this.hero.jump(10);
         }
     }
 
@@ -333,6 +492,17 @@ export class Game {
             this.directionalLight.position.set(heroPos.x + 30, heroPos.y + 80, heroPos.z + 30);
             this.directionalLight.target.position.copy(heroPos);
             this.directionalLight.target.updateMatrixWorld();
+        }
+        
+        // Torch follows hero (positioned above and slightly in front)
+        if (this.torchLight) {
+            const heroPos = this.hero.position;
+            const heroRot = this.hero.rotation;
+            this.torchLight.position.set(
+                heroPos.x + Math.sin(heroRot) * 0.5,
+                heroPos.y + 3,
+                heroPos.z + Math.cos(heroRot) * 0.5
+            );
         }
         
         this.controls.update();
