@@ -17,6 +17,10 @@ export class Entity {
         
         this.mesh = this.createMesh();
         this.scene.add(this.mesh);
+        
+        // Ground offset - distance from position.y to bottom of entity
+        // Default uses size-based calculation, can be overridden
+        this.groundOffset = this.size * 0.75;
     }
 
     createMesh() {
@@ -66,7 +70,7 @@ export class Entity {
                 Math.floor(this.position.z)
             );
             
-            const minY = groundHeight + this.size * 0.75 + 0.5; // Half entity height + half block
+            const minY = groundHeight + this.groundOffset + 0.5; // Entity offset + half block
             
             if (this.position.y <= minY) {
                 this.position.y = minY;
@@ -122,6 +126,9 @@ export class Hero extends Entity {
         this.rotation = 0; // Facing angle in radians
         this.moveSpeed = 12; // Faster than other units
         this.turnSpeed = 3; // Radians per second
+        
+        // Mount mesh has legs reaching y=0, so no extra ground offset needed
+        this.groundOffset = 0;
         
         // Remove the basic Entity mesh
         this.scene.remove(this.mesh);

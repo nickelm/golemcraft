@@ -22,7 +22,7 @@ export class CameraController {
         this.followLerpSpeed = 5;
         
         // First-person settings
-        this.firstPersonHeight = 2.7; // Eye level on mounted hero
+        this.firstPersonHeight = 2.3; // Eye level on mounted hero
         
         // Store original orbit settings
         this.originalMinDistance = controls.minDistance;

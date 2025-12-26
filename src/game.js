@@ -234,6 +234,7 @@ export class Game {
             }
             
             const instancedMesh = new THREE.InstancedMesh(geometry, material, count);
+            instancedMesh.receiveShadow = true;
             
             const matrix = new THREE.Matrix4();
             const positions = blockPositions[blockType];

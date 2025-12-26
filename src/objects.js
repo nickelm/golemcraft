@@ -184,16 +184,22 @@ export class ObjectGenerator {
         scene.add(trunkMesh);
         scene.add(foliageMesh);
 
-        // Add snow caps to snowy trees
+        // Add snow layer to snowy trees - covers most of the green cone
         if (isSnowy && positions.length > 0) {
-            const snowGeometry = new THREE.ConeGeometry(0.5, 0.6, 6);
+            // Snow is a slightly smaller cone that covers the top 2/3 of the tree
+            const snowGeometry = new THREE.ConeGeometry(0.6, 1.4, 6);
             const snowMaterial = new THREE.MeshLambertMaterial({ color: 0xFFFFFF });
             const snowMesh = new THREE.InstancedMesh(snowGeometry, snowMaterial, positions.length);
+            snowMesh.castShadow = true;
 
             positions.forEach((pos, i) => {
                 const sizeVar = 0.8 + pos.variation * 0.4;
+                // Position snow cone to cover upper portion of green foliage
+                // Green foliage center is at pos.y + 1.5 * sizeVar, height 1.8
+                // Snow should sit on top, covering upper 2/3
+                const snowY = pos.y + 1.7 * sizeVar;
                 matrix.compose(
-                    new THREE.Vector3(pos.x, pos.y + 2.2 * sizeVar, pos.z),
+                    new THREE.Vector3(pos.x, snowY, pos.z),
                     quaternion,
                     new THREE.Vector3(sizeVar, sizeVar, sizeVar)
                 );

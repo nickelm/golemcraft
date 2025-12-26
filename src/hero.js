@@ -44,57 +44,63 @@ export class HeroMount {
     createMesh() {
         const group = new THREE.Group();
         
+        // Vertical offset - the model is built with legs ending at y=0
+        // but we position pivot at ground level
+        const yOffset = 0;
+        
         // === MOUNT (Horse) ===
         // Body - box along Z axis (facing forward)
         const bodyGeo = new THREE.BoxGeometry(0.8, 0.8, 1.4);
         const bodyMat = new THREE.MeshLambertMaterial({ color: 0x8B4513 });
         const body = new THREE.Mesh(bodyGeo, bodyMat);
-        body.position.set(0, 1.2, 0);
+        body.position.set(0, 1.0 + yOffset, 0);
         body.castShadow = true;
+        body.receiveShadow = true;
         group.add(body);
         
         // Store reference on group for animation
         group.userData.body = body;
         
         // Neck - angled forward
-        const neckGeo = new THREE.BoxGeometry(0.3, 0.6, 0.3);
+        const neckGeo = new THREE.BoxGeometry(0.25, 0.6, 0.25);
         const neck = new THREE.Mesh(neckGeo, bodyMat);
         neck.rotation.x = Math.PI / 3; // Angled forward
-        neck.position.set(0, 1.4, 0.8);
+        neck.position.set(0, 1.2 + yOffset, 0.8);
         neck.castShadow = true;
         group.add(neck);
         
-        // Head - boxy shape angled downward
-        const headGeo = new THREE.BoxGeometry(0.3, 0.4, 0.5);
+        // Head - longer and thinner for horse-like appearance
+        const headGeo = new THREE.BoxGeometry(0.22, 0.3, 0.65);
         const head = new THREE.Mesh(headGeo, bodyMat);
-        head.position.set(0, 1.6, 1.15);
-        head.rotation.x = Math.PI / 6; // Angled down slightly
+        head.position.set(0, 1.35 + yOffset, 1.25);
+        head.rotation.x = Math.PI / 8; // Angled down slightly
         head.castShadow = true;
         group.add(head);
 
-        // Ears
-        const earGeo = new THREE.TetrahedronGeometry(0.15);
+        // Ears - small pyramids pointing up, positioned on top of head
+        const earGeo = new THREE.ConeGeometry(0.06, 0.18, 4);
         const leftEar = new THREE.Mesh(earGeo, bodyMat);
-        leftEar.position.set(0.08, 1.95, 1.1);
+        leftEar.position.set(0.08, 1.55 + yOffset, 0.95);
         leftEar.castShadow = true;
         group.add(leftEar);
         
         const rightEar = new THREE.Mesh(earGeo, bodyMat);
-        rightEar.position.set(-0.08, 1.95, 1.1);
+        rightEar.position.set(-0.08, 1.55 + yOffset, 0.95);
         rightEar.castShadow = true;
         group.add(rightEar);
         
         // Legs (4 boxes) - store for animation
-        const legGeo = new THREE.BoxGeometry(0.2, 1.2, 0.2);
+        // Legs are 1.0 tall, attached at body bottom (y=0.6), extending to y=0
+        const legGeo = new THREE.BoxGeometry(0.2, 0.6, 0.2);
         // Shift geometry down so rotation pivot is at top
-        legGeo.translate(0, -0.6, 0);
+        legGeo.translate(0, -0.3, 0);
         
         const legMat = new THREE.MeshLambertMaterial({ color: 0x8B4513 }); // Same as body
         const legPositions = [
-            { pos: [-0.3, 1.2, 0.5], name: 'frontLeft', isFront: true },
-            { pos: [0.3, 1.2, 0.5], name: 'frontRight', isFront: true },
-            { pos: [-0.3, 1.2, -0.5], name: 'backLeft', isFront: false },
-            { pos: [0.3, 1.2, -0.5], name: 'backRight', isFront: false }
+            { pos: [-0.25, 0.6 + yOffset, 0.45], name: 'frontLeft', isFront: true },
+            { pos: [0.25, 0.6 + yOffset, 0.45], name: 'frontRight', isFront: true },
+            { pos: [-0.25, 0.6 + yOffset, -0.45], name: 'backLeft', isFront: false },
+            { pos: [0.25, 0.6 + yOffset, -0.45], name: 'backRight', isFront: false }
         ];
         
         const legs = [];
@@ -111,13 +117,13 @@ export class HeroMount {
         // Store reference on group for animation
         group.userData.legs = legs;
 
-        // Tail
-        const tailGeo = new THREE.BoxGeometry(0.1, 0.8, 0.1);
+        // Tail - attached to back of body (body extends to z=-0.7)
+        const tailGeo = new THREE.BoxGeometry(0.1, 0.6, 0.1);
         // Translate so pivot is at base (top attachment point)
-        tailGeo.translate(0, -0.4, 0);
+        tailGeo.translate(0, -0.3, 0);
         const tail = new THREE.Mesh(tailGeo, bodyMat);
-        tail.position.set(0, 1.3, -0.8);
-        tail.rotation.x = Math.PI / 6;
+        tail.position.set(0, 1.2 + yOffset, -0.7); // Attach at back of body
+        tail.rotation.x = Math.PI / 4; // Angle down/back
         tail.castShadow = true;
         group.add(tail);
         
@@ -125,34 +131,34 @@ export class HeroMount {
         group.userData.tail = tail;
         
         // === RIDER (Hero) ===
-        // Saddle
-        const saddleGeo = new THREE.BoxGeometry(0.6, 0.15, 0.7);
+        // Saddle - on top of body
+        const saddleGeo = new THREE.BoxGeometry(0.6, 0.12, 0.5);
         const saddleMat = new THREE.MeshLambertMaterial({ color: 0x654321 }); // Darker brown
         const saddle = new THREE.Mesh(saddleGeo, saddleMat);
-        saddle.position.set(0, 1.6, 0);
+        saddle.position.set(0, 1.46 + yOffset, 0);
         saddle.castShadow = true;
         group.add(saddle);
 
-        // Torso
-        const torsoGeo = new THREE.BoxGeometry(0.5, 0.7, 0.5);
+        // Torso - sitting on saddle (saddle top at ~1.52, torso is 0.6 tall, center at 1.52 + 0.3 = 1.82)
+        const torsoGeo = new THREE.BoxGeometry(0.4, 0.6, 0.35);
         const heroMat = new THREE.MeshLambertMaterial({ color: 0x0066cc });
         const torso = new THREE.Mesh(torsoGeo, heroMat);
-        torso.position.set(0, 2.1, 0);
+        torso.position.set(0, 1.82 + yOffset, 0);
         torso.castShadow = true;
         group.add(torso);
         
         // Head
-        const heroHeadGeo = new THREE.BoxGeometry(0.5, 0.5, 0.5);
+        const heroHeadGeo = new THREE.BoxGeometry(0.4, 0.4, 0.4);
         const heroHead = new THREE.Mesh(heroHeadGeo, heroMat);
-        heroHead.position.set(0, 2.65, 0);
+        heroHead.position.set(0, 2.32 + yOffset, 0);
         heroHead.castShadow = true;
         group.add(heroHead);
 
         // Helmet/Visor
-        const visorGeo = new THREE.BoxGeometry(0.35, 0.08, 0.32);
+        const visorGeo = new THREE.BoxGeometry(0.3, 0.08, 0.25);
         const visorMat = new THREE.MeshLambertMaterial({ color: 0x003366 });
         const visor = new THREE.Mesh(visorGeo, visorMat);
-        visor.position.set(0, 2.65, 0.14);
+        visor.position.set(0, 2.32 + yOffset, 0.12);
         group.add(visor);
         
         // Store references for first-person visibility toggle
@@ -160,19 +166,19 @@ export class HeroMount {
         group.userData.visor = visor;
         
         // Arms (2 boxes) - hanging down naturally
-        const armGeo = new THREE.BoxGeometry(0.15, 0.6, 0.15);
+        const armGeo = new THREE.BoxGeometry(0.12, 0.5, 0.12);
         // Translate so pivot is at top (shoulder)
-        armGeo.translate(0, -0.3, 0);
+        armGeo.translate(0, -0.25, 0);
         
         const leftArm = new THREE.Mesh(armGeo, heroMat);
-        leftArm.position.set(-0.4, 2.45, 0); // At shoulder height
-        leftArm.rotation.z = -0.1; // Slight outward angle (negative for left)
+        leftArm.position.set(-0.3, 2.1 + yOffset, 0); // At shoulder height
+        leftArm.rotation.z = -0.15; // Slight outward angle (negative for left)
         leftArm.castShadow = true;
         group.add(leftArm);
         
         const rightArm = new THREE.Mesh(armGeo, heroMat);
-        rightArm.position.set(0.4, 2.45, 0); // At shoulder height
-        rightArm.rotation.z = 0.1; // Slight outward angle (positive for right)
+        rightArm.position.set(0.3, 2.1 + yOffset, 0); // At shoulder height
+        rightArm.rotation.z = 0.15; // Slight outward angle (positive for right)
         rightArm.castShadow = true;
         group.add(rightArm);
         
