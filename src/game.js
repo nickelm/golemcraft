@@ -23,7 +23,6 @@ export class Game {
         );
         
         this.renderer = new THREE.WebGLRenderer({ antialias: true });
-        // this.renderer.setSize(window.innerWidth, window.innerHeight);
         this.renderer.setPixelRatio(isMobile ? 1 : Math.min(window.devicePixelRatio, 2));
         this.renderer.setSize(window.innerWidth, window.innerHeight);
         this.renderer.shadowMap.enabled = !isMobile;
@@ -53,7 +52,7 @@ export class Game {
         this.fpsCounter = new FPSCounter();
 
         // Performance Monitor
-        this.perfMonitor = new PerformanceMonitor();
+        // this.perfMonitor = new PerformanceMonitor();
 
         // Touch controls (for phones and tablets)
         this.touchControls = new TouchControls(this);
@@ -69,17 +68,10 @@ export class Game {
             this.animate();
         });
         
-        // Texture filtering configuration:
-        // - magFilter: NearestFilter preserves pixel art when close
-        // - minFilter: LinearMipmapLinearFilter (trilinear) for smooth distance rendering
-        // - Gutters in atlas prevent bleeding between tiles during mipmap blending
-        // - anisotropicFiltering: improves quality at oblique angles
+        // Texture filtering configuration
         this.terrainTexture.magFilter = THREE.NearestFilter;
-        this.terrainTexture.minFilter = THREE.LinearMipmapLinearFilter;
-        this.terrainTexture.generateMipmaps = true;
-        
-        // Enable anisotropic filtering (max supported by GPU)
-        this.terrainTexture.anisotropy = this.renderer.capabilities.getMaxAnisotropy();
+        this.terrainTexture.minFilter = THREE.NearestFilter; // No mipmapping
+        this.terrainTexture.generateMipmaps = false;
     }
 
     init() {
@@ -206,48 +198,48 @@ export class Game {
         
         this.timeButtons = {};
         
-        // times.forEach(({ id, label, shortcut }) => {
-        //     const btn = document.createElement('button');
-        //     btn.textContent = `${label} [${shortcut}]`;
-        //     btn.dataset.time = id;
-        //     btn.style.cssText = `
-        //         padding: 8px 12px;
-        //         background: rgba(0, 0, 0, 0.6);
-        //         color: white;
-        //         border: 2px solid rgba(255, 255, 255, 0.3);
-        //         border-radius: 4px;
-        //         cursor: pointer;
-        //         font-family: monospace;
-        //         font-size: 12px;
-        //         transition: all 0.2s;
-        //     `;
+        times.forEach(({ id, label, shortcut }) => {
+            const btn = document.createElement('button');
+            btn.textContent = `${label} [${shortcut}]`;
+            btn.dataset.time = id;
+            btn.style.cssText = `
+                padding: 8px 12px;
+                background: rgba(0, 0, 0, 0.6);
+                color: white;
+                border: 2px solid rgba(255, 255, 255, 0.3);
+                border-radius: 4px;
+                cursor: pointer;
+                font-family: monospace;
+                font-size: 12px;
+                transition: all 0.2s;
+            `;
             
-        //     btn.addEventListener('click', () => this.setTimeOfDay(id));
-        //     container.appendChild(btn);
-        //     this.timeButtons[id] = btn;
-        // });
+            btn.addEventListener('click', () => this.setTimeOfDay(id));
+            container.appendChild(btn);
+            this.timeButtons[id] = btn;
+        });
         
-        // // Torch toggle button
-        // this.torchEnabled = true;
-        // this.torchButton = document.createElement('button');
-        // this.torchButton.style.cssText = `
-        //     padding: 8px 12px;
-        //     background: rgba(0, 0, 0, 0.6);
-        //     color: white;
-        //     border: 2px solid rgba(255, 255, 255, 0.3);
-        //     border-radius: 4px;
-        //     cursor: pointer;
-        //     font-family: monospace;
-        //     font-size: 12px;
-        //     transition: all 0.2s;
-        //     margin-top: 10px;
-        // `;
-        // this.torchButton.addEventListener('click', () => this.toggleTorch());
-        // container.appendChild(this.torchButton);
-        // this.updateTorchButton();
+        // Torch toggle button
+        this.torchEnabled = true;
+        this.torchButton = document.createElement('button');
+        this.torchButton.style.cssText = `
+            padding: 8px 12px;
+            background: rgba(0, 0, 0, 0.6);
+            color: white;
+            border: 2px solid rgba(255, 255, 255, 0.3);
+            border-radius: 4px;
+            cursor: pointer;
+            font-family: monospace;
+            font-size: 12px;
+            transition: all 0.2s;
+            margin-top: 10px;
+        `;
+        this.torchButton.addEventListener('click', () => this.toggleTorch());
+        container.appendChild(this.torchButton);
+        this.updateTorchButton();
         
-        // document.body.appendChild(container);
-        // this.updateTimeButtons();
+        document.body.appendChild(container);
+        this.updateTimeButtons();
         
         // Keyboard shortcuts
         window.addEventListener('keydown', (e) => {
@@ -589,6 +581,6 @@ export class Game {
         this.update(deltaTime);
         this.renderer.render(this.scene, this.camera);
 
-        this.perfMonitor.update(this.renderer);
+        // this.perfMonitor.update(this.renderer);
     }
 }
