@@ -13,17 +13,17 @@ export class Game {
         this.worldData = worldData;
         this.gameTime = worldData?.gameTime || 0;
         
+        const isMobile = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
         this.scene = new THREE.Scene();
         this.camera = new THREE.PerspectiveCamera(
             60,
             window.innerWidth / window.innerHeight,
             0.1,
-            1000
+            isMobile ? 500 : 1000 // Half the view distance
         );
         
         this.renderer = new THREE.WebGLRenderer({ antialias: true });
         // this.renderer.setSize(window.innerWidth, window.innerHeight);
-        const isMobile = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
         this.renderer.setPixelRatio(isMobile ? 1 : Math.min(window.devicePixelRatio, 2));
         this.renderer.setSize(window.innerWidth, window.innerHeight);
         this.renderer.shadowMap.enabled = !isMobile;

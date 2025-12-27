@@ -49,10 +49,10 @@ window.addEventListener('DOMContentLoaded', () => {
         }
     });
     
-    // Auto-save every 30 seconds
-    setInterval(() => {
-        saveGame(game);
-    }, 30000);
+    // // Auto-save every 30 seconds
+    // setInterval(() => {
+    //     saveGame(game);
+    // }, 30000);
     
     // Save on page unload
     window.addEventListener('beforeunload', () => {
