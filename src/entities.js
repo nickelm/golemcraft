@@ -49,6 +49,80 @@ export class Entity {
         // Apply velocity
         this.position.add(this.velocity.clone().multiplyScalar(deltaTime));
         
+        // Terrain height blocking - prevent walking UP 2+ blocks (but allow jumping over)
+        // Handle X and Z axes independently
+        if (terrain) {
+            const margin = 0.01;
+            const oldCellX = Math.floor(oldX);
+            const oldCellZ = Math.floor(oldZ);
+            
+            // Check X axis - are we crossing or about to cross a cell boundary?
+            // Moving positive: check if we've reached or passed the next integer
+            // Moving negative: check if we've gone below the current cell's floor
+            if (this.velocity.x > 0) {
+                const boundary = oldCellX + 1.0; // Right edge of current cell
+                if (this.position.x >= boundary) {
+                    const currentHeight = terrain.getHeight(oldCellX + 1, oldCellZ);
+                    const nextCellX = Math.floor(this.position.x);
+                    const nextHeight = terrain.getHeight(nextCellX + 1, oldCellZ);
+                    const heightDiff = nextHeight - currentHeight;
+                    const canClear = this.position.y >= currentHeight + heightDiff - 0.5;
+                    
+                    if (heightDiff >= 2 && !canClear) {
+                        this.position.x = boundary - margin;
+                        this.velocity.x = 0;
+                    }
+                }
+            } else if (this.velocity.x < 0) {
+                const boundary = oldCellX; // Left edge of current cell
+                if (this.position.x < boundary) {
+                    const currentHeight = terrain.getHeight(oldCellX, oldCellZ);
+                    const nextCellX = Math.floor(this.position.x);
+                    const nextHeight = terrain.getHeight(nextCellX, oldCellZ);
+                    const heightDiff = nextHeight - currentHeight;
+                    const canClear = this.position.y >= currentHeight + heightDiff - 0.5;
+                    
+                    if (heightDiff >= 2 && !canClear) {
+                        this.position.x = boundary + margin;
+                        this.velocity.x = 0;
+                    }
+                }
+            }
+            
+            // Check Z axis - use potentially updated X position
+            const nowCellX = Math.floor(this.position.x);
+            
+            if (this.velocity.z > 0) {
+                const boundary = oldCellZ + 1;
+                if (this.position.z >= boundary) {
+                    const nextCellZ = Math.floor(this.position.z);
+                    const baseHeight = terrain.getHeight(nowCellX, oldCellZ + 1);
+                    const nextHeight = terrain.getHeight(nowCellX, nextCellZ + 1);
+                    const heightDiff = nextHeight - baseHeight;
+                    const canClear = this.position.y >= baseHeight + heightDiff - 0.5;
+                    
+                    if (heightDiff >= 2 && !canClear) {
+                        this.position.z = boundary - margin;
+                        this.velocity.z = 0;
+                    }
+                }
+            } else if (this.velocity.z < 0) {
+                const boundary = oldCellZ;
+                if (this.position.z < boundary) {
+                    const nextCellZ = Math.floor(this.position.z);
+                    const baseHeight = terrain.getHeight(nowCellX, oldCellZ);
+                    const nextHeight = terrain.getHeight(nowCellX, nextCellZ);
+                    const heightDiff = nextHeight - baseHeight;
+                    const canClear = this.position.y >= baseHeight + heightDiff - 0.5;
+                    
+                    if (heightDiff >= 2 && !canClear) {
+                        this.position.z = boundary + margin;
+                        this.velocity.z = 0;
+                    }
+                }
+            }
+        }
+        
         // Object collision (trees, rocks, cacti)
         if (objectGenerator) {
             const cellX = Math.floor(this.position.x);
@@ -63,14 +137,31 @@ export class Entity {
             }
         }
         
-        // Ground collision - use interpolated height for smooth movement
+        // Ground collision - use interpolation for smooth slopes, block height for cliffs
         if (terrain) {
-            // Use interpolated height for smooth terrain following
-            const groundHeight = terrain.getInterpolatedHeight 
+            const interpolatedHeight = terrain.getInterpolatedHeight 
                 ? terrain.getInterpolatedHeight(this.position.x, this.position.z)
                 : terrain.getHeight(Math.floor(this.position.x), Math.floor(this.position.z));
             
-            const minY = groundHeight + this.groundOffset + 0.5; // Entity offset + half block
+            const blockHeight = terrain.getHeight(Math.floor(this.position.x), Math.floor(this.position.z));
+            
+            // Check if we're on steep terrain (cliff face)
+            // Sample surrounding blocks to detect steep changes
+            const x = Math.floor(this.position.x);
+            const z = Math.floor(this.position.z);
+            let maxHeightDiff = 0;
+            for (let dx = -1; dx <= 1; dx++) {
+                for (let dz = -1; dz <= 1; dz++) {
+                    if (dx === 0 && dz === 0) continue;
+                    const neighborHeight = terrain.getHeight(x + dx, z + dz);
+                    maxHeightDiff = Math.max(maxHeightDiff, Math.abs(neighborHeight - blockHeight));
+                }
+            }
+            
+            // Use block height on cliffs (2+ block difference), interpolated on gentle slopes
+            const effectiveHeight = maxHeightDiff >= 2 ? blockHeight : interpolatedHeight;
+            
+            const minY = effectiveHeight + this.groundOffset + 0.5;
             
             if (this.position.y <= minY) {
                 this.position.y = minY;
@@ -198,7 +289,7 @@ export class Hero extends Entity {
         this.velocity.z -= direction.z * this.moveSpeed * 0.6 * deltaTime;
     }
     
-    jump(force = 8) {
+    jump(force = 12) {
         if (this.onGround) {
             this.velocity.y = force;
             this.onGround = false;

@@ -511,7 +511,7 @@ export class Game {
             this.hero.moveBackward(6 * deltaTime);
         }
         if (this.keys[' ']) {
-            this.hero.jump(10);
+            this.hero.jump(12);
         }
     }
 
