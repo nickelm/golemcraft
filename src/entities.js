@@ -1,11 +1,17 @@
 import * as THREE from 'three';
 import { HeroMount } from './hero.js';
+import { resolveEntityCollision, createEntityAABB, createHeroAABB } from './collision.js';
 
-// Base entity class
+/**
+ * Base Entity class
+ * 
+ * All game entities (hero, golems, enemies) inherit from this.
+ * Physics and collision are delegated to the collision module.
+ */
 export class Entity {
     constructor(scene, position, color, size = 1) {
         this.scene = scene;
-        this.position = position;
+        this.position = position.clone();
         this.velocity = new THREE.Vector3(0, 0, 0);
         this.color = color;
         this.size = size;
@@ -13,14 +19,13 @@ export class Entity {
         this.maxHealth = 100;
         this.team = 'neutral';
         this.onGround = false;
-        this.gravity = -35; // m/s^2 - snappy, responsive feel
+        this.gravity = -35;
         
         this.mesh = this.createMesh();
         this.scene.add(this.mesh);
         
-        // Ground offset - distance from position.y to bottom of entity
-        // Default uses size-based calculation, can be overridden
-        this.groundOffset = this.size * 0.75;
+        // AABB for collision (created lazily by collision module)
+        this.aabb = null;
     }
 
     createMesh() {
@@ -32,158 +37,19 @@ export class Entity {
         const mesh = new THREE.Mesh(geometry, material);
         mesh.position.copy(this.position);
         mesh.castShadow = true;
-        mesh.entity = this; // Back reference
+        mesh.entity = this;
         return mesh;
     }
 
     update(deltaTime, terrain, objectGenerator = null) {
-        // Apply gravity
-        if (!this.onGround) {
-            this.velocity.y += this.gravity * deltaTime;
-        }
-        
-        // Store old position for collision resolution
-        const oldX = this.position.x;
-        const oldZ = this.position.z;
-        
-        // Apply velocity
-        this.position.add(this.velocity.clone().multiplyScalar(deltaTime));
-        
-        // Terrain height blocking - prevent walking UP 2+ blocks (but allow jumping over)
-        // Handle X and Z axes independently
-        if (terrain) {
-            const margin = 0.01;
-            const oldCellX = Math.floor(oldX);
-            const oldCellZ = Math.floor(oldZ);
-            
-            // Check X axis - are we crossing or about to cross a cell boundary?
-            // Moving positive: check if we've reached or passed the next integer
-            // Moving negative: check if we've gone below the current cell's floor
-            if (this.velocity.x > 0) {
-                const boundary = oldCellX + 1.0; // Right edge of current cell
-                if (this.position.x >= boundary) {
-                    const currentHeight = terrain.getHeight(oldCellX + 1, oldCellZ);
-                    const nextCellX = Math.floor(this.position.x);
-                    const nextHeight = terrain.getHeight(nextCellX + 1, oldCellZ);
-                    const heightDiff = nextHeight - currentHeight;
-                    const canClear = this.position.y >= currentHeight + heightDiff - 0.5;
-                    
-                    if (heightDiff >= 2 && !canClear) {
-                        this.position.x = boundary - margin;
-                        this.velocity.x = 0;
-                    }
-                }
-            } else if (this.velocity.x < 0) {
-                const boundary = oldCellX; // Left edge of current cell
-                if (this.position.x < boundary) {
-                    const currentHeight = terrain.getHeight(oldCellX, oldCellZ);
-                    const nextCellX = Math.floor(this.position.x);
-                    const nextHeight = terrain.getHeight(nextCellX, oldCellZ);
-                    const heightDiff = nextHeight - currentHeight;
-                    const canClear = this.position.y >= currentHeight + heightDiff - 0.5;
-                    
-                    if (heightDiff >= 2 && !canClear) {
-                        this.position.x = boundary + margin;
-                        this.velocity.x = 0;
-                    }
-                }
-            }
-            
-            // Check Z axis - use potentially updated X position
-            const nowCellX = Math.floor(this.position.x);
-            
-            if (this.velocity.z > 0) {
-                const boundary = oldCellZ + 1;
-                if (this.position.z >= boundary) {
-                    const nextCellZ = Math.floor(this.position.z);
-                    const baseHeight = terrain.getHeight(nowCellX, oldCellZ + 1);
-                    const nextHeight = terrain.getHeight(nowCellX, nextCellZ + 1);
-                    const heightDiff = nextHeight - baseHeight;
-                    const canClear = this.position.y >= baseHeight + heightDiff - 0.5;
-                    
-                    if (heightDiff >= 2 && !canClear) {
-                        this.position.z = boundary - margin;
-                        this.velocity.z = 0;
-                    }
-                }
-            } else if (this.velocity.z < 0) {
-                const boundary = oldCellZ;
-                if (this.position.z < boundary) {
-                    const nextCellZ = Math.floor(this.position.z);
-                    const baseHeight = terrain.getHeight(nowCellX, oldCellZ);
-                    const nextHeight = terrain.getHeight(nowCellX, nextCellZ);
-                    const heightDiff = nextHeight - baseHeight;
-                    const canClear = this.position.y >= baseHeight + heightDiff - 0.5;
-                    
-                    if (heightDiff >= 2 && !canClear) {
-                        this.position.z = boundary + margin;
-                        this.velocity.z = 0;
-                    }
-                }
-            }
-        }
-        
-        // Object collision (trees, rocks, cacti)
-        if (objectGenerator) {
-            const cellX = Math.floor(this.position.x);
-            const cellZ = Math.floor(this.position.z);
-            
-            if (objectGenerator.hasCollision(cellX, cellZ)) {
-                // Push back to old position
-                this.position.x = oldX;
-                this.position.z = oldZ;
-                this.velocity.x = 0;
-                this.velocity.z = 0;
-            }
-        }
-        
-        // Ground collision - use interpolation for smooth slopes, block height for cliffs
-        if (terrain) {
-            const interpolatedHeight = terrain.getInterpolatedHeight 
-                ? terrain.getInterpolatedHeight(this.position.x, this.position.z)
-                : terrain.getHeight(Math.floor(this.position.x), Math.floor(this.position.z));
-            
-            const blockHeight = terrain.getHeight(Math.floor(this.position.x), Math.floor(this.position.z));
-            
-            // Check if we're on steep terrain (cliff face)
-            // Sample surrounding blocks to detect steep changes
-            const x = Math.floor(this.position.x);
-            const z = Math.floor(this.position.z);
-            let maxHeightDiff = 0;
-            for (let dx = -1; dx <= 1; dx++) {
-                for (let dz = -1; dz <= 1; dz++) {
-                    if (dx === 0 && dz === 0) continue;
-                    const neighborHeight = terrain.getHeight(x + dx, z + dz);
-                    maxHeightDiff = Math.max(maxHeightDiff, Math.abs(neighborHeight - blockHeight));
-                }
-            }
-            
-            // Use block height on cliffs (2+ block difference), interpolated on gentle slopes
-            const effectiveHeight = maxHeightDiff >= 2 ? blockHeight : interpolatedHeight;
-            
-            const minY = effectiveHeight + this.groundOffset + 0.5;
-            
-            if (this.position.y <= minY) {
-                this.position.y = minY;
-                this.velocity.y = 0;
-                this.onGround = true;
-            } else {
-                this.onGround = false;
-            }
-        }
-        
-        this.mesh.position.copy(this.position);
-        
-        // Horizontal damping only
-        this.velocity.x *= 0.9;
-        this.velocity.z *= 0.9;
+        resolveEntityCollision(this, terrain, deltaTime);
     }
 
     moveTo(target, speed = 5) {
         const direction = new THREE.Vector3()
             .subVectors(target, this.position)
             .normalize();
-        direction.y = 0; // Don't move vertically
+        direction.y = 0;
         this.velocity.x = direction.x * speed;
         this.velocity.z = direction.z * speed;
     }
@@ -207,65 +73,107 @@ export class Entity {
     }
 }
 
-// Hero riding a mount - now using HeroMount visual
+/**
+ * Hero Entity - Player-controlled character riding a mount
+ */
 export class Hero extends Entity {
     constructor(scene, position) {
-        // Don't create visual mesh in Entity - we'll use HeroMount instead
         super(scene, position, 0x0066cc, 1.2);
         this.team = 'player';
         this.commandedGolems = [];
-        this.rotation = 0; // Facing angle in radians
-        this.moveSpeed = 12; // Faster than other units
-        this.turnSpeed = 3; // Radians per second
-        
-        // Mount mesh has legs reaching y=0, so no extra ground offset needed
-        this.groundOffset = 0;
+        this.rotation = 0;
+        this.moveSpeed = 12;
+        this.turnSpeed = 3;
         
         // Remove the basic Entity mesh
         this.scene.remove(this.mesh);
         
         // Create HeroMount for visuals
         this.heroMount = new HeroMount(this.scene, position);
-        this.mesh = this.heroMount.mesh; // Use HeroMount's mesh as our entity mesh
+        this.mesh = this.heroMount.mesh;
         
-        // Track movement state for animation
+        // Custom AABB for mounted hero - matches mesh dimensions
+        this.aabb = createHeroAABB();
+        
+        // Animation state
         this.isMoving = false;
         this.isJumping = false;
-        this.oldRotation = 0; // Track rotation for turn animation
+        this.oldRotation = 0;
+        
+        // Debug visualization (disabled by default)
+        this.debugAABB = null;
+        // this.createDebugAABB();  // Uncomment for debugging
     }
     
     update(deltaTime, terrain, objectGenerator = null) {
-        // Store old position and rotation for movement detection
         const oldPos = this.position.clone();
         const oldRot = this.oldRotation;
         
-        // Update physics from Entity base class
-        super.update(deltaTime, terrain, objectGenerator);
+        // Physics via collision module
+        resolveEntityCollision(this, terrain, deltaTime);
         
-        // Sync HeroMount mesh position with entity position (including bob offset)
+        // Sync mesh position with bob animation
+        // Apply groundOffset from AABB to align mesh with collision
         this.heroMount.mesh.position.copy(this.position);
-        this.heroMount.mesh.position.y += this.heroMount.bobOffset;
-        
-        // Update mesh rotation to face direction
+        this.heroMount.mesh.position.y += this.heroMount.bobOffset + (this.aabb?.groundOffset || 0);
         this.heroMount.setRotation(this.rotation);
         
-        // Detect if we actually moved or turned (for animation)
+        // Update debug AABB visualization
+        if (this.debugAABB && this.aabb) {
+            this.debugAABB.position.set(
+                this.position.x,
+                this.position.y + this.aabb.height / 2 + (this.aabb.groundOffset || 0),
+                this.position.z
+            );
+        }
+        
+        // Animation state
         const moved = this.position.distanceTo(oldPos) > 0.01;
         const turned = Math.abs(this.rotation - oldRot) > 0.01;
         this.isMoving = moved || turned || this.velocity.length() > 0.1;
-        
-        // Show jump animation whenever airborne (jumping or falling)
         this.isJumping = !this.onGround;
         
-        // Update HeroMount animation
         this.heroMount.update(deltaTime, this.isMoving, this.isJumping);
-        
-        // Store rotation for next frame
         this.oldRotation = this.rotation;
     }
     
+    /**
+     * Create a wireframe box showing the collision AABB
+     */
+    createDebugAABB() {
+        if (this.debugAABB) return;
+        
+        const geometry = new THREE.BoxGeometry(
+            this.aabb.width,
+            this.aabb.height,
+            this.aabb.depth
+        );
+        const material = new THREE.MeshBasicMaterial({
+            color: 0x00ff00,
+            wireframe: true,
+            transparent: true,
+            opacity: 0.8
+        });
+        this.debugAABB = new THREE.Mesh(geometry, material);
+        this.debugAABB.position.set(
+            this.position.x,
+            this.position.y + this.aabb.height / 2,
+            this.position.z
+        );
+        this.scene.add(this.debugAABB);
+    }
+    
+    /**
+     * Remove debug AABB visualization
+     */
+    removeDebugAABB() {
+        if (this.debugAABB) {
+            this.scene.remove(this.debugAABB);
+            this.debugAABB = null;
+        }
+    }
+    
     turn(direction, deltaTime) {
-        // direction: -1 for left, 1 for right
         this.rotation += direction * this.turnSpeed * deltaTime;
     }
     
@@ -285,7 +193,7 @@ export class Hero extends Entity {
             0,
             Math.cos(this.rotation)
         );
-        this.velocity.x -= direction.x * this.moveSpeed * 0.6 * deltaTime; // Slower backward
+        this.velocity.x -= direction.x * this.moveSpeed * 0.6 * deltaTime;
         this.velocity.z -= direction.z * this.moveSpeed * 0.6 * deltaTime;
     }
     
@@ -298,7 +206,6 @@ export class Hero extends Entity {
     }
 
     commandGolems(target) {
-        // Command all golems to move to target
         this.commandedGolems.forEach(golem => {
             golem.moveTo(target, 3);
         });
@@ -310,19 +217,21 @@ export class Hero extends Entity {
     }
     
     die() {
+        this.removeDebugAABB();
         this.heroMount.destroy();
-        // Don't call super.die() since we already removed the mesh
     }
 }
 
-// Golem unit
+/**
+ * Golem Entity - Player-controlled minion
+ */
 export class Golem extends Entity {
     constructor(scene, position) {
         super(scene, position, 0xcc6600, 1.5);
         this.team = 'player';
         this.attackRange = 2;
         this.attackDamage = 10;
-        this.attackCooldown = 1.0; // seconds
+        this.attackCooldown = 1.0;
         this.timeSinceAttack = 0;
     }
 
@@ -344,7 +253,9 @@ export class Golem extends Entity {
     }
 }
 
-// Enemy AI unit
+/**
+ * Enemy Entity - AI-controlled hostile unit
+ */
 export class EnemyUnit extends Entity {
     constructor(scene, position) {
         super(scene, position, 0xcc0000, 1.2);
@@ -360,7 +271,6 @@ export class EnemyUnit extends Entity {
         super.update(deltaTime, terrain, objectGenerator);
         this.timeSinceAttack += deltaTime;
 
-        // Simple AI: find nearest player entity and move toward it
         if (!this.targetEntity || this.targetEntity.health <= 0) {
             this.targetEntity = this.findNearestTarget(playerEntities);
         }
@@ -369,11 +279,9 @@ export class EnemyUnit extends Entity {
             const distance = this.position.distanceTo(this.targetEntity.position);
             
             if (distance > this.attackRange) {
-                // Move toward target
                 this.moveTo(this.targetEntity.position, 2);
             } else {
-                // Attack
-                this.velocity.set(0, 0, 0);
+                this.velocity.set(0, this.velocity.y, 0);
                 if (this.timeSinceAttack >= this.attackCooldown) {
                     this.targetEntity.takeDamage(this.attackDamage);
                     this.timeSinceAttack = 0;

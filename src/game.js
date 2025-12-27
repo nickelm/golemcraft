@@ -22,7 +22,7 @@ export class Game {
         
         this.renderer = new THREE.WebGLRenderer({ antialias: true });
         this.renderer.setSize(window.innerWidth, window.innerHeight);
-        this.renderer.shadowMap.enabled = true;
+        this.renderer.shadowMap.enabled = false; // temporary fix
         this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
         document.body.appendChild(this.renderer.domElement);
 
@@ -505,13 +505,13 @@ export class Game {
             this.hero.turn(-1, deltaTime);
         }
         if (this.keys['w']) {
-            this.hero.moveForward(12 * deltaTime);
+            this.hero.moveForward(8 * deltaTime);
         }
         if (this.keys['s']) {
             this.hero.moveBackward(6 * deltaTime);
         }
         if (this.keys[' ']) {
-            this.hero.jump(12);
+            this.hero.jump(16);
         }
     }
 
