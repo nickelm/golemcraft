@@ -22,8 +22,11 @@ export class Game {
         );
         
         this.renderer = new THREE.WebGLRenderer({ antialias: true });
+        // this.renderer.setSize(window.innerWidth, window.innerHeight);
+        const isMobile = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
+        this.renderer.setPixelRatio(isMobile ? 1 : Math.min(window.devicePixelRatio, 2));
         this.renderer.setSize(window.innerWidth, window.innerHeight);
-        this.renderer.shadowMap.enabled = false; // temporary fix
+        this.renderer.shadowMap.enabled = !isMobile;
         this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
         document.body.appendChild(this.renderer.domElement);
 
