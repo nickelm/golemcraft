@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { HeroMount } from './hero.js';
 import { resolveEntityCollision, createEntityAABB, createHeroAABB } from './collision.js';
+import { Bow } from './combat.js';
 
 /**
  * Base Entity class
@@ -92,6 +93,14 @@ export class Hero extends Entity {
         this.heroMount = new HeroMount(this.scene, position);
         this.mesh = this.heroMount.mesh;
         
+        // Add bow weapon
+        this.bow = new Bow(this.scene, this.mesh);
+        
+        // Shooting mechanics
+        this.attackCooldown = 0.25;  // 0.25 seconds between shots (fast!)
+        this.timeSinceLastShot = 0;
+        this.arrowDamage = 15;
+        
         // Custom AABB for mounted hero - matches mesh dimensions
         this.aabb = createHeroAABB();
         
@@ -109,6 +118,9 @@ export class Hero extends Entity {
         const oldPos = this.position.clone();
         const oldRot = this.oldRotation;
         
+        // Update attack cooldown
+        this.timeSinceLastShot += deltaTime;
+        
         // Physics via collision module
         resolveEntityCollision(this, terrain, deltaTime);
         
@@ -117,6 +129,11 @@ export class Hero extends Entity {
         this.heroMount.mesh.position.copy(this.position);
         this.heroMount.mesh.position.y += this.heroMount.bobOffset + (this.aabb?.groundOffset || 0);
         this.heroMount.setRotation(this.rotation);
+        
+        // Update bow animation
+        if (this.bow) {
+            this.bow.update(deltaTime);
+        }
         
         // Update debug AABB visualization
         if (this.debugAABB && this.aabb) {
@@ -135,6 +152,43 @@ export class Hero extends Entity {
         
         this.heroMount.update(deltaTime, this.isMoving, this.isJumping);
         this.oldRotation = this.rotation;
+    }
+    
+    /**
+     * Shoot arrow at target position
+     * Returns the arrow if shot, null if on cooldown
+     */
+    shootArrow(targetPosition) {
+        if (this.timeSinceLastShot < this.attackCooldown) {
+            return null;  // Still on cooldown
+        }
+        
+        // Reset cooldown
+        this.timeSinceLastShot = 0;
+        
+        // Trigger bow draw animation
+        if (this.bow) {
+            this.bow.startDraw();
+            setTimeout(() => this.bow.release(), 100);  // Quick draw and release
+        }
+        
+        // Arrow starts from hero position, slightly elevated and forward
+        const arrowStart = this.position.clone();
+        arrowStart.y += 2.0;  // Chest height
+        
+        // Arrow aims at target with slight upward offset (0.5 above ground)
+        const arrowTarget = targetPosition.clone();
+        arrowTarget.y += 0.5;
+        
+        // Create arrow (will be added to game's arrow array by caller)
+        return { start: arrowStart, target: arrowTarget, damage: this.arrowDamage };
+    }
+    
+    /**
+     * Check if can shoot (not on cooldown)
+     */
+    canShoot() {
+        return this.timeSinceLastShot >= this.attackCooldown;
     }
     
     /**
@@ -219,6 +273,7 @@ export class Hero extends Entity {
     die() {
         this.removeDebugAABB();
         this.heroMount.destroy();
+        if (this.bow) this.bow.destroy();
     }
 }
 

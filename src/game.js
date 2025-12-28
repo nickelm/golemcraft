@@ -7,6 +7,7 @@ import { FPSCounter } from './utils/fps-counter.js';
 import { TouchControls } from './utils/touch-controls.js';
 import { CameraController } from './camera.js';
 import { ItemSpawner } from './items.js';
+import { Arrow } from './combat.js';
 
 export class Game {
     constructor(worldData = null) {
@@ -42,6 +43,7 @@ export class Game {
         this.entities = [];
         this.playerEntities = [];
         this.enemyEntities = [];
+        this.arrows = [];  // Active arrows in flight
         
         // Item spawner (created after camera in init)
         this.itemSpawner = null;
@@ -59,6 +61,11 @@ export class Game {
         this.mouse = new THREE.Vector2();
         this.raycaster = new THREE.Raycaster();
         this.groundPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
+        
+        // Track mouse for click vs drag detection
+        this.mouseDownPos = new THREE.Vector2();
+        this.mouseDownTime = 0;
+        this.isDragging = false;
 
         // FPS Counter
         this.fpsCounter = new FPSCounter();
@@ -486,9 +493,37 @@ export class Game {
             this.mouse.x = (e.clientX / window.innerWidth) * 2 - 1;
             this.mouse.y = -(e.clientY / window.innerHeight) * 2 + 1;
         });
+        
+        // Track mouse down position
+        window.addEventListener('mousedown', (e) => {
+            this.mouseDownPos.set(e.clientX, e.clientY);
+            this.mouseDownTime = performance.now();
+            this.isDragging = false;
+        });
+        
+        // Detect drag vs click
+        window.addEventListener('mousemove', (e) => {
+            if (this.mouseDownTime > 0) {
+                const moveDistance = Math.sqrt(
+                    Math.pow(e.clientX - this.mouseDownPos.x, 2) +
+                    Math.pow(e.clientY - this.mouseDownPos.y, 2)
+                );
+                
+                // If mouse moved more than 5 pixels, it's a drag
+                if (moveDistance > 5) {
+                    this.isDragging = true;
+                }
+            }
+        });
 
-        window.addEventListener('click', () => {
-            this.handleClick();
+        // Only shoot on click (not drag)
+        window.addEventListener('mouseup', () => {
+            // Only trigger click if not dragging
+            if (!this.isDragging) {
+                this.handleClick();
+            }
+            this.mouseDownTime = 0;
+            this.isDragging = false;
         });
 
         window.addEventListener('resize', () => {
@@ -504,7 +539,18 @@ export class Game {
         
         if (intersects.length > 0) {
             const point = intersects[0].point;
-            this.hero.commandGolems(point);
+            
+            // Shoot arrow at clicked location
+            const arrowData = this.hero.shootArrow(point);
+            if (arrowData) {
+                const arrow = new Arrow(
+                    this.scene,
+                    arrowData.start,
+                    arrowData.target,
+                    arrowData.damage
+                );
+                this.arrows.push(arrow);
+            }
         }
     }
 
@@ -541,6 +587,11 @@ export class Game {
         this.entities = this.entities.filter(e => e.health > 0);
         this.playerEntities = this.playerEntities.filter(e => e.health > 0);
         this.enemyEntities = this.enemyEntities.filter(e => e.health > 0);
+        
+        // Update arrows
+        this.arrows = this.arrows.filter(arrow => 
+            arrow.update(deltaTime, this.terrain, this.enemyEntities)
+        );
         
         // Update item spawner
         if (this.itemSpawner) {

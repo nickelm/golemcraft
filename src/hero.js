@@ -35,8 +35,6 @@ export class HeroMount {
         
         // Store references to animated parts (stored in mesh.userData during creation)
         this.legs = this.mesh.userData.legs;
-        this.leftArm = this.mesh.userData.leftArm;
-        this.rightArm = this.mesh.userData.rightArm;
         this.body = this.mesh.userData.body;
         this.tail = this.mesh.userData.tail;
         this.neckGroup = this.mesh.userData.neckGroup;
@@ -173,27 +171,8 @@ export class HeroMount {
         group.userData.heroHead = heroHead;
         group.userData.visor = visor;
         
-        // Arms (2 boxes) - attached at shoulders
-        // Torso is 0.4 wide (extends to x=Â±0.2), 0.6 tall (top at y=2.12)
-        const armGeo = new THREE.BoxGeometry(0.12, 0.45, 0.12);
-        // Translate so pivot is at top (shoulder)
-        armGeo.translate(0, -0.225, 0);
         
-        const leftArm = new THREE.Mesh(armGeo, heroMat);
-        leftArm.position.set(-0.2, 2.05 + yOffset, 0); // At edge of torso, shoulder height
-        leftArm.rotation.z = -0.2; // Slight outward angle
-        leftArm.castShadow = true;
-        group.add(leftArm);
-        
-        const rightArm = new THREE.Mesh(armGeo, heroMat);
-        rightArm.position.set(0.2, 2.05 + yOffset, 0); // At edge of torso, shoulder height
-        rightArm.rotation.z = 0.2; // Slight outward angle
-        rightArm.castShadow = true;
-        group.add(rightArm);
-        
-        // Store references on group for animation
-        group.userData.leftArm = leftArm;
-        group.userData.rightArm = rightArm;
+        // Note: Arms removed - weapon (bow) will be added by Hero class
         
         return group;
     }
@@ -219,13 +198,7 @@ export class HeroMount {
                 });
             }
             
-            // Arms out during jump
-            if (this.leftArm && this.rightArm) {
-                this.leftArm.rotation.x = -0.3;
-                this.rightArm.rotation.x = -0.3;
-            }
-            
-            // No tail swing during jump
+// No tail swing during jump
             if (this.tail) {
                 this.tail.rotation.z = 0;
             }
@@ -251,14 +224,7 @@ export class HeroMount {
                 this.neckGroup.rotation.x = neckBob;
             }
 
-            // Arms swing back and forth (forward/backward, not side to side)
-            if (this.leftArm && this.rightArm) {
-                const armSwing = Math.sin(this.animationTime * 4) * 0.3;
-                this.leftArm.rotation.x = armSwing;
-                this.rightArm.rotation.x = -armSwing; // Opposite direction
-            }
-            
-            // Tail swings side to side
+// Tail swings side to side
             if (this.tail) {
                 const tailSwing = Math.sin(this.animationTime * 6) * 0.3;
                 this.tail.rotation.z = tailSwing;
@@ -282,13 +248,7 @@ export class HeroMount {
                 this.neckGroup.rotation.x *= 0.9;
             }
             
-            // Arms return to rest
-            if (this.leftArm && this.rightArm) {
-                this.leftArm.rotation.x *= 0.9;
-                this.rightArm.rotation.x *= 0.9;
-            }
-            
-            // Tail returns to rest
+// Tail returns to rest
             if (this.tail) {
                 this.tail.rotation.z *= 0.9;
             }
