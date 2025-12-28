@@ -287,8 +287,8 @@ export class Bow {
         
         // Position bow at hero's side, pointing forward
         // group.position.set(0.6, 1.5, 0);  // Right side, chest height
-        group.position.set(0, 1.5, 0.8);  // Centered, chest height, in front
-        group.rotation.y = -Math.PI / 4;  // Angled 45° to the right        
+        group.position.set(0, 1.75, 0.8);  // Centered, chest height, in front
+        group.rotation.z = -Math.PI / 4;  // Angled 45° to the right        
         // group.rotateZ(-Math.PI / 4); 
         // group.position.set(0.6, 0, 0.5);  // Right side, chest height
         
