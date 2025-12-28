@@ -5,7 +5,7 @@
  * This module provides a clean interface for entity collision with voxel terrain.
  */
 
-import sweep from './voxel-aabb-sweep.js';
+import sweep from './utils/voxel-aabb-sweep.js';
 
 /**
  * AABB (Axis-Aligned Bounding Box) for collision

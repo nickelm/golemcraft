@@ -6,7 +6,7 @@ import { Hero, Golem, EnemyUnit } from './entities.js';
 import { FPSCounter } from './utils/fps-counter.js';
 import { TouchControls } from './utils/touch-controls.js';
 import { CameraController } from './camera.js';
-import { PerformanceMonitor } from './utils/performance-monitor.js';
+import { ItemSpawner } from './items.js';
 
 export class Game {
     constructor(worldData = null) {
@@ -43,6 +43,18 @@ export class Game {
         this.playerEntities = [];
         this.enemyEntities = [];
         
+        // Item spawner (created after camera in init)
+        this.itemSpawner = null;
+        
+        // Player resources
+        this.resources = {
+            gold: 0,
+            wood: 0,
+            diamond: 0,
+            iron: 0,
+            coal: 0
+        };
+        
         this.keys = {};
         this.mouse = new THREE.Vector2();
         this.raycaster = new THREE.Raycaster();
@@ -50,9 +62,6 @@ export class Game {
 
         // FPS Counter
         this.fpsCounter = new FPSCounter();
-
-        // Performance Monitor
-        // this.perfMonitor = new PerformanceMonitor();
 
         // Touch controls (for phones and tablets)
         this.touchControls = new TouchControls(this);
@@ -108,6 +117,9 @@ export class Game {
         // Generate objects (trees, rocks, grass, cacti)
         this.objectGenerator = new ObjectGenerator(this.terrain);
         this.objectGenerator.generate(this.scene, 500, 500, WATER_LEVEL);
+        
+        // Initialize item spawner
+        this.itemSpawner = new ItemSpawner(this.scene, this.terrain, this.camera);
 
         // Determine spawn position - use saved position or find new one
         let spawnPos;
@@ -510,7 +522,7 @@ export class Game {
             this.hero.moveBackward(6 * deltaTime);
         }
         if (this.keys[' ']) {
-            this.hero.jump(16);
+            this.hero.jump(12);
         }
     }
 
@@ -529,6 +541,17 @@ export class Game {
         this.entities = this.entities.filter(e => e.health > 0);
         this.playerEntities = this.playerEntities.filter(e => e.health > 0);
         this.enemyEntities = this.enemyEntities.filter(e => e.health > 0);
+        
+        // Update item spawner
+        if (this.itemSpawner) {
+            this.itemSpawner.update(deltaTime, this.hero.position);
+            
+            // Check item collection for hero
+            const collected = this.itemSpawner.checkCollection(this.hero);
+            collected.forEach(item => {
+                this.collectItem(item);
+            });
+        }
 
         // Update camera
         this.cameraController.update(deltaTime);
@@ -568,8 +591,109 @@ export class Game {
             Golems: ${this.hero.commandedGolems.filter(g => g.health > 0).length}<br>
             Enemies: ${this.enemyEntities.length}<br>
             Biome: ${biome}<br>
-            Camera: ${cameraMode}
+            Camera: ${cameraMode}<br>
+            <br>
+            Gold: ${this.resources.gold}<br>
+            Wood: ${this.resources.wood}<br>
+            Iron: ${this.resources.iron}<br>
+            Coal: ${this.resources.coal}<br>
+            Diamonds: ${this.resources.diamond}
         `;
+    }
+    
+    /**
+     * Handle item collection
+     */
+    collectItem(item) {
+        const config = item.config;
+        const value = item.value;  // Use randomized value
+        
+        // Food restores health
+        if (item.type === 'food') {
+            const oldHealth = this.hero.health;
+            this.hero.health = Math.min(this.hero.maxHealth, this.hero.health + value);
+            const healed = this.hero.health - oldHealth;
+            
+            // Always show feedback, even if at full health
+            if (this.itemSpawner) {
+                this.itemSpawner.showFloatingNumber(
+                    this.hero.position.clone(),
+                    Math.floor(healed),
+                    'heal',
+                    config.name
+                );
+            }
+            
+            // Flash screen green (always, even at full health for feedback)
+            this.flashScreen('#00FF00', 0.3);
+        } else {
+            // Add to resources
+            if (this.resources.hasOwnProperty(item.type)) {
+                this.resources[item.type] += value;
+                
+                // Show floating number with item name
+                if (this.itemSpawner) {
+                    this.itemSpawner.showFloatingNumber(
+                        this.hero.position.clone(),
+                        value,
+                        'resource',
+                        config.name
+                    );
+                }
+                
+                // Flash screen in item color
+                const flashColors = {
+                    gold: '#FFD700',
+                    diamond: '#00FFFF',
+                    wood: '#8B4513',
+                    iron: '#A0A0A0',
+                    coal: '#FFFFFF'
+                };
+                this.flashScreen(flashColors[item.type] || '#FFD700', 0.2);
+                
+                // Pulse the resource in UI
+                this.pulseResourceUI(item.type);
+            }
+        }
+    }
+    
+    /**
+     * Flash the screen with a color (useful in first-person)
+     */
+    flashScreen(color, opacity = 0.3) {
+        const flash = document.createElement('div');
+        flash.style.cssText = `
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: ${color};
+            opacity: ${opacity};
+            pointer-events: none;
+            z-index: 9999;
+            transition: opacity 0.3s;
+        `;
+        document.body.appendChild(flash);
+        
+        // Fade out and remove
+        setTimeout(() => {
+            flash.style.opacity = '0';
+            setTimeout(() => flash.remove(), 300);
+        }, 100);
+    }
+    
+    /**
+     * Pulse a resource counter in the UI
+     */
+    pulseResourceUI(resourceType) {
+        // This will be visible even in first-person mode
+        const stats = document.getElementById('stats');
+        if (!stats) return;
+        
+        // Add a highlight class that pulses
+        stats.classList.add('resource-pulse');
+        setTimeout(() => stats.classList.remove('resource-pulse'), 500);
     }
 
     animate() {
@@ -580,7 +704,5 @@ export class Game {
         const deltaTime = 0.016;
         this.update(deltaTime);
         this.renderer.render(this.scene, this.camera);
-
-        // this.perfMonitor.update(this.renderer);
     }
 }
