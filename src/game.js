@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { TerrainGenerator, BLOCK_TYPES, createBlockGeometry, WATER_LEVEL } from './terrain.js';
+import { ChunkedTerrain, CHUNK_SIZE } from './terrain-chunks.js';
 import { ObjectGenerator } from './objects.js';
 import { Hero, Golem, EnemyUnit } from './entities.js';
 import { FPSCounter } from './utils/fps-counter.js';
@@ -118,8 +119,9 @@ export class Game {
         this.timeOfDay = 'day';
         this.createTimeControls();
 
-        // Generate terrain
-        this.generateTerrain(500, 500);
+        // Generate chunked terrain (frustum culling optimization)
+        this.chunkedTerrain = new ChunkedTerrain(this.scene, this.terrain, this.terrainTexture);
+        this.chunkedTerrain.generate(500, 500);
 
         // Generate objects (trees, rocks, grass, cacti)
         this.objectGenerator = new ObjectGenerator(this.terrain);
@@ -368,117 +370,7 @@ export class Game {
         return new THREE.Vector3(0, 15, 0);
     }
 
-    // Check if a block is visible (has at least one exposed face)
-    // Water and ice are treated as air - they don't hide neighboring blocks
-    isBlockVisible(x, y, z) {
-        const isAirOrWater = (type) => type === null || type === 'water' || type === 'water_full' || type === 'ice';
-        
-        // Check all 6 neighbors - if any is air/water/ice, this block is visible
-        if (isAirOrWater(this.terrain.getBlockType(x, y + 1, z))) return true;
-        if (isAirOrWater(this.terrain.getBlockType(x, y - 1, z))) return true;
-        if (isAirOrWater(this.terrain.getBlockType(x + 1, y, z))) return true;
-        if (isAirOrWater(this.terrain.getBlockType(x - 1, y, z))) return true;
-        if (isAirOrWater(this.terrain.getBlockType(x, y, z + 1))) return true;
-        if (isAirOrWater(this.terrain.getBlockType(x, y, z - 1))) return true;
-        
-        // Completely surrounded by solid blocks - not visible
-        return false;
-    }
-
-    generateTerrain(width, depth) {
-        const blockCounts = {};
-        const blockPositions = {};
-        
-        Object.keys(BLOCK_TYPES).forEach(type => {
-            blockCounts[type] = 0;
-            blockPositions[type] = [];
-        });
-        
-        console.log('Generating terrain with surface-only optimization...');
-        const startTime = performance.now();
-        
-        // First pass: count and store positions (only visible blocks)
-        let totalBlocks = 0;
-        let visibleBlocks = 0;
-        
-        for (let x = -width/2; x < width/2; x++) {
-            for (let z = -depth/2; z < depth/2; z++) {
-                const terrainHeight = this.terrain.getHeight(x, z);
-                const maxY = Math.max(terrainHeight, WATER_LEVEL);
-                
-                for (let y = 0; y <= maxY; y++) {
-                    const blockType = this.terrain.getBlockType(x, y, z);
-                    if (blockType) {
-                        totalBlocks++;
-                        // Always render water blocks (no culling) to avoid gaps when viewed from angles
-                        // For solid blocks, only render if visible (has exposed face)
-                        const isWater = blockType === 'water' || blockType === 'water_full';
-                        if (isWater || this.isBlockVisible(x, y, z)) {
-                            blockPositions[blockType].push({ x, y, z });
-                            blockCounts[blockType]++;
-                            visibleBlocks++;
-                        }
-                    }
-                }
-            }
-        }
-        
-        const genTime = performance.now() - startTime;
-        console.log(`Terrain generation: ${genTime.toFixed(1)}ms`);
-        console.log(`Total blocks: ${totalBlocks}, Visible blocks: ${visibleBlocks} (${(visibleBlocks/totalBlocks*100).toFixed(1)}% reduction)`);
-        
-        // Create instanced meshes for each block type
-        Object.keys(BLOCK_TYPES).forEach(blockType => {
-            const count = blockCounts[blockType];
-            if (count === 0) return;
-            
-            const geometry = createBlockGeometry(blockType);
-            
-            // Special material for water types (transparent)
-            let material;
-            if (blockType === 'water' || blockType === 'water_full') {
-                material = new THREE.MeshLambertMaterial({
-                    map: this.terrainTexture,
-                    transparent: true,
-                    opacity: 0.8,
-                    side: THREE.DoubleSide
-                });
-            } else if (blockType === 'ice') {
-                material = new THREE.MeshLambertMaterial({
-                    map: this.terrainTexture,
-                    transparent: true,
-                    opacity: 0.85
-                });
-            } else {
-                material = new THREE.MeshLambertMaterial({
-                    map: this.terrainTexture,
-                    flatShading: false
-                });
-            }
-            
-            const instancedMesh = new THREE.InstancedMesh(geometry, material, count);
-            instancedMesh.receiveShadow = true;
-            
-            // Water must render after opaque terrain to show sand underneath
-            if (blockType === 'water' || blockType === 'water_full' || blockType === 'ice') {
-                instancedMesh.renderOrder = 1;
-            }
-            
-            const matrix = new THREE.Matrix4();
-            const positions = blockPositions[blockType];
-            
-            for (let i = 0; i < count; i++) {
-                const pos = positions[i];
-                matrix.setPosition(pos.x, pos.y, pos.z);
-                instancedMesh.setMatrixAt(i, matrix);
-            }
-            
-            instancedMesh.instanceMatrix.needsUpdate = true;
-            this.scene.add(instancedMesh);
-        });
-        
-        console.log('Block counts:', blockCounts);
-    }
+    // Note: isBlockVisible and generateTerrain moved to ChunkedTerrain class
 
     setupEventListeners() {
         window.addEventListener('keydown', (e) => {
@@ -637,12 +529,17 @@ export class Game {
             Math.floor(this.hero.position.z)
         );
         const cameraMode = this.cameraController ? this.cameraController.mode : 'orbit';
+        
+        // Get chunk visibility stats
+        const chunkStats = this.chunkedTerrain.countVisibleChunks(this.camera);
+        
         stats.innerHTML = `
             Hero Health: ${Math.max(0, Math.floor(this.hero.health))}/${this.hero.maxHealth}<br>
             Golems: ${this.hero.commandedGolems.filter(g => g.health > 0).length}<br>
             Enemies: ${this.enemyEntities.length}<br>
             Biome: ${biome}<br>
             Camera: ${cameraMode}<br>
+            Chunks: ${chunkStats.visibleChunks}/${chunkStats.totalChunks}<br>
             <br>
             Gold: ${this.resources.gold}<br>
             Wood: ${this.resources.wood}<br>
