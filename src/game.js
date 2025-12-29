@@ -362,7 +362,7 @@ export class Game {
                 // Good spawn: above water, not too high, no object collision
                 const hasObject = this.objectGenerator && this.objectGenerator.hasCollision(x, z);
                 if (height > WATER_LEVEL && height < 20 && !hasObject) {
-                    return new THREE.Vector3(x, height + 5, z);
+                    return new THREE.Vector3(x, height + 2, z);
                 }
             }
         }
