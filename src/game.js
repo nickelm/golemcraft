@@ -212,7 +212,7 @@ export class Game {
         `;
         
         const times = [
-            { id: 'day', label: '☀️ Day', shortcut: 'Y' },
+            { id: 'day', label: '☀️ Day', shortcut: 'Y' },
             { id: 'sunset', label: '🌅 Sunset', shortcut: 'U' },
             { id: 'night', label: '🌙 Night', shortcut: 'I' }
         ];
@@ -530,17 +530,13 @@ export class Game {
         );
         const cameraMode = this.cameraController ? this.cameraController.mode : 'orbit';
         
-        // Get chunk visibility stats
-        // const chunkStats = 0; //this.chunkedTerrain.countVisibleChunks(this.camera);
-        const chunkStats = { visibleChunks: '?', totalChunks: this.chunkedTerrain.chunks.size };
-        
         stats.innerHTML = `
             Hero Health: ${Math.max(0, Math.floor(this.hero.health))}/${this.hero.maxHealth}<br>
             Golems: ${this.hero.commandedGolems.filter(g => g.health > 0).length}<br>
             Enemies: ${this.enemyEntities.length}<br>
             Biome: ${biome}<br>
             Camera: ${cameraMode}<br>
-            Chunks: ${chunkStats.visibleChunks}/${chunkStats.totalChunks}<br>
+            Chunks: ${this.chunkedTerrain.totalChunks}<br>
             <br>
             Gold: ${this.resources.gold}<br>
             Wood: ${this.resources.wood}<br>

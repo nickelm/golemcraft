@@ -105,9 +105,9 @@ export function resolveEntityCollision(entity, terrain, deltaTime) {
     // Set AABB position from entity
     // Offset by 0.5 to align with voxel grid (blocks are rendered at integer centers)
     aabb.setPosition(
-        entity.position.x + 0.5,
-        entity.position.y + 0.5,
-        entity.position.z + 0.5
+        entity.position.x,
+        entity.position.y,
+        entity.position.z
     );
     
     // Movement vector for this frame
@@ -147,9 +147,9 @@ export function resolveEntityCollision(entity, terrain, deltaTime) {
     
     // Update entity position from AABB (remove the 0.5 offset)
     const newPos = aabb.getPosition();
-    entity.position.x = newPos.x - 0.5;
-    entity.position.y = newPos.y - 0.5;
-    entity.position.z = newPos.z - 0.5;
+    entity.position.x = newPos.x;
+    entity.position.y = newPos.y;
+    entity.position.z = newPos.z;
     
     // Zero velocity on collision axes
     if (collisions.x) entity.velocity.x = 0;
