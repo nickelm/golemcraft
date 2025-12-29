@@ -531,7 +531,8 @@ export class Game {
         const cameraMode = this.cameraController ? this.cameraController.mode : 'orbit';
         
         // Get chunk visibility stats
-        const chunkStats = this.chunkedTerrain.countVisibleChunks(this.camera);
+        // const chunkStats = 0; //this.chunkedTerrain.countVisibleChunks(this.camera);
+        const chunkStats = { visibleChunks: '?', totalChunks: this.chunkedTerrain.chunks.size };
         
         stats.innerHTML = `
             Hero Health: ${Math.max(0, Math.floor(this.hero.health))}/${this.hero.maxHealth}<br>
