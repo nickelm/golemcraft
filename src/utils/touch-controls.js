@@ -181,16 +181,83 @@ export class TouchControls {
     }
 
     setupEventListeners() {
-        // Prevent default touch behavior on the game canvas
+        // Tap-to-shoot on canvas (avoiding control areas)
         const canvas = document.querySelector('canvas');
         if (canvas) {
+            let touchStartPos = null;
+            let touchStartTime = 0;
+            
             canvas.addEventListener('touchstart', (e) => {
                 e.preventDefault();
+                const touch = e.touches[0];
+                touchStartPos = { x: touch.clientX, y: touch.clientY };
+                touchStartTime = performance.now();
             }, { passive: false });
             
             canvas.addEventListener('touchmove', (e) => {
                 e.preventDefault();
             }, { passive: false });
+            
+            canvas.addEventListener('touchend', (e) => {
+                e.preventDefault();
+                
+                if (!touchStartPos) return;
+                
+                const touch = e.changedTouches[0];
+                const touchEndPos = { x: touch.clientX, y: touch.clientY };
+                const touchDuration = performance.now() - touchStartTime;
+                
+                // Calculate distance moved
+                const dx = touchEndPos.x - touchStartPos.x;
+                const dy = touchEndPos.y - touchStartPos.y;
+                const distance = Math.sqrt(dx * dx + dy * dy);
+                
+                // If touch was brief (<300ms) and didn't move much (<10px), treat as tap
+                if (touchDuration < 300 && distance < 10) {
+                    // Check if tap is not on control areas (bottom 250px)
+                    const screenHeight = window.innerHeight;
+                    if (touchEndPos.y < screenHeight - 250) {
+                        // Shoot at tap position
+                        this.handleTapShoot(touchEndPos.x, touchEndPos.y);
+                    }
+                }
+                
+                touchStartPos = null;
+            }, { passive: false });
+        }
+    }
+    
+    /**
+     * Handle tap-to-shoot
+     */
+    handleTapShoot(screenX, screenY) {
+        // Convert screen coordinates to normalized device coordinates
+        const mouse = {
+            x: (screenX / window.innerWidth) * 2 - 1,
+            y: -(screenY / window.innerHeight) * 2 + 1
+        };
+        
+        // Use game's raycaster to find world position
+        this.game.raycaster.setFromCamera(mouse, this.game.camera);
+        const intersects = this.game.raycaster.intersectObjects(this.game.scene.children);
+        
+        if (intersects.length > 0) {
+            const point = intersects[0].point;
+            
+            // Import Arrow class
+            const arrowData = this.game.hero.shootArrow(point);
+            if (arrowData) {
+                // Dynamically import Arrow to avoid circular dependency
+                import('../combat.js').then(({ Arrow }) => {
+                    const arrow = new Arrow(
+                        this.game.scene,
+                        arrowData.start,
+                        arrowData.target,
+                        arrowData.damage
+                    );
+                    this.game.arrows.push(arrow);
+                });
+            }
         }
     }
 
