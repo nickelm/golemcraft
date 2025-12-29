@@ -49,6 +49,64 @@ const FACES = {
 // Maps to: bottom-left, top-left, top-right, bottom-right of texture
 const FACE_UVS = [[0, 0], [0, 1], [1, 1], [1, 0]];
 
+/**
+ * Ambient Occlusion neighbor offsets for each face vertex
+ * 
+ * For each vertex of a face, we check 3 neighboring blocks that form
+ * the corner at that vertex. The number of solid neighbors determines
+ * the darkness level (0=bright, 3=darkest).
+ * 
+ * Structure: FACE_AO_NEIGHBORS[faceName][vertexIndex] = [[dx,dy,dz], [dx,dy,dz], [dx,dy,dz]]
+ */
+const FACE_AO_NEIGHBORS = {
+    // Top face (Y+) - checking blocks above and to the sides
+    top: [
+        [[-1, 1, 0], [-1, 1, 1], [0, 1, 1]],   // vertex 0: corner at -X, +Z
+        [[1, 1, 0], [1, 1, 1], [0, 1, 1]],     // vertex 1: corner at +X, +Z
+        [[1, 1, 0], [1, 1, -1], [0, 1, -1]],   // vertex 2: corner at +X, -Z
+        [[-1, 1, 0], [-1, 1, -1], [0, 1, -1]]  // vertex 3: corner at -X, -Z
+    ],
+    // Bottom face (Y-) - checking blocks below and to the sides
+    bottom: [
+        [[-1, -1, 0], [-1, -1, -1], [0, -1, -1]], // vertex 0
+        [[1, -1, 0], [1, -1, -1], [0, -1, -1]],   // vertex 1
+        [[1, -1, 0], [1, -1, 1], [0, -1, 1]],     // vertex 2
+        [[-1, -1, 0], [-1, -1, 1], [0, -1, 1]]    // vertex 3
+    ],
+    // Front face (Z+)
+    front: [
+        [[1, 0, 1], [1, -1, 1], [0, -1, 1]],   // vertex 0: bottom-right
+        [[1, 0, 1], [1, 1, 1], [0, 1, 1]],     // vertex 1: top-right
+        [[-1, 0, 1], [-1, 1, 1], [0, 1, 1]],   // vertex 2: top-left
+        [[-1, 0, 1], [-1, -1, 1], [0, -1, 1]]  // vertex 3: bottom-left
+    ],
+    // Back face (Z-)
+    back: [
+        [[-1, 0, -1], [-1, -1, -1], [0, -1, -1]], // vertex 0
+        [[-1, 0, -1], [-1, 1, -1], [0, 1, -1]],   // vertex 1
+        [[1, 0, -1], [1, 1, -1], [0, 1, -1]],     // vertex 2
+        [[1, 0, -1], [1, -1, -1], [0, -1, -1]]    // vertex 3
+    ],
+    // Right face (X+)
+    right: [
+        [[1, 0, -1], [1, -1, -1], [1, -1, 0]],  // vertex 0
+        [[1, 0, -1], [1, 1, -1], [1, 1, 0]],    // vertex 1
+        [[1, 0, 1], [1, 1, 1], [1, 1, 0]],      // vertex 2
+        [[1, 0, 1], [1, -1, 1], [1, -1, 0]]     // vertex 3
+    ],
+    // Left face (X-)
+    left: [
+        [[-1, 0, 1], [-1, -1, 1], [-1, -1, 0]],  // vertex 0
+        [[-1, 0, 1], [-1, 1, 1], [-1, 1, 0]],    // vertex 1
+        [[-1, 0, -1], [-1, 1, -1], [-1, 1, 0]],  // vertex 2
+        [[-1, 0, -1], [-1, -1, -1], [-1, -1, 0]] // vertex 3
+    ]
+};
+
+// AO intensity levels based on neighbor count (0-3 solid neighbors)
+// 1.0 = full brightness, lower = darker
+const AO_LEVELS = [1.0, 0.75, 0.5, 0.35];
+
 export class ChunkedTerrain {
     constructor(scene, terrain, terrainTexture) {
         this.scene = scene;
@@ -56,17 +114,19 @@ export class ChunkedTerrain {
         this.terrainTexture = terrainTexture;
         this.chunks = new Map(); // key: "chunkX,chunkZ" -> { mesh, waterMesh }
         
-        // Create shared materials
+        // Create shared materials with vertex colors for AO
         this.opaqueMaterial = new THREE.MeshLambertMaterial({
             map: terrainTexture,
-            side: THREE.FrontSide
+            side: THREE.FrontSide,
+            vertexColors: true
         });
         
         this.waterMaterial = new THREE.MeshLambertMaterial({
             map: terrainTexture,
             transparent: true,
             opacity: 0.7,
-            side: THREE.DoubleSide
+            side: THREE.DoubleSide,
+            vertexColors: true
         });
         
         // Stats
@@ -116,8 +176,8 @@ export class ChunkedTerrain {
         const worldMaxZ = worldMinZ + CHUNK_SIZE;
         
         // Collect faces for opaque and transparent geometry separately
-        const opaqueData = { positions: [], normals: [], uvs: [], indices: [] };
-        const waterData = { positions: [], normals: [], uvs: [], indices: [] };
+        const opaqueData = { positions: [], normals: [], uvs: [], colors: [], indices: [] };
+        const waterData = { positions: [], normals: [], uvs: [], colors: [], indices: [] };
         
         let minY = Infinity, maxY = -Infinity;
         
@@ -224,6 +284,9 @@ export class ChunkedTerrain {
             const localX = worldX - Math.floor(worldX / CHUNK_SIZE) * CHUNK_SIZE;
             const localZ = worldZ - Math.floor(worldZ / CHUNK_SIZE) * CHUNK_SIZE;
             
+            // Get AO neighbor offsets for this face
+            const aoNeighbors = FACE_AO_NEIGHBORS[faceName];
+            
             const baseVertex = data.positions.length / 3;
             
             for (let i = 0; i < 4; i++) {
@@ -245,6 +308,45 @@ export class ChunkedTerrain {
                     uvs.uMin + uvX * (uvs.uMax - uvs.uMin),
                     uvs.vMin + uvY * (uvs.vMax - uvs.vMin)
                 );
+                
+                // Calculate AO for this vertex
+                // Count solid neighbors at the 3 corner positions
+                let solidCount = 0;
+                const vertexAO = aoNeighbors[i];
+                for (const [dx, dy, dz] of vertexAO) {
+                    const checkType = this.terrain.getBlockType(
+                        worldX + dx,
+                        worldY + dy,
+                        worldZ + dz
+                    );
+                    // Count as solid if not air/water/ice
+                    if (checkType !== null && 
+                        checkType !== 'water' && 
+                        checkType !== 'water_full' && 
+                        checkType !== 'ice') {
+                        solidCount++;
+                    }
+                }
+                
+                // Get AO intensity
+                const ao = AO_LEVELS[solidCount];
+                
+                // Apply water depth darkening with blue tint
+                if (isTransparent && (blockType === 'water' || blockType === 'water_full')) {
+                    // Calculate depth below water surface (WATER_LEVEL is 6)
+                    const vertexY = worldY + vy;
+                    const depth = WATER_LEVEL - vertexY;
+                    // Aggressive darkening: each block down loses 30% light
+                    const depthFactor = Math.max(0.15, Math.pow(0.7, depth));
+                    // Strong blue tint: red nearly gone, green reduced, blue dominant
+                    const r = ao * depthFactor * 0.2;   // Red nearly gone
+                    const g = ao * depthFactor * 0.5;   // Green halved
+                    const b = ao * Math.max(0.3, depthFactor * 1.2);  // Blue stays visible
+                    data.colors.push(r, g, b);
+                } else {
+                    // Standard AO for opaque blocks
+                    data.colors.push(ao, ao, ao);
+                }
             }
             
             // Add two triangles (CCW winding)
@@ -268,6 +370,7 @@ export class ChunkedTerrain {
         geometry.setAttribute('position', new THREE.Float32BufferAttribute(data.positions, 3));
         geometry.setAttribute('normal', new THREE.Float32BufferAttribute(data.normals, 3));
         geometry.setAttribute('uv', new THREE.Float32BufferAttribute(data.uvs, 2));
+        geometry.setAttribute('color', new THREE.Float32BufferAttribute(data.colors, 3));
         geometry.setIndex(data.indices);
         
         // Compute bounding sphere for frustum culling

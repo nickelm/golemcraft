@@ -144,7 +144,8 @@ export class ObjectGenerator {
                     
                     if (this.shouldPlaceObject(x, z, effectiveDensity, salt)) {
                         const variation = this.getVariation(x, z, salt + 1);
-                        objects[type].push({ x, y, z, variation });
+                        // Add 0.5 offset to center objects on blocks (terrain uses 0-1 geometry)
+                        objects[type].push({ x: x + 0.5, y: y + 0.5, z: z + 0.5, variation });
                         
                         if (config.hasCollision) {
                             this.collisionMap.set(`${x},${z}`, type);

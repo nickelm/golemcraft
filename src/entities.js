@@ -13,6 +13,7 @@ export class Entity {
     constructor(scene, position, color, size = 1) {
         this.scene = scene;
         this.position = position.clone();
+        // this.position.addScalar(0.5);
         this.velocity = new THREE.Vector3(0, 0, 0);
         this.color = color;
         this.size = size;

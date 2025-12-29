@@ -212,7 +212,7 @@ export class Game {
         `;
         
         const times = [
-            { id: 'day', label: '☀️ Day', shortcut: 'Y' },
+            { id: 'day', label: '☀️ Day', shortcut: 'Y' },
             { id: 'sunset', label: '🌅 Sunset', shortcut: 'U' },
             { id: 'night', label: '🌙 Night', shortcut: 'I' }
         ];
@@ -362,7 +362,7 @@ export class Game {
                 // Good spawn: above water, not too high, no object collision
                 const hasObject = this.objectGenerator && this.objectGenerator.hasCollision(x, z);
                 if (height > WATER_LEVEL && height < 20 && !hasObject) {
-                    return new THREE.Vector3(x, height + 2, z);
+                    return new THREE.Vector3(x, height + 5, z);
                 }
             }
         }
@@ -531,13 +531,8 @@ export class Game {
         const cameraMode = this.cameraController ? this.cameraController.mode : 'orbit';
         
         stats.innerHTML = `
-            Hero Health: ${Math.max(0, Math.floor(this.hero.health))}/${this.hero.maxHealth}<br>
-            Golems: ${this.hero.commandedGolems.filter(g => g.health > 0).length}<br>
-            Enemies: ${this.enemyEntities.length}<br>
+            Health: ${Math.max(0, Math.floor(this.hero.health))}/${this.hero.maxHealth}<br>
             Biome: ${biome}<br>
-            Camera: ${cameraMode}<br>
-            Chunks: ${this.chunkedTerrain.totalChunks}<br>
-            <br>
             Gold: ${this.resources.gold}<br>
             Wood: ${this.resources.wood}<br>
             Iron: ${this.resources.iron}<br>
