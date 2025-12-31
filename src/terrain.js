@@ -19,6 +19,22 @@ export class TerrainGenerator {
         // Cache for performance
         this.heightCache = new Map();
         this.biomeCache = new Map();
+        // Track destroyed blocks (from explosions, etc.)
+        this.destroyedBlocks = new Set();
+    }
+    
+    /**
+     * Mark a block as destroyed
+     */
+    destroyBlock(x, y, z) {
+        this.destroyedBlocks.add(`${x},${y},${z}`);
+    }
+    
+    /**
+     * Check if a block has been destroyed
+     */
+    isBlockDestroyed(x, y, z) {
+        return this.destroyedBlocks.has(`${x},${y},${z}`);
     }
 
     // Simple pseudo-random hash function
@@ -233,6 +249,11 @@ export class TerrainGenerator {
 
     // Determine block type based on height, position, and biome
     getBlockType(x, y, z) {
+        // Check if block was destroyed
+        if (this.isBlockDestroyed(x, y, z)) {
+            return null;
+        }
+        
         const height = this.getHeight(x, z);
         const biome = this.getBiome(x, z);
         const biomeData = BIOMES[biome];

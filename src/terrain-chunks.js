@@ -391,6 +391,72 @@ export class ChunkedTerrain {
     }
     
     /**
+     * Regenerate a chunk (after blocks have been modified)
+     */
+    regenerateChunkAt(worldX, worldZ) {
+        const chunkX = Math.floor(worldX / CHUNK_SIZE);
+        const chunkZ = Math.floor(worldZ / CHUNK_SIZE);
+        const key = `${chunkX},${chunkZ}`;
+        
+        // Remove old chunk meshes
+        const oldChunk = this.chunks.get(key);
+        if (oldChunk) {
+            if (oldChunk.opaqueMesh) {
+                oldChunk.opaqueMesh.geometry.dispose();
+                this.scene.remove(oldChunk.opaqueMesh);
+            }
+            if (oldChunk.waterMesh) {
+                oldChunk.waterMesh.geometry.dispose();
+                this.scene.remove(oldChunk.waterMesh);
+            }
+            this.chunks.delete(key);
+        }
+        
+        // Regenerate the chunk
+        this.generateChunk(chunkX, chunkZ);
+    }
+    
+    /**
+     * Regenerate all chunks that contain the given world positions
+     */
+    regenerateChunksInRadius(centerX, centerZ, radius) {
+        const affectedChunks = new Set();
+        
+        // Find all chunks that might be affected
+        for (let dx = -radius; dx <= radius; dx++) {
+            for (let dz = -radius; dz <= radius; dz++) {
+                const worldX = Math.floor(centerX + dx);
+                const worldZ = Math.floor(centerZ + dz);
+                const chunkX = Math.floor(worldX / CHUNK_SIZE);
+                const chunkZ = Math.floor(worldZ / CHUNK_SIZE);
+                affectedChunks.add(`${chunkX},${chunkZ}`);
+            }
+        }
+        
+        // Regenerate each affected chunk
+        affectedChunks.forEach(key => {
+            const [chunkX, chunkZ] = key.split(',').map(Number);
+            
+            // Remove old chunk
+            const oldChunk = this.chunks.get(key);
+            if (oldChunk) {
+                if (oldChunk.opaqueMesh) {
+                    oldChunk.opaqueMesh.geometry.dispose();
+                    this.scene.remove(oldChunk.opaqueMesh);
+                }
+                if (oldChunk.waterMesh) {
+                    oldChunk.waterMesh.geometry.dispose();
+                    this.scene.remove(oldChunk.waterMesh);
+                }
+                this.chunks.delete(key);
+            }
+            
+            // Generate new chunk
+            this.generateChunk(chunkX, chunkZ);
+        });
+    }
+    
+    /**
      * Dispose all chunks
      */
     dispose() {

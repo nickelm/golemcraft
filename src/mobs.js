@@ -474,6 +474,11 @@ export class Mob {
             }
         }, 100);
         
+        // Aggro when shot - hostile mobs start chasing
+        if (this.hostile && this.state !== 'chase') {
+            this.state = 'chase';
+        }
+        
         if (this.health <= 0) {
             this.die();
             return true;  // Killed
@@ -972,11 +977,136 @@ export class Skeleton extends Mob {
 }
 
 /**
- * Creeper - Green armless hostile mob
+ * Creeper - Green armless hostile mob that EXPLODES
  */
 export class Creeper extends Mob {
     constructor(scene, position) {
         super(scene, position, 'creeper');
+        
+        // Explosion state
+        this.isDetonating = false;
+        this.detonationTimer = 0;
+        this.detonationDuration = 3.0;  // 3 seconds to explode
+        this.explosionRadius = 3 + Math.random() * 2;  // 3-5 blocks
+        this.detonationRange = 2.5;  // Start detonating when this close
+        
+        // Visual state
+        this.originalScale = 1;
+        this.flashTimer = 0;
+        this.isWhite = false;
+    }
+    
+    update(deltaTime, terrain, playerPosition) {
+        if (this.dead) {
+            return super.update(deltaTime, terrain, playerPosition);
+        }
+        
+        const distanceToPlayer = this.position.distanceTo(playerPosition);
+        
+        // Check if should start detonating
+        if (!this.isDetonating && distanceToPlayer < this.detonationRange) {
+            this.startDetonation();
+        }
+        
+        // Check if should stop detonating (player moved away)
+        if (this.isDetonating && distanceToPlayer > this.detonationRange * 2) {
+            this.stopDetonation();
+        }
+        
+        // Handle detonation
+        if (this.isDetonating) {
+            this.detonationTimer += deltaTime;
+            
+            // Violent shaking
+            const shakeIntensity = 0.1 + (this.detonationTimer / this.detonationDuration) * 0.2;
+            this.mesh.position.x = this.position.x + (Math.random() - 0.5) * shakeIntensity;
+            this.mesh.position.z = this.position.z + (Math.random() - 0.5) * shakeIntensity;
+            
+            // Flash white faster as timer progresses
+            this.flashTimer += deltaTime;
+            const flashRate = 0.3 - (this.detonationTimer / this.detonationDuration) * 0.25;  // Gets faster
+            if (this.flashTimer >= flashRate) {
+                this.flashTimer = 0;
+                this.isWhite = !this.isWhite;
+                this.setFlashColor(this.isWhite ? 0xFFFFFF : this.config.color);
+            }
+            
+            // Swell up as about to explode
+            const swellAmount = 1 + (this.detonationTimer / this.detonationDuration) * 0.3;
+            this.mesh.scale.set(swellAmount, swellAmount, swellAmount);
+            
+            // EXPLODE!
+            if (this.detonationTimer >= this.detonationDuration) {
+                this.explode();
+                return false;  // Remove creeper
+            }
+            
+            // Don't move while detonating
+            this.velocity.x = 0;
+            this.velocity.z = 0;
+            
+            // Still need physics for gravity
+            if (!this.onGround) {
+                this.velocity.y += this.gravity * deltaTime;
+            }
+            resolveEntityCollision(this, terrain, deltaTime);
+            
+            return true;
+        }
+        
+        // Normal behavior when not detonating
+        return super.update(deltaTime, terrain, playerPosition);
+    }
+    
+    startDetonation() {
+        this.isDetonating = true;
+        this.detonationTimer = 0;
+        this.flashTimer = 0;
+        this.state = 'idle';  // Stop chasing
+    }
+    
+    stopDetonation() {
+        this.isDetonating = false;
+        this.detonationTimer = 0;
+        this.mesh.scale.set(1, 1, 1);
+        this.setFlashColor(this.config.color);
+        this.isWhite = false;
+    }
+    
+    setFlashColor(color) {
+        this.mesh.traverse(child => {
+            if (child.material && child !== this.mesh) {
+                // Don't change the dark parts (eyes/mouth)
+                if (child.material.color.getHex() !== this.config.secondaryColor) {
+                    child.material.color.setHex(color);
+                }
+            }
+        });
+    }
+    
+    takeDamage(amount) {
+        const result = super.takeDamage(amount);
+        
+        // If hit while detonating, reset timer
+        if (this.isDetonating && !this.dead) {
+            this.detonationTimer = 0;
+            this.mesh.scale.set(1, 1, 1);
+        }
+        
+        return result;
+    }
+    
+    explode() {
+        // Mark as dead
+        this.dead = true;
+        this.hasExploded = true;
+        
+        // Store explosion data for MobSpawner to handle
+        this.explosionData = {
+            position: this.position.clone(),
+            radius: this.explosionRadius,
+            damage: this.config.damage
+        };
     }
     
     createMesh() {
@@ -1041,6 +1171,99 @@ export class Creeper extends Mob {
 }
 
 /**
+ * Explosion - Visual effect for creeper explosion
+ */
+export class Explosion {
+    constructor(scene, position, radius) {
+        this.scene = scene;
+        this.position = position.clone();
+        this.radius = radius;
+        this.maxRadius = radius;
+        this.currentRadius = 0.5;
+        this.lifetime = 0;
+        this.maxLifetime = 0.5;  // Half second explosion
+        
+        // Create expanding sphere
+        this.geometry = new THREE.SphereGeometry(1, 16, 12);
+        this.material = new THREE.MeshBasicMaterial({
+            color: 0xFF6600,
+            transparent: true,
+            opacity: 1.0
+        });
+        
+        this.mesh = new THREE.Mesh(this.geometry, this.material);
+        this.mesh.position.copy(this.position);
+        this.mesh.position.y += 0.5;  // Center at creeper height
+        this.scene.add(this.mesh);
+        
+        // Inner bright core
+        this.coreGeometry = new THREE.SphereGeometry(1, 12, 8);
+        this.coreMaterial = new THREE.MeshBasicMaterial({
+            color: 0xFFFF00,
+            transparent: true,
+            opacity: 1.0
+        });
+        this.coreMesh = new THREE.Mesh(this.coreGeometry, this.coreMaterial);
+        this.coreMesh.position.copy(this.mesh.position);
+        this.scene.add(this.coreMesh);
+        
+        this.flashTimer = 0;
+        this.isOrange = true;
+    }
+    
+    update(deltaTime) {
+        this.lifetime += deltaTime;
+        
+        const progress = this.lifetime / this.maxLifetime;
+        
+        // Expand quickly then slow down
+        const expandProgress = Math.pow(progress, 0.5);  // Fast start, slow end
+        this.currentRadius = 0.5 + expandProgress * (this.maxRadius - 0.5);
+        
+        this.mesh.scale.set(this.currentRadius, this.currentRadius, this.currentRadius);
+        this.coreMesh.scale.set(
+            this.currentRadius * 0.6,
+            this.currentRadius * 0.6,
+            this.currentRadius * 0.6
+        );
+        
+        // Flash between orange and yellow
+        this.flashTimer += deltaTime;
+        if (this.flashTimer > 0.05) {
+            this.flashTimer = 0;
+            this.isOrange = !this.isOrange;
+            this.material.color.setHex(this.isOrange ? 0xFF6600 : 0xFF3300);
+            this.coreMaterial.color.setHex(this.isOrange ? 0xFFFF00 : 0xFFFFFF);
+        }
+        
+        // Fade out
+        const fadeStart = 0.3;
+        if (progress > fadeStart) {
+            const fadeProgress = (progress - fadeStart) / (1 - fadeStart);
+            this.material.opacity = 1 - fadeProgress;
+            this.coreMaterial.opacity = 1 - fadeProgress;
+        }
+        
+        // Done?
+        if (this.lifetime >= this.maxLifetime) {
+            this.destroy();
+            return false;
+        }
+        
+        return true;
+    }
+    
+    destroy() {
+        this.scene.remove(this.mesh);
+        this.scene.remove(this.coreMesh);
+        this.geometry.dispose();
+        this.material.dispose();
+        this.coreGeometry.dispose();
+        this.coreMaterial.dispose();
+    }
+}
+
+/**
  * MobSpawner - Manages mob spawning and updates
  */
 export class MobSpawner {
@@ -1049,14 +1272,17 @@ export class MobSpawner {
         this.terrain = terrain;
         this.mobs = [];
         
-        // Spawn settings - more aggressive respawning
-        this.maxMobs = 40;
+        // Spawn settings
+        this.maxMobs = 25;          // Reduced from 40
         this.spawnRadius = 45;      // Spawn within 45 blocks of player
         this.minSpawnDistance = 20; // Don't spawn too close
         this.despawnDistance = 50;  // Remove mobs more than 50 units away
         this.fadeStartDistance = 45; // Start fading at 45 units
-        this.spawnInterval = 2;     // Try to spawn every 2 seconds
+        this.spawnInterval = 2.5;   // Slower spawn rate
         this.timeSinceSpawn = 0;
+        
+        // Map boundaries (assuming 500x500 centered at origin)
+        this.mapHalfSize = 240;     // Stay 10 blocks inside the 250 border
         
         // Mob classes by type
         this.mobClasses = {
@@ -1070,6 +1296,9 @@ export class MobSpawner {
         
         // Dropped loot from killed mobs (to be collected by game)
         this.droppedLoot = [];
+        
+        // Pending explosions (creepers)
+        this.pendingExplosions = [];
     }
     
     update(deltaTime, playerPosition, waterLevel, itemSpawner = null) {
@@ -1128,6 +1357,11 @@ export class MobSpawner {
                 });
             }
             
+            // Check for creeper explosion
+            if (mob.hasExploded && mob.explosionData) {
+                this.pendingExplosions.push(mob.explosionData);
+            }
+            
             if (!alive) {
                 mob.destroy();
             }
@@ -1169,6 +1403,15 @@ export class MobSpawner {
         return loot;
     }
     
+    /**
+     * Get pending explosions (from creepers)
+     */
+    getExplosions() {
+        const explosions = this.pendingExplosions;
+        this.pendingExplosions = [];
+        return explosions;
+    }
+    
     trySpawnMob(playerPosition, waterLevel) {
         // Try several times to find a valid spawn position
         for (let attempt = 0; attempt < 5; attempt++) {
@@ -1177,6 +1420,10 @@ export class MobSpawner {
             
             const x = Math.floor(playerPosition.x + Math.cos(angle) * distance);
             const z = Math.floor(playerPosition.z + Math.sin(angle) * distance);
+            
+            // Check map boundaries
+            if (Math.abs(x) > this.mapHalfSize || Math.abs(z) > this.mapHalfSize) continue;
+            
             const height = this.terrain.getHeight(x, z);
             
             // Skip underwater or too high

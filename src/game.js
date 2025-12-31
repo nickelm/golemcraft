@@ -9,7 +9,7 @@ import { TouchControls } from './utils/touch-controls.js';
 import { CameraController } from './camera.js';
 import { ItemSpawner } from './items.js';
 import { Arrow } from './combat.js';
-import { MobSpawner } from './mobs.js';
+import { MobSpawner, Explosion } from './mobs.js';
 
 export class Game {
     constructor(worldData = null) {
@@ -45,6 +45,7 @@ export class Game {
         this.entities = [];
         this.playerEntities = [];
         this.arrows = [];  // Active arrows in flight
+        this.explosions = [];  // Active explosion effects
         
         // Mob spawner (created after terrain in init)
         this.mobSpawner = null;
@@ -185,11 +186,11 @@ export class Game {
         `;
         
         const times = [
-            { id: 'day', label: 'â˜€ï¸ Day', shortcut: 'Y' },
-            { id: 'sunset', label: 'ðŸŒ… Sunset', shortcut: 'U' },
-            { id: 'night', label: 'ðŸŒ™ Night', shortcut: 'I' }
+            { id: 'day', label: '☀️ Day', shortcut: 'Y' },
+            { id: 'sunset', label: '🌅 Sunset', shortcut: 'U' },
+            { id: 'night', label: '🌙 Night', shortcut: 'I' }
         ];
-        
+
         this.timeButtons = {};
         
         times.forEach(({ id, label, shortcut }) => {
@@ -252,11 +253,11 @@ export class Game {
     
     updateTorchButton() {
         if (this.torchEnabled) {
-            this.torchButton.textContent = 'ðŸ”¦ Torch ON [T]';
+            this.torchButton.textContent = '🔦 Torch ON [T]';
             this.torchButton.style.background = 'rgba(180, 100, 0, 0.8)';
             this.torchButton.style.borderColor = 'rgba(255, 180, 100, 0.8)';
         } else {
-            this.torchButton.textContent = 'ðŸ”¦ Torch OFF [T]';
+            this.torchButton.textContent = '🔦 Torch OFF [T]';
             this.torchButton.style.background = 'rgba(0, 0, 0, 0.6)';
             this.torchButton.style.borderColor = 'rgba(255, 255, 255, 0.3)';
         }
@@ -441,6 +442,7 @@ export class Game {
         this.touchControls.update(deltaTime);
         this.handleInput(deltaTime);
         
+        // Update entities (just hero now, mobs handled by MobSpawner)
         this.entities.forEach(entity => {
             entity.update(deltaTime, this.terrain, this.objectGenerator);
         });
@@ -559,7 +561,46 @@ export class Game {
                     }
                 });
             });
+            
+            // Handle creeper explosions
+            const explosions = this.mobSpawner.getExplosions();
+            explosions.forEach(explosionData => {
+                // Create visual explosion effect
+                const explosion = new Explosion(
+                    this.scene,
+                    explosionData.position,
+                    explosionData.radius
+                );
+                this.explosions.push(explosion);
+                
+                // Damage player if in range
+                const distToPlayer = explosionData.position.distanceTo(this.hero.position);
+                if (distToPlayer < explosionData.radius) {
+                    // Damage falls off with distance
+                    const damageFactor = 1 - (distToPlayer / explosionData.radius);
+                    const damage = Math.floor(explosionData.damage * damageFactor);
+                    if (damage > 0) {
+                        this.hero.takeDamage(damage);
+                        this.flashScreen('#FF6600', 0.5);
+                        if (this.itemSpawner) {
+                            this.itemSpawner.showFloatingNumber(
+                                this.hero.position.clone(),
+                                damage,
+                                'damage'
+                            );
+                        }
+                    }
+                }
+                
+                // Destroy blocks in radius
+                this.createExplosionCrater(explosionData.position, explosionData.radius);
+            });
         }
+        
+        // Update explosion effects
+        this.explosions = this.explosions.filter(explosion => 
+            explosion.update(deltaTime)
+        );
         
         // Update item spawner
         if (this.itemSpawner) {
@@ -712,6 +753,41 @@ export class Game {
         // Add a highlight class that pulses
         stats.classList.add('resource-pulse');
         setTimeout(() => stats.classList.remove('resource-pulse'), 500);
+    }
+    
+    /**
+     * Create explosion crater by destroying blocks
+     */
+    createExplosionCrater(position, radius) {
+        const centerX = Math.floor(position.x);
+        const centerY = Math.floor(position.y);
+        const centerZ = Math.floor(position.z);
+        const intRadius = Math.ceil(radius);
+        
+        // Destroy blocks in spherical radius
+        for (let dx = -intRadius; dx <= intRadius; dx++) {
+            for (let dy = -intRadius; dy <= intRadius; dy++) {
+                for (let dz = -intRadius; dz <= intRadius; dz++) {
+                    const dist = Math.sqrt(dx * dx + dy * dy + dz * dz);
+                    if (dist <= radius) {
+                        const x = centerX + dx;
+                        const y = centerY + dy;
+                        const z = centerZ + dz;
+                        
+                        // Don't destroy bedrock (y <= 0) or water
+                        if (y > 0) {
+                            const blockType = this.terrain.getBlockType(x, y, z);
+                            if (blockType && blockType !== 'water' && blockType !== 'water_full') {
+                                this.terrain.destroyBlock(x, y, z);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        
+        // Regenerate affected chunks
+        this.chunkedTerrain.regenerateChunksInRadius(centerX, centerZ, intRadius + 1);
     }
 
     animate() {
