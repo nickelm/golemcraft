@@ -333,15 +333,16 @@ export class ChunkedTerrain {
                 
                 // Apply water depth darkening with blue tint
                 if (isTransparent && (blockType === 'water' || blockType === 'water_full')) {
-                    // Calculate depth below water surface (WATER_LEVEL is 6)
-                    const vertexY = worldY + vy;
-                    const depth = WATER_LEVEL - vertexY;
-                    // Aggressive darkening: each block down loses 30% light
-                    const depthFactor = Math.max(0.15, Math.pow(0.7, depth));
-                    // Strong blue tint: red nearly gone, green reduced, blue dominant
-                    const r = ao * depthFactor * 0.2;   // Red nearly gone
-                    const g = ao * depthFactor * 0.5;   // Green halved
-                    const b = ao * Math.max(0.3, depthFactor * 1.2);  // Blue stays visible
+                    // Calculate depth below water surface using BLOCK position, not vertex
+                    // This makes the entire block uniformly darker at depth
+                    const depth = WATER_LEVEL - worldY;
+                    // Very aggressive darkening: surface=bright, each block down = 50% darker
+                    const depthFactor = Math.max(0.1, Math.pow(0.5, depth));
+                    // Strong blue tint that increases with depth
+                    const blueness = Math.min(1.0, 0.3 + depth * 0.2); // More blue as depth increases
+                    const r = ao * depthFactor * (1.0 - blueness * 0.8);  // Red fades with depth
+                    const g = ao * depthFactor * (1.0 - blueness * 0.5);  // Green fades slower
+                    const b = ao * Math.max(0.4, depthFactor + blueness * 0.3);  // Blue stays strong
                     data.colors.push(r, g, b);
                 } else {
                     // Standard AO for opaque blocks
