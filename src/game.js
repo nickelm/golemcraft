@@ -3,12 +3,13 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { TerrainGenerator, BLOCK_TYPES, createBlockGeometry, WATER_LEVEL } from './terrain.js';
 import { ChunkedTerrain, CHUNK_SIZE } from './terrain-chunks.js';
 import { ObjectGenerator } from './objects.js';
-import { Hero, Golem, EnemyUnit } from './entities.js';
+import { Hero } from './entities.js';
 import { FPSCounter } from './utils/fps-counter.js';
 import { TouchControls } from './utils/touch-controls.js';
 import { CameraController } from './camera.js';
 import { ItemSpawner } from './items.js';
 import { Arrow } from './combat.js';
+import { MobSpawner } from './mobs.js';
 
 export class Game {
     constructor(worldData = null) {
@@ -43,8 +44,10 @@ export class Game {
         this.objectGenerator = null; // Created after terrain
         this.entities = [];
         this.playerEntities = [];
-        this.enemyEntities = [];
         this.arrows = [];  // Active arrows in flight
+        
+        // Mob spawner (created after terrain in init)
+        this.mobSpawner = null;
         
         // Item spawner (created after camera in init)
         this.itemSpawner = null;
@@ -129,6 +132,9 @@ export class Game {
         
         // Initialize item spawner
         this.itemSpawner = new ItemSpawner(this.scene, this.terrain, this.camera);
+        
+        // Initialize mob spawner
+        this.mobSpawner = new MobSpawner(this.scene, this.terrain);
 
         // Determine spawn position - use saved position or find new one
         let spawnPos;
@@ -153,41 +159,8 @@ export class Game {
         this.entities.push(this.hero);
         this.playerEntities.push(this.hero);
 
-        // Restore or create golems
-        if (this.worldData?.golems && this.worldData.golems.length > 0) {
-            // Restore saved golems
-            this.worldData.golems.forEach(golemData => {
-                const golemPos = new THREE.Vector3(golemData.x, golemData.y, golemData.z);
-                const golem = new Golem(this.scene, golemPos);
-                golem.health = golemData.health || 100;
-                this.hero.addGolem(golem);
-                this.entities.push(golem);
-                this.playerEntities.push(golem);
-            });
-            console.log('Restored', this.worldData.golems.length, 'golems');
-        } else {
-            // Create new golems near hero
-            for (let i = 0; i < 3; i++) {
-                const golemPos = spawnPos.clone();
-                golemPos.x += -3 + i * 3;
-                golemPos.z -= 3;
-                const golem = new Golem(this.scene, golemPos);
-                this.hero.addGolem(golem);
-                this.entities.push(golem);
-                this.playerEntities.push(golem);
-            }
-        }
-
-        // Create enemies in a different area (always fresh on load)
-        const enemySpawn = this.findSpawnPoint(20, 20);
-        for (let i = 0; i < 4; i++) {
-            const enemyPos = enemySpawn.clone();
-            enemyPos.x += (Math.random() - 0.5) * 10;
-            enemyPos.z += (Math.random() - 0.5) * 10;
-            const enemy = new EnemyUnit(this.scene, enemyPos);
-            this.entities.push(enemy);
-            this.enemyEntities.push(enemy);
-        }
+        // Note: Golems removed for now - will be replaced with rally system later
+        // Note: EnemyUnits removed - hostile mobs now handled by MobSpawner
 
         // Position camera
         this.camera.position.set(spawnPos.x, spawnPos.y + 20, spawnPos.z + 30);
@@ -212,9 +185,9 @@ export class Game {
         `;
         
         const times = [
-            { id: 'day', label: '☀️ Day', shortcut: 'Y' },
-            { id: 'sunset', label: '🌅 Sunset', shortcut: 'U' },
-            { id: 'night', label: '🌙 Night', shortcut: 'I' }
+            { id: 'day', label: 'â˜€ï¸ Day', shortcut: 'Y' },
+            { id: 'sunset', label: 'ðŸŒ… Sunset', shortcut: 'U' },
+            { id: 'night', label: 'ðŸŒ™ Night', shortcut: 'I' }
         ];
         
         this.timeButtons = {};
@@ -279,11 +252,11 @@ export class Game {
     
     updateTorchButton() {
         if (this.torchEnabled) {
-            this.torchButton.textContent = '🔦 Torch ON [T]';
+            this.torchButton.textContent = 'ðŸ”¦ Torch ON [T]';
             this.torchButton.style.background = 'rgba(180, 100, 0, 0.8)';
             this.torchButton.style.borderColor = 'rgba(255, 180, 100, 0.8)';
         } else {
-            this.torchButton.textContent = '🔦 Torch OFF [T]';
+            this.torchButton.textContent = 'ðŸ”¦ Torch OFF [T]';
             this.torchButton.style.background = 'rgba(0, 0, 0, 0.6)';
             this.torchButton.style.borderColor = 'rgba(255, 255, 255, 0.3)';
         }
@@ -469,21 +442,124 @@ export class Game {
         this.handleInput(deltaTime);
         
         this.entities.forEach(entity => {
-            if (entity instanceof EnemyUnit) {
-                entity.update(deltaTime, this.terrain, this.playerEntities, this.objectGenerator);
-            } else {
-                entity.update(deltaTime, this.terrain, this.objectGenerator);
-            }
+            entity.update(deltaTime, this.terrain, this.objectGenerator);
         });
 
         this.entities = this.entities.filter(e => e.health > 0);
         this.playerEntities = this.playerEntities.filter(e => e.health > 0);
-        this.enemyEntities = this.enemyEntities.filter(e => e.health > 0);
         
-        // Update arrows
-        this.arrows = this.arrows.filter(arrow => 
-            arrow.update(deltaTime, this.terrain, this.enemyEntities)
-        );
+        // Update arrows - check collision with hostile mobs
+        // Player arrows hit enemies, enemy arrows hit player
+        const hostileMobs = this.mobSpawner ? this.mobSpawner.getHostileMobs() : [];
+        const allEnemyTargets = hostileMobs;
+        
+        this.arrows = this.arrows.filter(arrow => {
+            if (arrow.isEnemyArrow) {
+                // Enemy arrow - check if it hits the player
+                const result = arrow.update(deltaTime, this.terrain, []);
+                
+                // Check player collision manually
+                if (!arrow.hit && !arrow.stuck) {
+                    const distToPlayer = arrow.position.distanceTo(this.hero.position);
+                    if (distToPlayer < 1.5) {
+                        this.hero.takeDamage(arrow.damage);
+                        this.flashScreen('#FF0000', 0.3);
+                        if (this.itemSpawner) {
+                            this.itemSpawner.showFloatingNumber(
+                                this.hero.position.clone(),
+                                arrow.damage,
+                                'damage'
+                            );
+                        }
+                        arrow.hit = true;
+                        arrow.destroy();
+                        return false;
+                    }
+                }
+                return result;
+            } else {
+                // Player arrow - hits enemies
+                return arrow.update(deltaTime, this.terrain, allEnemyTargets);
+            }
+        });
+        
+        // Update mob spawner
+        if (this.mobSpawner) {
+            this.mobSpawner.update(deltaTime, this.hero.position, WATER_LEVEL, this.itemSpawner);
+            
+            // Spawn skeleton arrows
+            const skeletonArrows = this.mobSpawner.getSkeletonArrows();
+            skeletonArrows.forEach(arrowData => {
+                const arrow = new Arrow(
+                    this.scene,
+                    arrowData.start,
+                    arrowData.target,
+                    arrowData.damage
+                );
+                // Mark as enemy arrow so it can hit the player
+                arrow.isEnemyArrow = true;
+                this.arrows.push(arrow);
+            });
+            
+            // Check if hostile mobs attack hero (melee)
+            const mobDamage = this.mobSpawner.checkAttacks(this.hero.position);
+            if (mobDamage > 0) {
+                this.hero.takeDamage(mobDamage);
+                this.flashScreen('#FF0000', 0.3);
+                
+                // Show damage number
+                if (this.itemSpawner) {
+                    this.itemSpawner.showFloatingNumber(
+                        this.hero.position.clone(),
+                        mobDamage,
+                        'damage'
+                    );
+                }
+            }
+            
+            // Check for XP from killed mobs
+            hostileMobs.forEach(mob => {
+                if (mob.dead && mob.xpValue > 0 && !mob.xpAwarded) {
+                    mob.xpAwarded = true;
+                    // Award XP (add to resources for now, or create XP system later)
+                    if (this.itemSpawner) {
+                        this.itemSpawner.showFloatingNumber(
+                            mob.position.clone(),
+                            mob.xpValue,
+                            'xp'
+                        );
+                    }
+                }
+            });
+            
+            // Collect loot dropped by killed mobs
+            const droppedLoot = this.mobSpawner.getDroppedLoot();
+            droppedLoot.forEach(loot => {
+                // Add resources directly to player
+                Object.entries(loot.inventory).forEach(([type, amount]) => {
+                    if (amount > 0 && this.resources.hasOwnProperty(type)) {
+                        this.resources[type] += amount;
+                        
+                        // Show floating number for each resource type
+                        if (this.itemSpawner) {
+                            const names = {
+                                gold: 'Gold',
+                                wood: 'Wood', 
+                                diamond: 'Diamond',
+                                iron: 'Iron',
+                                coal: 'Coal'
+                            };
+                            this.itemSpawner.showFloatingNumber(
+                                loot.position,
+                                amount,
+                                'resource',
+                                names[type]
+                            );
+                        }
+                    }
+                });
+            });
+        }
         
         // Update item spawner
         if (this.itemSpawner) {
@@ -529,10 +605,12 @@ export class Game {
             Math.floor(this.hero.position.z)
         );
         const cameraMode = this.cameraController ? this.cameraController.mode : 'orbit';
+        const mobCount = this.mobSpawner ? this.mobSpawner.mobs.length : 0;
         
         stats.innerHTML = `
             Health: ${Math.max(0, Math.floor(this.hero.health))}/${this.hero.maxHealth}<br>
             Biome: ${biome}<br>
+            Mobs: ${mobCount}<br>
             Gold: ${this.resources.gold}<br>
             Wood: ${this.resources.wood}<br>
             Iron: ${this.resources.iron}<br>
