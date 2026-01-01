@@ -1,7 +1,7 @@
 import * as THREE from 'three';
-import { TimeOfDay } from './TimeOfDay.js';
-import { calculatePreset, applyPreset } from './LightingPresets.js';
-import { Weather } from './Weather.js';
+import { TimeOfDay } from './timeofday.js';
+import { calculatePreset, applyPreset } from './lightingpresets.js';
+import { Weather } from './weather.js';
 
 /**
  * AtmosphereController - Orchestrates all atmospheric systems
