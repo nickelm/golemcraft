@@ -123,9 +123,27 @@ export class Game {
         this.torchLight.castShadow = false; // Performance: skip torch shadows
         this.scene.add(this.torchLight);
         
-        // Time of day system
-        this.timeOfDay = 'day';
-        this.createTimeControls();
+        // Day/night cycle system (automated)
+        // Day: 0-5 minutes, Night: 5-10 minutes
+        this.dayLength = 300; // 5 minutes in seconds
+        this.nightLength = 300; // 5 minutes in seconds
+        this.cycleLength = this.dayLength + this.nightLength; // 10 minutes total
+        this.timeOfDay = 0; // 0-600 seconds (0 = midnight)
+        
+        // Sun and moon
+        this.sun = this.createSun();
+        this.moon = this.createMoon();
+        
+        // Exclude sun and moon from raycasting
+        this.sun.traverse(obj => obj.layers.set(1)); // Layer 1 = celestial objects
+        this.moon.traverse(obj => obj.layers.set(1));
+        
+        this.scene.add(this.sun);
+        this.scene.add(this.moon);
+        
+        // Torch toggle
+        this.torchEnabled = true;
+        this.createTorchToggle();
 
         // Generate chunked terrain (frustum culling optimization)
         this.chunkedTerrain = new ChunkedTerrain(this.scene, this.terrain, this.terrainTexture);
@@ -176,157 +194,365 @@ export class Game {
         this.cameraController = new CameraController(this.camera, this.controls, this.hero);
     }
     
-    createTimeControls() {
-        const container = document.createElement('div');
-        container.id = 'time-controls';
-        container.style.cssText = `
+    createSun() {
+        const sunGroup = new THREE.Group();
+        
+        // Sun body - square sprite facing camera
+        const sunSize = 40;
+        const canvas = document.createElement('canvas');
+        canvas.width = 128;
+        canvas.height = 128;
+        const ctx = canvas.getContext('2d');
+        
+        // Draw square sun
+        ctx.fillStyle = '#FFFF00';
+        ctx.fillRect(16, 16, 96, 96);
+        
+        // Add some detail - corona/rays
+        ctx.fillStyle = '#FFDD00';
+        ctx.fillRect(32, 32, 64, 64);
+        
+        const texture = new THREE.CanvasTexture(canvas);
+        const material = new THREE.SpriteMaterial({ 
+            map: texture,
+            transparent: true
+        });
+        
+        const sprite = new THREE.Sprite(material);
+        sprite.scale.set(sunSize, sunSize, 1);
+        sunGroup.add(sprite);
+        
+        // Store references
+        sunGroup.userData.sprite = sprite;
+        sunGroup.userData.canvas = canvas;
+        sunGroup.userData.ctx = ctx;
+        
+        return sunGroup;
+    }
+    
+    createMoon() {
+        const moonGroup = new THREE.Group();
+        
+        // Moon body - square with shadow for crescent effect
+        const moonSize = 35;
+        const canvas = document.createElement('canvas');
+        canvas.width = 128;
+        canvas.height = 128;
+        const ctx = canvas.getContext('2d');
+        
+        const texture = new THREE.CanvasTexture(canvas);
+        const material = new THREE.SpriteMaterial({ 
+            map: texture,
+            transparent: true
+        });
+        
+        const sprite = new THREE.Sprite(material);
+        sprite.scale.set(moonSize, moonSize, 1);
+        moonGroup.add(sprite);
+        
+        // Store references for updating moon phase
+        moonGroup.userData.sprite = sprite;
+        moonGroup.userData.canvas = canvas;
+        moonGroup.userData.ctx = ctx;
+        moonGroup.userData.texture = texture;
+        
+        return moonGroup;
+    }
+    
+    createTorchToggle() {
+        const btn = document.createElement('button');
+        btn.id = 'torch-toggle';
+        btn.style.cssText = `
             position: absolute;
             top: 60px;
             right: 10px;
-            display: flex;
-            flex-direction: column;
-            gap: 5px;
-            z-index: 1000;
-        `;
-        
-        const times = [
-            { id: 'day', label: 'â˜€ï¸ Day', shortcut: 'Y' },
-            { id: 'sunset', label: 'ðŸŒ… Sunset', shortcut: 'U' },
-            { id: 'night', label: 'ðŸŒ™ Night', shortcut: 'I' }
-        ];
-
-        this.timeButtons = {};
-        
-        times.forEach(({ id, label, shortcut }) => {
-            const btn = document.createElement('button');
-            btn.textContent = `${label} [${shortcut}]`;
-            btn.dataset.time = id;
-            btn.style.cssText = `
-                padding: 8px 12px;
-                background: rgba(0, 0, 0, 0.6);
-                color: white;
-                border: 2px solid rgba(255, 255, 255, 0.3);
-                border-radius: 4px;
-                cursor: pointer;
-                font-family: monospace;
-                font-size: 12px;
-                transition: all 0.2s;
-            `;
-            
-            btn.addEventListener('click', () => this.setTimeOfDay(id));
-            container.appendChild(btn);
-            this.timeButtons[id] = btn;
-        });
-        
-        // Torch toggle button
-        this.torchEnabled = true;
-        this.torchButton = document.createElement('button');
-        this.torchButton.style.cssText = `
             padding: 8px 12px;
-            background: rgba(0, 0, 0, 0.6);
+            background: rgba(180, 100, 0, 0.8);
             color: white;
-            border: 2px solid rgba(255, 255, 255, 0.3);
+            border: 2px solid rgba(255, 180, 100, 0.8);
             border-radius: 4px;
             cursor: pointer;
             font-family: monospace;
             font-size: 12px;
             transition: all 0.2s;
-            margin-top: 10px;
+            z-index: 1000;
         `;
-        this.torchButton.addEventListener('click', () => this.toggleTorch());
-        container.appendChild(this.torchButton);
-        this.updateTorchButton();
+        btn.textContent = '🔦 Torch ON [T]';
         
-        document.body.appendChild(container);
-        this.updateTimeButtons();
+        btn.addEventListener('click', () => this.toggleTorch());
+        document.body.appendChild(btn);
+        this.torchButton = btn;
         
-        // Keyboard shortcuts
+        // Keyboard shortcut
         window.addEventListener('keydown', (e) => {
-            if (e.key.toLowerCase() === 'y') this.setTimeOfDay('day');
-            if (e.key.toLowerCase() === 'u') this.setTimeOfDay('sunset');
-            if (e.key.toLowerCase() === 'i') this.setTimeOfDay('night');
-            if (e.key.toLowerCase() === 't') this.toggleTorch();
+            if (e.key.toLowerCase() === 't') {
+                this.toggleTorch();
+            }
         });
     }
     
     toggleTorch() {
         this.torchEnabled = !this.torchEnabled;
         this.updateTorchButton();
-        this.applyTorchState();
     }
     
     updateTorchButton() {
+        if (!this.torchButton) return;
+        
         if (this.torchEnabled) {
-            this.torchButton.textContent = 'ðŸ”¦ Torch ON [T]';
+            this.torchButton.textContent = '🔦 Torch ON [T]';
             this.torchButton.style.background = 'rgba(180, 100, 0, 0.8)';
             this.torchButton.style.borderColor = 'rgba(255, 180, 100, 0.8)';
         } else {
-            this.torchButton.textContent = 'ðŸ”¦ Torch OFF [T]';
+            this.torchButton.textContent = '🔦 Torch OFF [T]';
             this.torchButton.style.background = 'rgba(0, 0, 0, 0.6)';
             this.torchButton.style.borderColor = 'rgba(255, 255, 255, 0.3)';
         }
     }
     
-    applyTorchState() {
-        // Get base torch intensity for current time of day
-        const torchIntensities = { day: 0, sunset: 1.0, night: 6.0 };
-        const baseIntensity = torchIntensities[this.timeOfDay] || 0;
-        this.torchLight.intensity = this.torchEnabled ? baseIntensity : 0;
-    }
-    
-    updateTimeButtons() {
-        Object.entries(this.timeButtons).forEach(([id, btn]) => {
-            if (id === this.timeOfDay) {
-                btn.style.background = 'rgba(0, 100, 200, 0.8)';
-                btn.style.borderColor = 'rgba(100, 180, 255, 0.8)';
-            } else {
-                btn.style.background = 'rgba(0, 0, 0, 0.6)';
-                btn.style.borderColor = 'rgba(255, 255, 255, 0.3)';
-            }
-        });
-    }
-    
-    setTimeOfDay(time) {
-        this.timeOfDay = time;
-        this.updateTimeButtons();
+    updateSunColor(sunAngle) {
+        // sunAngle: 0 = sunrise, 90 = noon, 180 = sunset
+        const canvas = this.sun.userData.canvas;
+        const ctx = this.sun.userData.ctx;
         
-        // Lighting presets
+        ctx.clearRect(0, 0, 128, 128);
+        
+        let color1, color2;
+        
+        if (sunAngle < 30 || sunAngle > 150) {
+            // Sunrise/sunset - orange/red
+            const blend = sunAngle < 30 ? sunAngle / 30 : (180 - sunAngle) / 30;
+            color1 = `rgb(255, ${Math.floor(100 + blend * 155)}, 0)`;
+            color2 = `rgb(255, ${Math.floor(50 + blend * 150)}, 0)`;
+        } else {
+            // Daytime - yellow
+            color1 = '#FFFF00';
+            color2 = '#FFDD00';
+        }
+        
+        // Draw square sun
+        ctx.fillStyle = color1;
+        ctx.fillRect(16, 16, 96, 96);
+        
+        // Inner square
+        ctx.fillStyle = color2;
+        ctx.fillRect(32, 32, 64, 64);
+        
+        this.sun.userData.sprite.material.map.needsUpdate = true;
+    }
+    
+    updateMoonPhase(nightProgress) {
+        // nightProgress: 0-1 through the night
+        const canvas = this.moon.userData.canvas;
+        const ctx = this.moon.userData.ctx;
+        
+        ctx.clearRect(0, 0, 128, 128);
+        
+        // Full moon at midnight (0.5), crescent at dusk/dawn (0, 1)
+        const phaseOffset = Math.abs(nightProgress - 0.5) * 2; // 0 at midnight, 1 at edges
+        
+        // Draw full moon square
+        ctx.fillStyle = '#EEEEEE';
+        ctx.fillRect(16, 16, 96, 96);
+        
+        // Add darker inner detail
+        ctx.fillStyle = '#CCCCCC';
+        ctx.fillRect(32, 32, 64, 64);
+        
+        // Add shadow for crescent effect
+        // Shadow grows from left side
+        const shadowWidth = 96 * phaseOffset * 0.7; // Max 70% coverage
+        ctx.fillStyle = 'rgba(10, 10, 30, 0.9)'; // Dark blue-black
+        ctx.fillRect(16, 16, shadowWidth, 96);
+        
+        this.moon.userData.texture.needsUpdate = true;
+    }
+    
+    updateDayNightCycle(deltaTime) {
+        // Advance time
+        this.timeOfDay += deltaTime;
+        if (this.timeOfDay >= this.cycleLength) {
+            this.timeOfDay -= this.cycleLength;
+        }
+        
+        // Calculate cycle progress (0-1)
+        const cycleProgress = this.timeOfDay / this.cycleLength;
+        
+        // Determine phase
+        let phase, phaseProgress;
+        if (this.timeOfDay < this.dayLength) {
+            // Daytime: 0-600 seconds
+            phase = 'day';
+            phaseProgress = this.timeOfDay / this.dayLength;
+        } else {
+            // Nighttime: 600-1200 seconds
+            phase = 'night';
+            phaseProgress = (this.timeOfDay - this.dayLength) / this.nightLength;
+        }
+        
+        // Update sun and moon positions
+        // Sun: rises at 0, peaks at 0.25, sets at 0.5 (during day phase)
+        // Moon: rises at 0.5, peaks at 0.75, sets at 1.0 (during night phase)
+        
+        const skyRadius = 400;
+        const heroPos = this.hero.position;
+        
+        if (phase === 'day') {
+            // Sun arc: 0 = east horizon, 0.5 = zenith, 1.0 = west horizon
+            const sunAngle = phaseProgress * Math.PI; // 0 to PI radians
+            const sunHeight = Math.sin(sunAngle); // 0 to 1 to 0
+            const sunHorizontal = Math.cos(sunAngle); // 1 to -1
+            
+            this.sun.position.set(
+                heroPos.x + sunHorizontal * skyRadius,
+                heroPos.y + sunHeight * skyRadius,
+                heroPos.z
+            );
+            this.sun.visible = true;
+            
+            // Update sun color based on angle
+            this.updateSunColor(sunAngle * 180 / Math.PI);
+            
+            // Moon below horizon
+            this.moon.visible = false;
+        } else {
+            // Night phase
+            const moonAngle = phaseProgress * Math.PI;
+            const moonHeight = Math.sin(moonAngle);
+            const moonHorizontal = Math.cos(moonAngle);
+            
+            this.moon.position.set(
+                heroPos.x + moonHorizontal * skyRadius,
+                heroPos.y + moonHeight * skyRadius,
+                heroPos.z
+            );
+            this.moon.visible = true;
+            
+            // Update moon phase
+            this.updateMoonPhase(phaseProgress);
+            
+            // Sun below horizon
+            this.sun.visible = false;
+        }
+        
+        // Update lighting based on time
+        this.updateLighting(phase, phaseProgress);
+    }
+    
+    updateLighting(phase, phaseProgress) {
+        // Smooth transitions at sunrise (day start) and sunset (day end)
+        
+        if (phase === 'day') {
+            // During day: transition sunrise -> noon -> sunset
+            let preset;
+            
+            if (phaseProgress < 0.1) {
+                // Sunrise (first 10% of day)
+                const t = phaseProgress / 0.1;
+                preset = this.lerpLightingPresets('sunrise', 'day', t);
+            } else if (phaseProgress > 0.9) {
+                // Sunset (last 10% of day)
+                const t = (phaseProgress - 0.9) / 0.1;
+                preset = this.lerpLightingPresets('day', 'sunset', t);
+            } else {
+                // Full day
+                preset = this.getLightingPreset('day');
+            }
+            
+            this.applyLightingPreset(preset);
+        } else {
+            // During night: transition dusk -> night -> dawn
+            let preset;
+            
+            if (phaseProgress < 0.1) {
+                // Dusk (first 10% of night)
+                const t = phaseProgress / 0.1;
+                preset = this.lerpLightingPresets('sunset', 'night', t);
+            } else if (phaseProgress > 0.9) {
+                // Dawn (last 10% of night)
+                const t = (phaseProgress - 0.9) / 0.1;
+                preset = this.lerpLightingPresets('night', 'sunrise', t);
+            } else {
+                // Full night
+                preset = this.getLightingPreset('night');
+            }
+            
+            this.applyLightingPreset(preset);
+        }
+    }
+    
+    getLightingPreset(name) {
         const presets = {
+            sunrise: {
+                ambient: { color: 0xffaa66, intensity: 0.4 },
+                directional: { color: 0xff8844, intensity: 0.5 },
+                sky: 0xff7744,
+                fog: 0xffaa88,
+                torch: 2.0
+            },
             day: {
                 ambient: { color: 0xffffff, intensity: 0.6 },
                 directional: { color: 0xffffff, intensity: 0.8 },
                 sky: 0x87ceeb,
-                fog: 0x87ceeb
+                fog: 0x87ceeb,
+                torch: 0
             },
             sunset: {
                 ambient: { color: 0xffa366, intensity: 0.4 },
                 directional: { color: 0xff7733, intensity: 0.6 },
                 sky: 0xff6b35,
-                fog: 0xd4a574
+                fog: 0xd4a574,
+                torch: 1.0
             },
             night: {
                 ambient: { color: 0x334466, intensity: 0.15 },
                 directional: { color: 0x6688bb, intensity: 0.1 },
                 sky: 0x0a0a1a,
-                fog: 0x0a0a1a
+                fog: 0x0a0a1a,
+                torch: 6.0
             }
         };
         
-        const p = presets[time];
+        return presets[name];
+    }
+    
+    lerpLightingPresets(preset1Name, preset2Name, t) {
+        const p1 = this.getLightingPreset(preset1Name);
+        const p2 = this.getLightingPreset(preset2Name);
         
-        // Apply lighting
-        this.ambientLight.color.setHex(p.ambient.color);
-        this.ambientLight.intensity = p.ambient.intensity;
+        return {
+            ambient: {
+                color: this.lerpColor(p1.ambient.color, p2.ambient.color, t),
+                intensity: p1.ambient.intensity + (p2.ambient.intensity - p1.ambient.intensity) * t
+            },
+            directional: {
+                color: this.lerpColor(p1.directional.color, p2.directional.color, t),
+                intensity: p1.directional.intensity + (p2.directional.intensity - p1.directional.intensity) * t
+            },
+            sky: this.lerpColor(p1.sky, p2.sky, t),
+            fog: this.lerpColor(p1.fog, p2.fog, t),
+            torch: p1.torch + (p2.torch - p1.torch) * t
+        };
+    }
+    
+    lerpColor(color1, color2, t) {
+        const c1 = new THREE.Color(color1);
+        const c2 = new THREE.Color(color2);
+        return c1.lerp(c2, t).getHex();
+    }
+    
+    applyLightingPreset(preset) {
+        this.ambientLight.color.setHex(preset.ambient.color);
+        this.ambientLight.intensity = preset.ambient.intensity;
         
-        this.directionalLight.color.setHex(p.directional.color);
-        this.directionalLight.intensity = p.directional.intensity;
+        this.directionalLight.color.setHex(preset.directional.color);
+        this.directionalLight.intensity = preset.directional.intensity;
         
-        // Apply torch based on toggle state
-        this.applyTorchState();
+        // Torch intensity based on preset and toggle state
+        this.torchLight.intensity = this.torchEnabled ? preset.torch : 0;
         
-        // Apply sky/fog
-        this.scene.background.setHex(p.sky);
-        this.scene.fog.color.setHex(p.fog);
+        this.scene.background.setHex(preset.sky);
+        this.scene.fog.color.setHex(preset.fog);
     }
 
     findSpawnPoint(startX = 0, startZ = 0) {
@@ -431,7 +657,10 @@ export class Game {
 
     handleClick() {
         this.raycaster.setFromCamera(this.mouse, this.camera);
-        const intersects = this.raycaster.intersectObjects(this.scene.children);
+        
+        // Filter out celestial objects (sun/moon on layer 1)
+        const intersects = this.raycaster.intersectObjects(this.scene.children, true)
+            .filter(hit => hit.object.layers.mask !== 2); // Exclude layer 1 (2^1 = 2)
         
         if (intersects.length > 0) {
             const point = intersects[0].point;
@@ -667,6 +896,9 @@ export class Game {
 
         // Update camera
         this.cameraController.update(deltaTime);
+        
+        // Update day/night cycle
+        this.updateDayNightCycle(deltaTime);
         
         // Move shadow light to follow hero (keeps shadows working everywhere)
         if (this.directionalLight) {
