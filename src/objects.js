@@ -31,7 +31,7 @@ export const OBJECT_TYPES = {
     grass: {
         name: 'Grass',
         biomes: ['plains'],
-        density: 0.08,
+        density: 0,  // Disabled - too many triangles for little visual gain
         hasCollision: false
     },
     cactus: {

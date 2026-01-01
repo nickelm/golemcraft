@@ -36,6 +36,7 @@ export class Game {
         this.controls.enableDamping = true;
         this.controls.dampingFactor = 0.05;
         this.controls.maxPolarAngle = Math.PI / 2.5;
+        this.controls.enablePan = false;  // Disable right-click panning to use for hero rotation
 
         // Use seed from world data, or generate random
         const seed = worldData?.seed ?? Math.floor(Math.random() * 100000);
@@ -71,6 +72,9 @@ export class Game {
         this.mouseDownPos = new THREE.Vector2();
         this.mouseDownTime = 0;
         this.isDragging = false;
+        
+        // Track right-click drag for hero rotation
+        this.isRightDragging = false;
 
         // FPS Counter
         this.fpsCounter = new FPSCounter();
@@ -186,9 +190,9 @@ export class Game {
         `;
         
         const times = [
-            { id: 'day', label: '☀️ Day', shortcut: 'Y' },
-            { id: 'sunset', label: '🌅 Sunset', shortcut: 'U' },
-            { id: 'night', label: '🌙 Night', shortcut: 'I' }
+            { id: 'day', label: 'â˜€ï¸ Day', shortcut: 'Y' },
+            { id: 'sunset', label: 'ðŸŒ… Sunset', shortcut: 'U' },
+            { id: 'night', label: 'ðŸŒ™ Night', shortcut: 'I' }
         ];
 
         this.timeButtons = {};
@@ -253,11 +257,11 @@ export class Game {
     
     updateTorchButton() {
         if (this.torchEnabled) {
-            this.torchButton.textContent = '🔦 Torch ON [T]';
+            this.torchButton.textContent = 'ðŸ”¦ Torch ON [T]';
             this.torchButton.style.background = 'rgba(180, 100, 0, 0.8)';
             this.torchButton.style.borderColor = 'rgba(255, 180, 100, 0.8)';
         } else {
-            this.torchButton.textContent = '🔦 Torch OFF [T]';
+            this.torchButton.textContent = 'ðŸ”¦ Torch OFF [T]';
             this.torchButton.style.background = 'rgba(0, 0, 0, 0.6)';
             this.torchButton.style.borderColor = 'rgba(255, 255, 255, 0.3)';
         }
@@ -362,9 +366,15 @@ export class Game {
         
         // Track mouse down position
         window.addEventListener('mousedown', (e) => {
-            this.mouseDownPos.set(e.clientX, e.clientY);
-            this.mouseDownTime = performance.now();
-            this.isDragging = false;
+            if (e.button === 0) {  // Left click
+                this.mouseDownPos.set(e.clientX, e.clientY);
+                this.mouseDownTime = performance.now();
+                this.isDragging = false;
+            } else if (e.button === 2) {  // Right click
+                this.isRightDragging = true;
+                // Request pointer lock for infinite rotation
+                this.renderer.domElement.requestPointerLock();
+            }
         });
         
         // Detect drag vs click
@@ -380,16 +390,36 @@ export class Game {
                     this.isDragging = true;
                 }
             }
+            
+            // Handle right-click drag for hero rotation using pointer lock
+            if (this.isRightDragging && document.pointerLockElement) {
+                const deltaX = e.movementX;  // Use movementX instead of position delta
+                const rotationSpeed = 0.002;  // Reduced sensitivity (was 0.005)
+                this.hero.rotation -= deltaX * rotationSpeed;
+            }
         });
 
-        // Only shoot on click (not drag)
-        window.addEventListener('mouseup', () => {
-            // Only trigger click if not dragging
-            if (!this.isDragging) {
-                this.handleClick();
+        // Only shoot on left-click (not drag)
+        window.addEventListener('mouseup', (e) => {
+            if (e.button === 0) {  // Left click
+                // Only trigger click if not dragging
+                if (!this.isDragging) {
+                    this.handleClick();
+                }
+                this.mouseDownTime = 0;
+                this.isDragging = false;
+            } else if (e.button === 2) {  // Right click
+                this.isRightDragging = false;
+                // Exit pointer lock
+                if (document.pointerLockElement) {
+                    document.exitPointerLock();
+                }
             }
-            this.mouseDownTime = 0;
-            this.isDragging = false;
+        });
+        
+        // Prevent context menu on right-click
+        window.addEventListener('contextmenu', (e) => {
+            e.preventDefault();
         });
 
         window.addEventListener('resize', () => {
@@ -519,9 +549,9 @@ export class Game {
                 }
             }
             
-            // Check for XP from killed mobs
+            // Check for XP from killed mobs (only if player killed them)
             hostileMobs.forEach(mob => {
-                if (mob.dead && mob.xpValue > 0 && !mob.xpAwarded) {
+                if (mob.dead && mob.xpValue > 0 && mob.killedByPlayer && !mob.xpAwarded) {
                     mob.xpAwarded = true;
                     // Award XP (add to resources for now, or create XP system later)
                     if (this.itemSpawner) {
@@ -590,6 +620,28 @@ export class Game {
                             );
                         }
                     }
+                }
+                
+                // Damage other mobs in explosion radius
+                if (this.mobSpawner) {
+                    this.mobSpawner.mobs.forEach(mob => {
+                        if (mob.dead) return;
+                        const distToMob = explosionData.position.distanceTo(mob.position);
+                        if (distToMob < explosionData.radius) {
+                            const damageFactor = 1 - (distToMob / explosionData.radius);
+                            const damage = Math.floor(explosionData.damage * damageFactor);
+                            if (damage > 0) {
+                                mob.takeDamage(damage);
+                                if (this.itemSpawner) {
+                                    this.itemSpawner.showFloatingNumber(
+                                        mob.position.clone(),
+                                        damage,
+                                        'damage'
+                                    );
+                                }
+                            }
+                        }
+                    });
                 }
                 
                 // Destroy blocks in radius

@@ -38,7 +38,7 @@ export class Arrow {
         
         // Arrow tip - pyramid pointing forward (+Z direction)
         const tipGeo = new THREE.ConeGeometry(0.15, 0.4, 4);
-        // Rotate so tip points along +Z (cone default points up, so rotate -90° around X)
+        // Rotate so tip points along +Z (cone default points up, so rotate -90Â° around X)
         tipGeo.rotateX(Math.PI / 2);
         const tipMat = new THREE.MeshLambertMaterial({ color: 0x606060 });  // Gray metal
         const tip = new THREE.Mesh(tipGeo, tipMat);
@@ -63,7 +63,7 @@ export class Arrow {
         fletch1.rotation.z = Math.PI / 2;  // Rotate to be horizontal
         group.add(fletch1);
         
-        // Vertical fletching (along Y axis) - rotated 90° from first
+        // Vertical fletching (along Y axis) - rotated 90Â° from first
         const fletch2 = new THREE.Mesh(fletchGeo, fletchMat);
         fletch2.position.set(0, 0, -0.1);  // Same position, different rotation
         // Already vertical by default
@@ -180,12 +180,21 @@ export class Arrow {
         }
         
         // Check terrain collision - stick in terrain!
-        const blockX = Math.floor(this.position.x);
-        const blockY = Math.floor(this.position.y);
-        const blockZ = Math.floor(this.position.z);
+        // Check slightly ahead of arrow position to stick at surface
+        const checkDistance = 0.4;  // Check 0.4 units ahead
+        const checkPos = this.position.clone().add(
+            this.direction.clone().multiplyScalar(checkDistance)
+        );
+        
+        const blockX = Math.floor(checkPos.x);
+        const blockY = Math.floor(checkPos.y);
+        const blockZ = Math.floor(checkPos.z);
         
         if (terrain.getBlockType(blockX, blockY, blockZ)) {
-            // Hit terrain - stick arrow
+            // Hit terrain - pull arrow back to surface
+            this.position.sub(this.direction.clone().multiplyScalar(checkDistance));
+            this.mesh.position.copy(this.position);
+            
             this.stuck = true;
             this.stuckTime = 0;
             
@@ -287,7 +296,7 @@ export class Bow {
         
         // Position bow at hero's side, pointing forward
         group.position.set(0, 1.75, 0.8);  // Centered, chest height, in front
-        group.rotation.z = -Math.PI / 4;  // Angled 45° to the right        
+        group.rotation.z = -Math.PI / 4;  // Angled 45Â° to the right        
         
         group.castShadow = true;
         

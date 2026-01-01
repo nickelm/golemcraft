@@ -123,7 +123,7 @@ export class Mob {
         
         // Detection ranges
         this.aggroRange = 11;
-        this.leashRange = 15;
+        this.leashRange = 25;  // Extended from 15 - mobs chase further before giving up
         
         // Attack cooldown
         this.attackCooldown = 1.0;
@@ -165,6 +165,7 @@ export class Mob {
         // Death state
         this.dead = false;
         this.deathTimer = 0;
+        this.killedByPlayer = false;  // Track if player gets XP
     }
     
     createMesh() {
@@ -480,6 +481,7 @@ export class Mob {
         }
         
         if (this.health <= 0) {
+            this.killedByPlayer = true;  // Player caused this death
             this.die();
             return true;  // Killed
         }
@@ -994,6 +996,11 @@ export class Creeper extends Mob {
         this.originalScale = 1;
         this.flashTimer = 0;
         this.isWhite = false;
+    }
+    
+    // Override to prevent melee attacks - creepers only damage via explosion
+    canAttack(targetPosition) {
+        return false;
     }
     
     update(deltaTime, terrain, playerPosition) {
