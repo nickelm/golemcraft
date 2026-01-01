@@ -248,7 +248,7 @@ export class TouchControls {
             const arrowData = this.game.hero.shootArrow(point);
             if (arrowData) {
                 // Dynamically import Arrow to avoid circular dependency
-                import('../combat.js').then(({ Arrow }) => {
+                import('../../combat.js').then(({ Arrow }) => {
                     const arrow = new Arrow(
                         this.game.scene,
                         arrowData.start,
