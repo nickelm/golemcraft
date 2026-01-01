@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { getObjectDensity, canObjectSpawnInBiome } from '../terrain/biomesystem.js';
 
 // Object definitions
 export const OBJECT_TYPES = {

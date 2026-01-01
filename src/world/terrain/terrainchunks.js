@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { BLOCK_TYPES, WATER_LEVEL } from './terrain.js';
+import { BLOCK_TYPES, WATER_LEVEL } from './terraingenerator.js';
 
 /**
  * ChunkedTerrain - Optimized terrain with merged geometry per chunk

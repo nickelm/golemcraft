@@ -1,8 +1,6 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
-import { TerrainGenerator, WATER_LEVEL } from './terrain.js';
-import { ChunkedTerrain } from './terrain-chunks.js';
-import { ObjectGenerator } from './objects.js';
+import { WorldManager, WATER_LEVEL } from './world/worldmanager.js';
 import { Hero } from './entities.js';
 import { FPSCounter } from './utils/ui/fps-counter.js';
 import { TouchControls } from './utils/ui/touch-controls.js';
@@ -41,9 +39,13 @@ export class Game {
 
         // Use seed from world data, or generate random
         const seed = worldData?.seed ?? Math.floor(Math.random() * 100000);
-        console.log('Using terrain seed:', seed);
-        this.terrain = new TerrainGenerator(seed);
-        this.objectGenerator = null;
+        const worldId = worldData?.id ?? 'default';
+        console.log('Using terrain seed:', seed, 'worldId:', worldId);
+        
+        this.world = null; // Will be initialized after texture loads
+        this.seed = seed;
+        this.worldId = worldId;
+        
         this.entities = [];
         this.playerEntities = [];
         this.arrows = [];
@@ -108,17 +110,18 @@ export class Game {
         this.scene.background = new THREE.Color(0x87ceeb);
         this.scene.fog = new THREE.Fog(0x87ceeb, 50, 150);
 
-        // Generate chunked terrain
-        this.chunkedTerrain = new ChunkedTerrain(this.scene, this.terrain, this.terrainTexture);
-        this.chunkedTerrain.generate(500, 500);
-
-        // Generate objects
-        this.objectGenerator = new ObjectGenerator(this.terrain);
-        this.objectGenerator.generate(this.scene, 500, 500, WATER_LEVEL);
+        // Create world manager (handles terrain, chunks, objects)
+        this.world = new WorldManager(
+            this.scene,
+            this.terrainTexture,
+            this.seed,
+            this.worldId,
+            this.isMobile
+        );
         
         // Initialize spawners
-        this.itemSpawner = new ItemSpawner(this.scene, this.terrain, this.camera);
-        this.mobSpawner = new MobSpawner(this.scene, this.terrain);
+        this.itemSpawner = new ItemSpawner(this.scene, this.world.terrain, this.camera);
+        this.mobSpawner = new MobSpawner(this.scene, this.world.terrain);
 
         // Determine spawn position
         let spawnPos;
@@ -155,9 +158,9 @@ export class Game {
             for (let angle = 0; angle < Math.PI * 2; angle += 0.5) {
                 const x = Math.floor(startX + Math.cos(angle) * radius);
                 const z = Math.floor(startZ + Math.sin(angle) * radius);
-                const height = this.terrain.getHeight(x, z);
+                const height = this.world.getHeight(x, z);
                 
-                const hasObject = this.objectGenerator && this.objectGenerator.hasCollision(x, z);
+                const hasObject = this.world.objectGenerator && this.world.objectGenerator.hasCollision(x, z);
                 if (height > WATER_LEVEL && height < 20 && !hasObject) {
                     return new THREE.Vector3(x, height + 2, z);
                 }
@@ -227,9 +230,12 @@ export class Game {
         this.touchControls.update(deltaTime);
         this.handleInput(deltaTime);
         
+        // Update world (chunk loading/unloading)
+        this.world.update(this.hero.position);
+        
         // Update entities
         this.entities.forEach(entity => {
-            entity.update(deltaTime, this.terrain, this.objectGenerator);
+            entity.update(deltaTime, this.world.terrain, this.world.objectGenerator);
         });
 
         this.entities = this.entities.filter(e => e.health > 0);
@@ -241,7 +247,7 @@ export class Game {
         
         this.arrows = this.arrows.filter(arrow => {
             if (arrow.isEnemyArrow) {
-                const result = arrow.update(deltaTime, this.terrain, []);
+                const result = arrow.update(deltaTime, this.world.terrain, []);
                 
                 if (!arrow.hit && !arrow.stuck) {
                     const distToPlayer = arrow.position.distanceTo(this.hero.position);
@@ -262,7 +268,7 @@ export class Game {
                 }
                 return result;
             } else {
-                return arrow.update(deltaTime, this.terrain, allEnemyTargets);
+                return arrow.update(deltaTime, this.world.terrain, allEnemyTargets);
             }
         });
         
@@ -425,7 +431,7 @@ export class Game {
 
     updateUI() {
         const stats = document.getElementById('stats');
-        const biome = this.terrain.getBiome(
+        const biome = this.world.getBiome(
             Math.floor(this.hero.position.x),
             Math.floor(this.hero.position.z)
         );
@@ -520,32 +526,7 @@ export class Game {
     }
     
     createExplosionCrater(position, radius) {
-        const centerX = Math.floor(position.x);
-        const centerY = Math.floor(position.y);
-        const centerZ = Math.floor(position.z);
-        const intRadius = Math.ceil(radius);
-        
-        for (let dx = -intRadius; dx <= intRadius; dx++) {
-            for (let dy = -intRadius; dy <= intRadius; dy++) {
-                for (let dz = -intRadius; dz <= intRadius; dz++) {
-                    const dist = Math.sqrt(dx * dx + dy * dy + dz * dz);
-                    if (dist <= radius) {
-                        const x = centerX + dx;
-                        const y = centerY + dy;
-                        const z = centerZ + dz;
-                        
-                        if (y > 0) {
-                            const blockType = this.terrain.getBlockType(x, y, z);
-                            if (blockType && blockType !== 'water' && blockType !== 'water_full') {
-                                this.terrain.destroyBlock(x, y, z);
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        
-        this.chunkedTerrain.regenerateChunksInRadius(centerX, centerZ, intRadius + 1);
+        this.world.createExplosionCrater(position, radius);
     }
 
     animate() {

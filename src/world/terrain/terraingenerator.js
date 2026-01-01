@@ -1,13 +1,6 @@
 import * as THREE from 'three';
-
-// Biome definitions
-export const BIOMES = {
-    ocean: { name: 'Ocean', baseHeight: 3, heightScale: 2, surface: 'sand', underwater: 'sand' },
-    plains: { name: 'Plains', baseHeight: 8, heightScale: 6, surface: 'grass', subsurface: 'dirt' },
-    desert: { name: 'Desert', baseHeight: 7, heightScale: 4, surface: 'sand', subsurface: 'sand' },
-    snow: { name: 'Snowy Plains', baseHeight: 9, heightScale: 5, surface: 'snow', subsurface: 'dirt' },
-    mountains: { name: 'Mountains', baseHeight: 18, heightScale: 20, surface: 'stone', subsurface: 'stone' }
-};
+import { hash, hash2, noise2D, octaveNoise2D } from '../../utils/math/noise.js';
+import { getBiomeConfig, BIOMES } from './biomesystem.js';
 
 // Water level constant
 export const WATER_LEVEL = 6;
@@ -37,63 +30,6 @@ export class TerrainGenerator {
         return this.destroyedBlocks.has(`${x},${y},${z}`);
     }
 
-    // Simple pseudo-random hash function
-    hash(x, z) {
-        let h = this.seed + x * 374761393 + z * 668265263;
-        h = (h ^ (h >> 13)) * 1274126177;
-        return (h ^ (h >> 16)) & 0xffffffff;
-    }
-
-    // Secondary hash for different noise layers
-    hash2(x, z) {
-        let h = (this.seed * 7919) + x * 668265263 + z * 374761393;
-        h = (h ^ (h >> 13)) * 1274126177;
-        return (h ^ (h >> 16)) & 0xffffffff;
-    }
-
-    // Perlin-like noise (simplified)
-    noise(x, z, hashFn = 'hash') {
-        const X = Math.floor(x);
-        const Z = Math.floor(z);
-        
-        const fx = x - X;
-        const fz = z - Z;
-        
-        // Smooth interpolation (smoothstep)
-        const u = fx * fx * (3.0 - 2.0 * fx);
-        const v = fz * fz * (3.0 - 2.0 * fz);
-        
-        // Hash corner values
-        const hashFunc = hashFn === 'hash2' ? this.hash2.bind(this) : this.hash.bind(this);
-        const a = hashFunc(X, Z) / 0xffffffff;
-        const b = hashFunc(X + 1, Z) / 0xffffffff;
-        const c = hashFunc(X, Z + 1) / 0xffffffff;
-        const d = hashFunc(X + 1, Z + 1) / 0xffffffff;
-        
-        // Bilinear interpolation
-        return a * (1 - u) * (1 - v) +
-               b * u * (1 - v) +
-               c * (1 - u) * v +
-               d * u * v;
-    }
-
-    // Octave noise for more natural terrain
-    octaveNoise(x, z, octaves = 4, baseFreq = 0.05, hashFn = 'hash') {
-        let total = 0;
-        let frequency = baseFreq;
-        let amplitude = 1;
-        let maxValue = 0;
-        
-        for (let i = 0; i < octaves; i++) {
-            total += this.noise(x * frequency, z * frequency, hashFn) * amplitude;
-            maxValue += amplitude;
-            amplitude *= 0.5;
-            frequency *= 2;
-        }
-        
-        return total / maxValue;
-    }
-
     // Get biome at position using low-frequency noise
     getBiome(x, z) {
         const key = `${x},${z}`;
@@ -103,9 +39,9 @@ export class TerrainGenerator {
 
         // Low frequency noise for biome regions
         // Note: with this hash-based noise, values cluster around 0.1-0.45
-        const biomeNoise = this.octaveNoise(x, z, 4, 0.05, 'hash');
+        const biomeNoise = octaveNoise2D(x, z, 4, 0.05, hash);
         // Secondary noise for variation
-        const tempNoise = this.octaveNoise(x, z, 4, 0.06, 'hash2');
+        const tempNoise = octaveNoise2D(x, z, 4, 0.06, hash2);
         
         // Remap noise from ~[0.08, 0.45] to [0, 1]
         const remappedNoise = Math.max(0, Math.min(1, (biomeNoise - 0.08) / 0.37));
@@ -140,7 +76,7 @@ export class TerrainGenerator {
     // Check if position is a river
     isRiver(x, z) {
         // River noise - creates winding paths
-        const riverNoise = this.octaveNoise(x, z, 3, 0.02, 'hash2');
+        const riverNoise = octaveNoise2D(x, z, 3, 0.02, hash2);
         // Rivers form in narrow bands
         return Math.abs(riverNoise - 0.5) < 0.03;
     }
@@ -148,7 +84,7 @@ export class TerrainGenerator {
     // Check if position is a lake
     isLake(x, z) {
         // Lake noise - creates circular depressions
-        const lakeNoise = this.octaveNoise(x, z, 2, 0.04, 'hash2');
+        const lakeNoise = octaveNoise2D(x, z, 2, 0.04, hash2);
         return lakeNoise < 0.2;
     }
 
@@ -189,17 +125,17 @@ export class TerrainGenerator {
         }
 
         const biome = this.getBiome(x, z);
-        const biomeData = BIOMES[biome];
+        const biomeData = getBiomeConfig(biome);
         
         // Base terrain noise
-        const terrainNoise = this.octaveNoise(x, z, 5, 0.03);
+        const terrainNoise = octaveNoise2D(x, z, 5, 0.03);
         
         // Calculate height based on biome
         let height = biomeData.baseHeight + terrainNoise * biomeData.heightScale;
         
         // Add mountain peaks in mountain biome
         if (biome === 'mountains') {
-            const peakNoise = this.octaveNoise(x, z, 3, 0.06);
+            const peakNoise = octaveNoise2D(x, z, 3, 0.06);
             if (peakNoise > 0.5) {
                 height += (peakNoise - 0.5) * 30; // Taller, sharper peaks
             }
@@ -236,7 +172,7 @@ export class TerrainGenerator {
                 
                 const neighborBiome = this.getBiome(x + dx, z + dz);
                 const neighborData = BIOMES[neighborBiome];
-                const neighborNoise = this.octaveNoise(x + dx, z + dz, 5, 0.03);
+                const neighborNoise = octaveNoise2D(x + dx, z + dz, 5, 0.03);
                 const neighborHeight = neighborData.baseHeight + neighborNoise * neighborData.heightScale;
                 
                 totalHeight += neighborHeight;
@@ -256,7 +192,7 @@ export class TerrainGenerator {
         
         const height = this.getHeight(x, z);
         const biome = this.getBiome(x, z);
-        const biomeData = BIOMES[biome];
+        const biomeData = getBiomeConfig(biome);
         
         // Air above terrain
         if (y > height && y > WATER_LEVEL) return null;
