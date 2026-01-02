@@ -35,8 +35,8 @@ export const PRESETS = {
         torch: 1.0
     },
     night: {
-        ambient: { color: 0x334466, intensity: 0.15 },
-        directional: { color: 0x6688bb, intensity: 0.1 },
+        ambient: { color: 0x1a1a2e, intensity: 0.08 },
+        directional: { color: 0x4466aa, intensity: 0.05 },
         sky: 0x0a0a1a,
         fog: 0x0a0a1a,
         torch: 6.0

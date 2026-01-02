@@ -36,6 +36,7 @@ export class ChunkLoader {
         // Stats
         this.chunksLoaded = 0;
         this.chunksUnloaded = 0;
+        this.chunksCleared = 0;  // Track how many stale chunks we clear
     }
     
     /**
@@ -45,6 +46,20 @@ export class ChunkLoader {
     update(playerPosition) {
         const playerChunkX = Math.floor(playerPosition.x / CHUNK_SIZE);
         const playerChunkZ = Math.floor(playerPosition.z / CHUNK_SIZE);
+        
+        // FIRST: Clear stale chunks from queue (chunks now outside load radius)
+        // This prevents queue buildup when player moves faster than chunks generate
+        const beforeClear = this.pendingChunks.length;
+        this.pendingChunks = this.pendingChunks.filter(chunk => {
+            const dx = Math.abs(chunk.chunkX - playerChunkX);
+            const dz = Math.abs(chunk.chunkZ - playerChunkZ);
+            // Keep only if still within load radius
+            return dx <= this.loadRadius && dz <= this.loadRadius;
+        });
+        const cleared = beforeClear - this.pendingChunks.length;
+        if (cleared > 0) {
+            this.chunksCleared += cleared;
+        }
         
         // Queue chunks for loading (don't generate immediately to avoid freezes)
         for (let dx = -this.loadRadius; dx <= this.loadRadius; dx++) {
@@ -242,7 +257,8 @@ export class ChunkLoader {
             loaded: this.loadedChunks.size,
             modified: this.modifiedChunks.size,
             totalLoaded: this.chunksLoaded,
-            totalUnloaded: this.chunksUnloaded
+            totalUnloaded: this.chunksUnloaded,
+            totalCleared: this.chunksCleared
         };
     }
     

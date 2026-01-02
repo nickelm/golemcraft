@@ -25,6 +25,9 @@ export class Game {
             this.isMobile ? 500 : 1000
         );
         
+        // Enable layer 1 rendering for celestial objects (sun/moon)
+        this.camera.layers.enable(1);
+        
         this.renderer = new THREE.WebGLRenderer({ antialias: true });
         this.renderer.setPixelRatio(this.isMobile ? 1 : Math.min(window.devicePixelRatio, 2));
         this.renderer.setSize(window.innerWidth, window.innerHeight);
@@ -85,9 +88,7 @@ export class Game {
         // Performance Monitor (desktop only by default, toggle with P key)
         this.performanceMonitor = new PerformanceMonitor();
         this.showPerformanceMonitor = false;
-        if (this.isMobile) {
-            this.performanceMonitor.element.style.display = 'none';
-        }
+        this.performanceMonitor.element.style.display = 'none';
         
         // Toggle performance monitor with P key (desktop only)
         window.addEventListener('keydown', (e) => {
@@ -103,6 +104,10 @@ export class Game {
 
         // Camera controller (initialized after hero creation)
         this.cameraController = null;
+
+        // Frame rate independent simulation
+        this.lastFrameTime = performance.now();
+        this.maxDeltaTime = 0.1; // Cap at 100ms (10 FPS minimum) to prevent spiral of death
 
         // Load terrain texture
         const textureLoader = new THREE.TextureLoader();
@@ -549,14 +554,30 @@ export class Game {
     animate() {
         requestAnimationFrame(() => this.animate());
         
+        // Calculate actual time elapsed since last frame
+        const now = performance.now();
+        const elapsed = (now - this.lastFrameTime) / 1000; // Convert ms to seconds
+        this.lastFrameTime = now;
+        
+        // Cap delta time to prevent "spiral of death" at low framerates
+        // If frame takes too long, simulation runs in slow motion rather than huge jumps
+        const deltaTime = Math.min(elapsed, this.maxDeltaTime);
+        
         this.fpsCounter.update();
         
         // Only update performance monitor if visible (saves CPU on mobile)
         if (this.showPerformanceMonitor) {
-            this.performanceMonitor.update(this.renderer);
+            const gameStats = {
+                deltaTime: deltaTime,
+                chunks: this.world ? this.world.chunkLoader.loadedChunks.size : 0,
+                pendingChunks: this.world ? this.world.chunkLoader.pendingChunks.length : 0,
+                mobs: this.mobSpawner ? this.mobSpawner.mobs.length : 0,
+                entities: this.entities.length,
+                arrows: this.arrows.length
+            };
+            this.performanceMonitor.update(this.renderer, gameStats);
         }
         
-        const deltaTime = this.isMobile ? 0.032 : 0.016;
         this.update(deltaTime);
         this.renderer.render(this.scene, this.camera);
     }
