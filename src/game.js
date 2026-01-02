@@ -105,9 +105,11 @@ export class Game {
         // Camera controller (initialized after hero creation)
         this.cameraController = null;
 
-        // Frame rate independent simulation
+        // Fixed timestep simulation with accumulator
         this.lastFrameTime = performance.now();
-        this.maxDeltaTime = 0.1; // Cap at 100ms (10 FPS minimum) to prevent spiral of death
+        this.fixedTimestep = 1 / 60; // Always simulate at 60 Hz (0.0167 seconds)
+        this.accumulator = 0;
+        this.maxAccumulator = 0.2; // Cap at 200ms (prevents spiral of death at <5 FPS)
 
         // Load terrain texture
         const textureLoader = new THREE.TextureLoader();
@@ -559,16 +561,26 @@ export class Game {
         const elapsed = (now - this.lastFrameTime) / 1000; // Convert ms to seconds
         this.lastFrameTime = now;
         
-        // Cap delta time to prevent "spiral of death" at low framerates
-        // If frame takes too long, simulation runs in slow motion rather than huge jumps
-        const deltaTime = Math.min(elapsed, this.maxDeltaTime);
+        // Add elapsed time to accumulator
+        this.accumulator += elapsed;
+        
+        // Cap accumulator to prevent spiral of death at very low frame rates
+        if (this.accumulator > this.maxAccumulator) {
+            this.accumulator = this.maxAccumulator;
+        }
+        
+        // Run fixed timestep updates until we've caught up with real time
+        while (this.accumulator >= this.fixedTimestep) {
+            this.update(this.fixedTimestep); // Always 0.0167s
+            this.accumulator -= this.fixedTimestep;
+        }
         
         this.fpsCounter.update();
         
         // Only update performance monitor if visible (saves CPU on mobile)
         if (this.showPerformanceMonitor) {
             const gameStats = {
-                deltaTime: deltaTime,
+                deltaTime: this.fixedTimestep, // Always fixed
                 chunks: this.world ? this.world.chunkLoader.loadedChunks.size : 0,
                 pendingChunks: this.world ? this.world.chunkLoader.pendingChunks.length : 0,
                 mobs: this.mobSpawner ? this.mobSpawner.mobs.length : 0,
@@ -578,7 +590,6 @@ export class Game {
             this.performanceMonitor.update(this.renderer, gameStats);
         }
         
-        this.update(deltaTime);
         this.renderer.render(this.scene, this.camera);
     }
 }
