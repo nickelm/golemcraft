@@ -369,11 +369,6 @@ export class ItemSpawner {
             const x = Math.floor(centerX + Math.cos(angle) * distance);
             const z = Math.floor(centerZ + Math.sin(angle) * distance);
             
-            // Check bounds - don't spawn outside terrain (assuming 500x500 centered at 0,0)
-            if (Math.abs(x) > 240 || Math.abs(z) > 240) {
-                continue;  // Skip if outside map bounds
-            }
-            
             const height = this.terrain.getHeight(x, z);
             
             // Only spawn on elevated terrain (mountains/hills for platforming)

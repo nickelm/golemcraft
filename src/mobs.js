@@ -1288,9 +1288,6 @@ export class MobSpawner {
         this.spawnInterval = 2.5;   // Slower spawn rate
         this.timeSinceSpawn = 0;
         
-        // Map boundaries (assuming 500x500 centered at origin)
-        this.mapHalfSize = 240;     // Stay 10 blocks inside the 250 border
-        
         // Mob classes by type
         this.mobClasses = {
             cow: Cow,
@@ -1427,9 +1424,6 @@ export class MobSpawner {
             
             const x = Math.floor(playerPosition.x + Math.cos(angle) * distance);
             const z = Math.floor(playerPosition.z + Math.sin(angle) * distance);
-            
-            // Check map boundaries
-            if (Math.abs(x) > this.mapHalfSize || Math.abs(z) > this.mapHalfSize) continue;
             
             const height = this.terrain.getHeight(x, z);
             

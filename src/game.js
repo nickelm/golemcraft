@@ -436,10 +436,12 @@ export class Game {
             Math.floor(this.hero.position.z)
         );
         const mobCount = this.mobSpawner ? this.mobSpawner.mobs.length : 0;
+        const chunkCount = this.world.chunkLoader.loadedChunks.size;
         
         stats.innerHTML = `
             Health: ${Math.max(0, Math.floor(this.hero.health))}/${this.hero.maxHealth}<br>
             Biome: ${biome}<br>
+            Chunks: ${chunkCount}<br>
             Mobs: ${mobCount}<br>
             Gold: ${this.resources.gold}<br>
             Wood: ${this.resources.wood}<br>
