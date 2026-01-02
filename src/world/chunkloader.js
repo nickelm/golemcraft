@@ -26,6 +26,10 @@ export class ChunkLoader {
         this.loadRadius = 8;   // Load 8 chunks in each direction (256 blocks)
         this.unloadRadius = 10; // Unload chunks 10+ away (320 blocks)
         
+        // Job queue for gradual chunk loading (prevents freezes)
+        this.pendingChunks = [];
+        this.chunksPerFrame = 2; // Generate 2 chunks per frame (adjustable for performance)
+        
         // Load modified chunks from localStorage
         this.loadModifiedChunks();
         
@@ -42,17 +46,29 @@ export class ChunkLoader {
         const playerChunkX = Math.floor(playerPosition.x / CHUNK_SIZE);
         const playerChunkZ = Math.floor(playerPosition.z / CHUNK_SIZE);
         
-        // Load chunks in radius
+        // Queue chunks for loading (don't generate immediately to avoid freezes)
         for (let dx = -this.loadRadius; dx <= this.loadRadius; dx++) {
             for (let dz = -this.loadRadius; dz <= this.loadRadius; dz++) {
                 const chunkX = playerChunkX + dx;
                 const chunkZ = playerChunkZ + dz;
                 const key = `${chunkX},${chunkZ}`;
                 
-                if (!this.loadedChunks.has(key)) {
-                    this.loadChunk(chunkX, chunkZ);
+                if (!this.loadedChunks.has(key) && !this.isPending(key)) {
+                    // Calculate priority (closer chunks = higher priority)
+                    const priority = dx * dx + dz * dz;
+                    this.pendingChunks.push({ chunkX, chunkZ, key, priority });
                 }
             }
+        }
+        
+        // Sort by priority (closest chunks first)
+        this.pendingChunks.sort((a, b) => a.priority - b.priority);
+        
+        // Process a few chunks this frame (amortized loading)
+        const chunksToProcess = Math.min(this.chunksPerFrame, this.pendingChunks.length);
+        for (let i = 0; i < chunksToProcess; i++) {
+            const chunk = this.pendingChunks.shift();
+            this.loadChunk(chunk.chunkX, chunk.chunkZ);
         }
         
         // Unload distant chunks
@@ -73,15 +89,34 @@ export class ChunkLoader {
     }
     
     /**
-     * Load a chunk (generate mesh and add to scene)
+     * Check if a chunk is already pending in the queue
+     * @param {string} key - Chunk key "x,z"
+     * @returns {boolean} True if chunk is pending
+     */
+    isPending(key) {
+        return this.pendingChunks.some(c => c.key === key);
+    }
+    
+    /**
+     * Load a chunk (generate mesh and objects, add to scene)
      * @param {number} chunkX - Chunk X coordinate
      * @param {number} chunkZ - Chunk Z coordinate
      */
     loadChunk(chunkX, chunkZ) {
         const key = `${chunkX},${chunkZ}`;
         
-        // Generate chunk mesh
+        // Generate terrain chunk mesh
         this.chunkedTerrain.generateChunk(chunkX, chunkZ);
+        
+        // Generate objects for this chunk
+        if (this.objectGenerator) {
+            this.objectGenerator.generateForChunk(
+                this.chunkedTerrain.scene,
+                chunkX,
+                chunkZ,
+                6 // WATER_LEVEL constant
+            );
+        }
         
         // Mark as loaded
         this.loadedChunks.add(key);

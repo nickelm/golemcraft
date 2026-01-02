@@ -202,8 +202,8 @@ export function createEntityAABB(entity) {
  * Create AABB for the hero on mount
  * 
  * Since AABBs don't rotate, we need a box large enough to contain
- * the horse+rider at any orientation. The horse body is ~0.6 × 1.4,
- * so the diagonal is √(0.6² + 1.4²) ≈ 1.52. We use a square footprint.
+ * the horse+rider at any orientation. The horse body is ~0.6 Ã— 1.4,
+ * so the diagonal is âˆš(0.6Â² + 1.4Â²) â‰ˆ 1.52. We use a square footprint.
  * 
  * Dimensions:
  * - Width/Depth: 1.5 (square, fits any rotation)

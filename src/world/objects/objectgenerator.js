@@ -169,6 +169,77 @@ export class ObjectGenerator {
         console.log(`Generated ${total} objects:`, 
             Object.entries(objects).map(([k, v]) => `${k}: ${v.length}`).join(', '));
     }
+    
+    /**
+     * Generate objects for a specific chunk (for infinite terrain)
+     * @param {THREE.Scene} scene - Scene to add objects to
+     * @param {number} chunkX - Chunk X coordinate
+     * @param {number} chunkZ - Chunk Z coordinate
+     * @param {number} waterLevel - Water level to skip underwater positions
+     */
+    generateForChunk(scene, chunkX, chunkZ, waterLevel) {
+        const CHUNK_SIZE = 32; // Must match CHUNK_SIZE from terrainchunks.js
+        
+        const objects = {
+            tree: [],
+            snowTree: [],
+            rock: [],
+            boulder: [],
+            grass: [],
+            cactus: []
+        };
+        
+        const startX = chunkX * CHUNK_SIZE;
+        const startZ = chunkZ * CHUNK_SIZE;
+        
+        // Generate objects within this chunk
+        for (let x = startX; x < startX + CHUNK_SIZE; x++) {
+            for (let z = startZ; z < startZ + CHUNK_SIZE; z++) {
+                const height = this.terrain.getHeight(x, z);
+                if (height < waterLevel) continue;
+                
+                const biome = this.terrain.getBiome(x, z);
+                const y = height + 1;
+                
+                // Check each object type
+                let placed = false;
+                for (const [type, config] of Object.entries(OBJECT_TYPES)) {
+                    if (placed) break;
+                    if (!config.biomes.includes(biome)) continue;
+                    
+                    const salt = type.charCodeAt(0) * 1000;
+                    let effectiveDensity = config.density;
+                    
+                    if (config.usesForestNoise) {
+                        const forestValue = this.forestNoise(x, z);
+                        effectiveDensity = config.density * (0.05 + 0.95 * forestValue);
+                    }
+                    
+                    if (this.shouldPlaceObject(x, z, effectiveDensity, salt)) {
+                        const variation = this.getVariation(x, z, salt + 1);
+                        objects[type].push({ 
+                            x: x + 0.5, y: y + 0.5, z: z + 0.5, variation 
+                        });
+                        
+                        if (config.hasCollision) {
+                            this.collisionMap.set(`${x},${z}`, type);
+                        }
+                        placed = true;
+                    }
+                }
+            }
+        }
+        
+        // Create instanced meshes for this chunk
+        this.createTrees(scene, objects.tree, false);
+        this.createTrees(scene, objects.snowTree, true);
+        this.createRocks(scene, objects.rock, false);
+        this.createRocks(scene, objects.boulder, true);
+        this.createGrass(scene, objects.grass);
+        this.createCacti(scene, objects.cactus);
+        
+        return objects;
+    }
 
     createTrees(scene, positions, isSnowy) {
         if (positions.length === 0) return;
