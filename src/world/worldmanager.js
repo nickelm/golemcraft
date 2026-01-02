@@ -57,7 +57,7 @@ export class WorldManager {
         const startTime = performance.now();
         
         // Generate a 17x17 grid of chunks centered at spawn (0, 0)
-        // This gives us 544x544 blocks of initial terrain
+        // This gives us 272x272 blocks of initial terrain (with 16x16 chunks)
         const initialRadius = 8;
         
         for (let x = -initialRadius; x <= initialRadius; x++) {
@@ -66,9 +66,6 @@ export class WorldManager {
             }
         }
         
-        // Generate objects for initial chunks
-        this.generateInitialObjects();
-        
         const genTime = performance.now() - startTime;
         console.log(`Initial world generated in ${genTime.toFixed(0)}ms`);
         console.log(`Chunks: ${this.chunkLoader.loadedChunks.size}`);
@@ -76,17 +73,7 @@ export class WorldManager {
     }
     
     /**
-     * Generate objects for initial world
-     * Note: In future, objects will be generated per-chunk on demand
-     */
-    generateInitialObjects() {
-        // For now, generate objects for a 500x500 area
-        // TODO: Make this chunk-based in future update
-        this.objectGenerator.generate(this.scene, 500, 500, WATER_LEVEL);
-    }
-    
-    /**
-     * Update world systems (chunk loading/unloading)
+     * Update world systems (chunk loading/unloading, object visibility)
      * @param {THREE.Vector3} playerPosition - Current player position
      */
     update(playerPosition) {
@@ -95,6 +82,11 @@ export class WorldManager {
         // Update chunk loading every 10 frames (performance optimization)
         if (this.updateCount % 10 === 0) {
             this.chunkLoader.update(playerPosition);
+        }
+        
+        // Update object visibility every 5 frames (Solution C - distance culling)
+        if (this.updateCount % 5 === 0 && this.objectGenerator) {
+            this.objectGenerator.updateObjectVisibility(playerPosition);
         }
     }
     
@@ -197,8 +189,19 @@ export class WorldManager {
      * @param {number} distance - Draw distance in blocks
      */
     setDrawDistance(distance) {
-        const chunks = Math.ceil(distance / 32); // Convert blocks to chunks
+        const CHUNK_SIZE = 16; // Must match terrainchunks.js
+        const chunks = Math.ceil(distance / CHUNK_SIZE);
         this.chunkLoader.setDrawDistance(chunks);
+    }
+    
+    /**
+     * Set object render distance (configurable for future settings)
+     * @param {number} distance - Object render distance in blocks
+     */
+    setObjectRenderDistance(distance) {
+        if (this.objectGenerator) {
+            this.objectGenerator.objectRenderDistance = distance;
+        }
     }
     
     /**
@@ -216,6 +219,10 @@ export class WorldManager {
             terrain: {
                 totalFaces: this.chunkedTerrain.totalFaces,
                 totalChunks: this.chunkedTerrain.totalChunks
+            },
+            objects: {
+                renderDistance: this.objectGenerator?.objectRenderDistance || 0,
+                chunkCount: this.objectGenerator?.objectsByChunk.size || 0
             }
         };
     }

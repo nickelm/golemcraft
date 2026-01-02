@@ -61,6 +61,15 @@ export class ChunkLoader {
             this.chunksCleared += cleared;
         }
         
+        // SECOND: Update priorities for remaining chunks based on current position
+        // This ensures closest chunks always generate first, even if they were
+        // queued when player was far away
+        this.pendingChunks.forEach(chunk => {
+            const dx = chunk.chunkX - playerChunkX;
+            const dz = chunk.chunkZ - playerChunkZ;
+            chunk.priority = dx * dx + dz * dz;
+        });
+        
         // Queue chunks for loading (don't generate immediately to avoid freezes)
         for (let dx = -this.loadRadius; dx <= this.loadRadius; dx++) {
             for (let dz = -this.loadRadius; dz <= this.loadRadius; dz++) {
@@ -120,22 +129,23 @@ export class ChunkLoader {
     loadChunk(chunkX, chunkZ) {
         const key = `${chunkX},${chunkZ}`;
         
+        // Mark as loaded FIRST (before generating objects, so validation passes)
+        this.loadedChunks.add(key);
+        this.chunksLoaded++;
+        
         // Generate terrain chunk mesh
         this.chunkedTerrain.generateChunk(chunkX, chunkZ);
         
-        // Generate objects for this chunk
+        // Generate objects for this chunk (only for loaded chunks - Solution B)
         if (this.objectGenerator) {
             this.objectGenerator.generateForChunk(
                 this.chunkedTerrain.scene,
                 chunkX,
                 chunkZ,
-                6 // WATER_LEVEL constant
+                6, // WATER_LEVEL constant
+                this.loadedChunks // Pass loaded chunks set for validation
             );
         }
-        
-        // Mark as loaded
-        this.loadedChunks.add(key);
-        this.chunksLoaded++;
     }
     
     /**
@@ -160,6 +170,11 @@ export class ChunkLoader {
             
             // Remove from chunk map
             this.chunkedTerrain.chunks.delete(key);
+        }
+        
+        // Unload objects for this chunk
+        if (this.objectGenerator) {
+            this.objectGenerator.unloadChunk(chunkX, chunkZ);
         }
         
         // Remove from loaded set

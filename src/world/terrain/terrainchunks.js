@@ -13,7 +13,7 @@ import { BLOCK_TYPES, WATER_LEVEL } from './terraingenerator.js';
  * - = 30-50 draw calls instead of thousands
  */
 
-export const CHUNK_SIZE = 32;
+export const CHUNK_SIZE = 16;
 
 // Texture atlas configuration
 const ATLAS_SIZE = 720;      // 720x720 pixels
