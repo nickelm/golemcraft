@@ -10,6 +10,7 @@ import { Arrow } from './combat.js';
 import { MobSpawner, Explosion } from './mobs.js';
 import { AtmosphereController } from './atmosphere/atmospherecontroller.js';
 import { InputController } from './inputcontroller.js';
+import { PerformanceMonitor } from './utils/ui/performance-monitor.js';
 
 export class Game {
     constructor(worldData = null) {
@@ -80,6 +81,22 @@ export class Game {
 
         // FPS Counter
         this.fpsCounter = new FPSCounter();
+
+        // Performance Monitor (desktop only by default, toggle with P key)
+        this.performanceMonitor = new PerformanceMonitor();
+        this.showPerformanceMonitor = false;
+        if (this.isMobile) {
+            this.performanceMonitor.element.style.display = 'none';
+        }
+        
+        // Toggle performance monitor with P key (desktop only)
+        window.addEventListener('keydown', (e) => {
+            if (e.key === 'p' || e.key === 'P') {
+                this.showPerformanceMonitor = !this.showPerformanceMonitor;
+                this.performanceMonitor.element.style.display = 
+                    this.showPerformanceMonitor ? 'block' : 'none';
+            }
+        });
 
         // Touch controls
         this.touchControls = new TouchControls(this);
@@ -436,12 +453,10 @@ export class Game {
             Math.floor(this.hero.position.z)
         );
         const mobCount = this.mobSpawner ? this.mobSpawner.mobs.length : 0;
-        const chunkCount = this.world.chunkLoader.loadedChunks.size;
         
         stats.innerHTML = `
             Health: ${Math.max(0, Math.floor(this.hero.health))}/${this.hero.maxHealth}<br>
             Biome: ${biome}<br>
-            Chunks: ${chunkCount}<br>
             Mobs: ${mobCount}<br>
             Gold: ${this.resources.gold}<br>
             Wood: ${this.resources.wood}<br>
@@ -535,6 +550,11 @@ export class Game {
         requestAnimationFrame(() => this.animate());
         
         this.fpsCounter.update();
+        
+        // Only update performance monitor if visible (saves CPU on mobile)
+        if (this.showPerformanceMonitor) {
+            this.performanceMonitor.update(this.renderer);
+        }
         
         const deltaTime = this.isMobile ? 0.032 : 0.016;
         this.update(deltaTime);
