@@ -110,11 +110,6 @@ export class Game {
         this.fixedTimestep = 1 / 60; // Always simulate at 60 Hz (0.0167 seconds)
         this.accumulator = 0;
         this.maxAccumulator = 0.2; // Cap at 200ms (prevents spiral of death at <5 FPS)
-        
-        // Debug counters for simulation verification
-        this.simStepsThisSecond = 0;
-        this.simStepsTotal = 0;
-        this.lastSecondTime = performance.now();
 
         // Load terrain texture
         const textureLoader = new THREE.TextureLoader();
@@ -475,8 +470,6 @@ export class Game {
             Iron: ${this.resources.iron}<br>
             Coal: ${this.resources.coal}<br>
             Diamonds: ${this.resources.diamond}<br>
-            <br>
-            <span style="color: #4ade80;">Sim: ${this.simRate || 0} Hz</span>
         `;
     }
     
@@ -565,7 +558,7 @@ export class Game {
         
         // Calculate actual time elapsed since last frame
         const now = performance.now();
-        const elapsed = (now - this.lastFrameTime) / 1000.0; // Convert ms to seconds
+        const elapsed = (now - this.lastFrameTime) / 1000; // Convert ms to seconds
         this.lastFrameTime = now;
         
         // Add elapsed time to accumulator
@@ -581,16 +574,9 @@ export class Game {
         while (this.accumulator >= this.fixedTimestep) {
             this.update(this.fixedTimestep); // Always 0.0167s
             this.accumulator -= this.fixedTimestep;
-            stepsThisFrame++;
-            this.simStepsThisSecond++;
-            this.simStepsTotal++;
-        }
-        
-        // Calculate simulation rate (should be ~60 steps/second)
-        if (now - this.lastSecondTime >= 1000) {
-            this.simRate = this.simStepsThisSecond;
-            this.simStepsThisSecond = 0;
-            this.lastSecondTime = now;
+            // stepsThisFrame++;
+            // this.simStepsThisSecond++;
+            // this.simStepsTotal++;
         }
         
         this.fpsCounter.update();
