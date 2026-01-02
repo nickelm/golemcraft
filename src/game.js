@@ -565,7 +565,7 @@ export class Game {
         
         // Calculate actual time elapsed since last frame
         const now = performance.now();
-        const elapsed = (now - this.lastFrameTime) / 1000; // Convert ms to seconds
+        const elapsed = (now - this.lastFrameTime) / 1000.0; // Convert ms to seconds
         this.lastFrameTime = now;
         
         // Add elapsed time to accumulator
