@@ -58,7 +58,7 @@ export class Game {
         
         this.mobSpawner = null;
         this.itemSpawner = null;
-        
+
         // Player resources
         this.resources = {
             gold: 0,
@@ -248,25 +248,6 @@ export class Game {
         }
     }
     
-    // handleRightDrag(deltaX) {
-    //     const rotationSpeed = 0.002;
-    //     this.hero.rotation -= deltaX * rotationSpeed;
-        
-    //     // In orbit mode, rotate camera around hero
-    //     if (this.cameraController && this.cameraController.mode === 'orbit') {
-    //         const angle = deltaX * rotationSpeed;
-    //         const heroPos = this.hero.position;
-            
-    //         // Rotate camera position around hero
-    //         const dx = this.camera.position.x - heroPos.x;
-    //         const dz = this.camera.position.z - heroPos.z;
-    //         const cos = Math.cos(angle);
-    //         const sin = Math.sin(angle);
-            
-    //         this.camera.position.x = heroPos.x + (dx * cos - dz * sin);
-    //         this.camera.position.z = heroPos.z + (dx * sin + dz * cos);
-    //     }
-    // }
     handleRightDrag(deltaX, deltaY) {
         const rotationSpeed = 0.002;
         this.hero.rotation -= deltaX * rotationSpeed;
@@ -654,38 +635,6 @@ export class Game {
         }
         
         this.fpsCounter.update();
-        
-    //     // ... rest of animate
-        
-    //     this.renderer.render(this.scene, this.camera);
-    // }
-    // animate() {
-    //     requestAnimationFrame(() => this.animate());
-        
-    //     // Calculate actual time elapsed since last frame
-    //     const now = performance.now();
-    //     const elapsed = (now - this.lastFrameTime) / 1000; // Convert ms to seconds
-    //     this.lastFrameTime = now;
-        
-    //     // Add elapsed time to accumulator
-    //     this.accumulator += elapsed;
-        
-    //     // Cap accumulator to prevent spiral of death at very low frame rates
-    //     if (this.accumulator > this.maxAccumulator) {
-    //         this.accumulator = this.maxAccumulator;
-    //     }
-        
-    //     // Run fixed timestep updates until we've caught up with real time
-    //     let stepsThisFrame = 0;
-    //     while (this.accumulator >= this.fixedTimestep) {
-    //         this.update(this.fixedTimestep); // Always 0.0167s
-    //         this.accumulator -= this.fixedTimestep;
-    //         // stepsThisFrame++;
-    //         // this.simStepsThisSecond++;
-    //         // this.simStepsTotal++;
-    //     }
-        
-    //     this.fpsCounter.update();
         
         // Only update performance monitor if visible (saves CPU on mobile)
         if (this.showPerformanceMonitor) {

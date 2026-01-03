@@ -61,7 +61,7 @@ function octaveNoise2D(x, z, octaves = 4, baseFreq = 0.05, hashFn = hash) {
 // Biome definitions
 const BIOMES = {
     ocean: { baseHeight: 3, heightScale: 2, surface: 'sand', subsurface: 'sand', underwater: 'sand' },
-    plains: { baseHeight: 8, heightScale: 4, surface: 'grass', subsurface: 'dirt', underwater: 'sand' },
+    plains: { baseHeight: 8, heightScale: 6, surface: 'grass', subsurface: 'dirt', underwater: 'sand' },
     desert: { baseHeight: 7, heightScale: 4, surface: 'sand', subsurface: 'sand', underwater: 'sand' },
     snow: { baseHeight: 9, heightScale: 5, surface: 'snow', subsurface: 'dirt', underwater: 'sand' },
     mountains: { baseHeight: 18, heightScale: 20, surface: 'stone', subsurface: 'stone', underwater: 'sand' },

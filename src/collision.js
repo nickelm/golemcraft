@@ -210,5 +210,6 @@ export function createEntityAABB(entity) {
  * - Height: 2.5 (hooves to rider head)
  */
 export function createHeroAABB() {
-    return new AABB(1.5, 2.5, 1.5, 0);
+    // Normal mode: full-sized hero AABB
+    return new AABB(1.4, 2.5, 1.4, 0.2);
 }
