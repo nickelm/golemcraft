@@ -1,19 +1,22 @@
 /**
- * ChunkDataGenerator - Pure data generation for chunk meshes
+ * ChunkDataGenerator - Pure data generation for chunk meshes AND block data
  * 
  * This module contains NO Three.js dependencies and can be used by:
- * - Main thread (for sync generation)
- * - Web Worker (for async generation)
+ * - Web Worker (primary - generates everything)
  * 
- * It generates raw typed arrays (positions, normals, uvs, colors, indices)
- * that can be used to create Three.js BufferGeometry.
+ * It generates:
+ * - Mesh data: raw typed arrays (positions, normals, uvs, colors, indices)
+ * - Block data: Uint8Array for collision queries on main thread
+ * 
+ * The worker is the SINGLE SOURCE OF TRUTH for terrain data.
  */
 
 // ============================================================================
-// CONSTANTS (shared with terrainchunks.js)
+// CONSTANTS
 // ============================================================================
 
 export const CHUNK_SIZE = 16;
+export const MAX_HEIGHT = 64;
 export const WATER_LEVEL = 6;
 
 // Texture atlas configuration
@@ -35,6 +38,35 @@ export const BLOCK_TYPES = {
     mayan_stone: { tile: [7, 0] }
 };
 
+// Block type ID encoding for the block data array
+// Must match ChunkBlockCache.js
+const BLOCK_TYPE_IDS = {
+    air: 0,
+    grass: 1,
+    dirt: 2,
+    stone: 3,
+    snow: 4,
+    sand: 5,
+    water: 6,
+    water_full: 7,
+    ice: 8,
+    mayan_stone: 9
+};
+
+/**
+ * Get block type ID for encoding
+ */
+function getBlockTypeId(typeName) {
+    return BLOCK_TYPE_IDS[typeName] ?? 0;
+}
+
+/**
+ * Calculate array index for a block position in the block data array
+ */
+function getBlockIndex(localX, y, localZ) {
+    return y * (CHUNK_SIZE * CHUNK_SIZE) + localZ * CHUNK_SIZE + localX;
+}
+
 // Face definitions: normal direction and vertex offsets
 // Vertices must be in CCW order when looking at the face from outside the cube
 const FACES = {
@@ -51,7 +83,6 @@ const FACE_UVS = [[0, 0], [0, 1], [1, 1], [1, 0]];
 
 /**
  * Ambient Occlusion neighbor offsets for each face vertex
- * Structure: FACE_AO_NEIGHBORS[faceName][vertexIndex] = [[dx,dy,dz], [dx,dy,dz], [dx,dy,dz]]
  */
 const FACE_AO_NEIGHBORS = {
     top: [
@@ -130,12 +161,12 @@ function isBlockTransparent(blockType) {
 // ============================================================================
 
 /**
- * Generate chunk mesh data
+ * Generate chunk mesh data AND block data array
  * 
  * @param {Object} terrainProvider - Object with getHeight(x,z) and getBlockType(x,y,z) methods
  * @param {number} chunkX - Chunk X coordinate
  * @param {number} chunkZ - Chunk Z coordinate
- * @returns {Object} { opaque: {...}, water: {...}, worldX, worldZ }
+ * @returns {Object} { opaque, water, blockData, worldX, worldZ }
  */
 export function generateChunkData(terrainProvider, chunkX, chunkZ) {
     const worldMinX = chunkX * CHUNK_SIZE;
@@ -144,25 +175,35 @@ export function generateChunkData(terrainProvider, chunkX, chunkZ) {
     const opaqueData = { positions: [], normals: [], uvs: [], colors: [], indices: [] };
     const waterData = { positions: [], normals: [], uvs: [], colors: [], indices: [] };
     
+    // Block data array for collision - initialize to air (0)
+    const blockData = new Uint8Array(CHUNK_SIZE * MAX_HEIGHT * CHUNK_SIZE);
+    
     // Include extra height for landmarks
     const LANDMARK_MAX_HEIGHT = 20;
     
     for (let x = worldMinX; x < worldMinX + CHUNK_SIZE; x++) {
         for (let z = worldMinZ; z < worldMinZ + CHUNK_SIZE; z++) {
+            const localX = x - worldMinX;
+            const localZ = z - worldMinZ;
+            
             const terrainHeight = terrainProvider.getHeight(x, z);
-            const maxH = Math.max(terrainHeight, WATER_LEVEL) + LANDMARK_MAX_HEIGHT;
+            const maxH = Math.min(
+                Math.max(terrainHeight, WATER_LEVEL) + LANDMARK_MAX_HEIGHT,
+                MAX_HEIGHT - 1
+            );
             
             for (let y = 0; y <= maxH; y++) {
                 const blockType = terrainProvider.getBlockType(x, y, z);
+                
+                // Store block type in the block data array
+                const blockIndex = getBlockIndex(localX, y, localZ);
+                blockData[blockIndex] = getBlockTypeId(blockType);
+                
                 if (!blockType) continue;
                 
                 const isWater = blockType === 'water' || blockType === 'water_full';
                 const isTransparent = isBlockTransparent(blockType);
                 const data = isTransparent ? waterData : opaqueData;
-                
-                // Local coordinates within chunk
-                const localX = x - worldMinX;
-                const localZ = z - worldMinZ;
                 
                 addBlockFaces(terrainProvider, data, x, y, z, localX, localZ, blockType, isTransparent);
             }
@@ -172,6 +213,7 @@ export function generateChunkData(terrainProvider, chunkX, chunkZ) {
     return {
         opaque: arrayifyData(opaqueData),
         water: arrayifyData(waterData),
+        blockData: blockData,
         worldX: worldMinX,
         worldZ: worldMinZ
     };
@@ -303,6 +345,7 @@ export function getTransferables(chunkData) {
         chunkData.water.normals.buffer,
         chunkData.water.uvs.buffer,
         chunkData.water.colors.buffer,
-        chunkData.water.indices.buffer
+        chunkData.water.indices.buffer,
+        chunkData.blockData.buffer  // Add block data to transferables
     ];
 }

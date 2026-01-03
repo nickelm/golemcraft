@@ -1,29 +1,31 @@
+/**
+ * WorldManager - High-level coordinator for all world systems
+ * 
+ * Architecture:
+ * - Web worker generates ALL terrain data (mesh + block data)
+ * - Main thread receives and stores block data in ChunkBlockCache
+ * - Collision queries the cache - NO terrain regeneration on main thread
+ * - Worker is the SINGLE SOURCE OF TRUTH
+ * 
+ * Manages:
+ * - Chunk loading/unloading with worker
+ * - Object placement (trees, rocks)
+ * - Landmark generation (temples, ruins) - TODO: move to worker
+ * - Block modifications (craters, destruction)
+ * - World persistence
+ */
+
 import * as THREE from 'three';
 import { TerrainGenerator, WATER_LEVEL } from './terrain/terraingenerator.js';
 import { ChunkedTerrain } from './terrain/terrainchunks.js';
 import { ObjectGenerator } from './objects/objectgenerator.js';
 import { ChunkLoader } from './chunkloader.js';
 import { LandmarkSystem } from './landmarks/landmarksystem.js';
+import { TerrainDataProvider } from './terraindataprovider.js';
 
 // Re-export WATER_LEVEL for API compatibility
 export { WATER_LEVEL };
 
-/**
- * WorldManager - High-level coordinator for all world systems
- * 
- * All chunk generation happens via web worker:
- * - No synchronous initial load (no more 7 second freezes)
- * - Shows loading screen while chunks generate
- * - Pauses game if player catches up to terrain
- * 
- * Manages:
- * - Terrain generation (height, biomes)
- * - Chunk loading/unloading with worker
- * - Object placement (trees, rocks)
- * - Landmark generation (temples, ruins)
- * - Block modifications (craters, destruction)
- * - World persistence
- */
 export class WorldManager {
     constructor(scene, terrainTexture, seed, worldId, isMobile = false) {
         this.scene = scene;
@@ -34,10 +36,12 @@ export class WorldManager {
 
         console.log(`Creating world: seed=${seed}, id=${worldId}`);
 
-        // Create terrain generator
+        // Create terrain generator (still needed for object placement until moved to worker)
+        // TODO: Remove once object spawning moves to worker
         this.terrain = new TerrainGenerator(seed);
 
         // Create landmark system (procedural POIs like temples)
+        // TODO: Move to worker
         this.landmarkSystem = new LandmarkSystem(this.terrain, seed);
 
         // Connect landmark system to terrain generator
@@ -57,6 +61,10 @@ export class WorldManager {
             null
         );
 
+        // Terrain data provider will be created after worker is initialized
+        // This is what collision and game logic should use
+        this.terrainDataProvider = null;
+
         // Stats
         this.updateCount = 0;
     }
@@ -74,6 +82,9 @@ export class WorldManager {
 
         // Initialize worker
         await this.chunkLoader.initWorker(this.seed);
+
+        // Create terrain data provider that routes to worker's block cache
+        this.terrainDataProvider = new TerrainDataProvider(this.chunkLoader.workerManager);
 
         // Request chunks around player position
         const chunksNeeded = this.chunkLoader.requestChunksAround(playerPosition);
@@ -145,8 +156,13 @@ export class WorldManager {
 
     /**
      * Get terrain height at position
+     * Uses the worker's block cache data
      */
     getHeight(x, z) {
+        if (this.terrainDataProvider) {
+            return this.terrainDataProvider.getHeight(Math.floor(x), Math.floor(z));
+        }
+        // Fallback to old terrain generator if not initialized
         return this.terrain.getHeight(x, z);
     }
 
@@ -154,11 +170,15 @@ export class WorldManager {
      * Get interpolated height at any position
      */
     getInterpolatedHeight(x, z) {
+        if (this.terrainDataProvider) {
+            return this.terrainDataProvider.getInterpolatedHeight(x, z);
+        }
         return this.terrain.getInterpolatedHeight(x, z);
     }
 
     /**
      * Get biome at position
+     * TODO: Move biome data to worker and cache
      */
     getBiome(x, z) {
         return this.terrain.getBiome(x, z);
@@ -166,45 +186,57 @@ export class WorldManager {
 
     /**
      * Get block type at position
+     * Uses the worker's block cache - SINGLE SOURCE OF TRUTH
      */
     getBlockType(x, y, z) {
+        if (this.terrainDataProvider) {
+            return this.terrainDataProvider.getBlockType(
+                Math.floor(x), 
+                Math.floor(y), 
+                Math.floor(z)
+            );
+        }
+        // Fallback - should not happen in normal operation
         return this.terrain.getBlockType(x, y, z);
     }
 
     /**
      * Destroy a block
+     * TODO: Need to notify worker and update block cache
      */
     destroyBlock(x, y, z) {
         this.terrain.destroyBlock(x, y, z);
         this.chunkLoader.markBlockDestroyed(x, y, z);
+        this.chunkedTerrain.regenerateChunkAt(x, z);
     }
 
     /**
      * Create explosion crater
      */
     createExplosionCrater(position, radius) {
-        const centerX = Math.floor(position.x);
-        const centerY = Math.floor(position.y);
-        const centerZ = Math.floor(position.z);
+        const intRadius = Math.ceil(radius);
+        const px = Math.floor(position.x);
+        const py = Math.floor(position.y);
+        const pz = Math.floor(position.z);
 
-        for (let dx = -radius; dx <= radius; dx++) {
-            for (let dy = -radius; dy <= radius; dy++) {
-                for (let dz = -radius; dz <= radius; dz++) {
+        for (let dx = -intRadius; dx <= intRadius; dx++) {
+            for (let dy = -intRadius; dy <= intRadius; dy++) {
+                for (let dz = -intRadius; dz <= intRadius; dz++) {
                     const dist = Math.sqrt(dx * dx + dy * dy + dz * dz);
                     if (dist <= radius) {
-                        const x = centerX + dx;
-                        const y = centerY + dy;
-                        const z = centerZ + dz;
-
-                        if (y > 0) {
-                            this.destroyBlock(x, y, z);
+                        const bx = px + dx;
+                        const by = py + dy;
+                        const bz = pz + dz;
+                        if (by > 0) {
+                            this.terrain.destroyBlock(bx, by, bz);
                         }
                     }
                 }
             }
         }
 
-        this.chunkedTerrain.regenerateChunksInRadius(centerX, centerZ, radius + 2);
+        this.chunkedTerrain.regenerateChunksInRadius(px, pz, intRadius + 1);
+        this.chunkLoader.saveModifiedChunks();
     }
 
     /**
@@ -218,7 +250,7 @@ export class WorldManager {
      * Check if position is underwater
      */
     isUnderwater(x, y, z) {
-        return y <= WATER_LEVEL && this.terrain.getHeight(x, z) < WATER_LEVEL;
+        return y <= WATER_LEVEL && this.getHeight(x, z) < WATER_LEVEL;
     }
 
     /**
@@ -257,7 +289,7 @@ export class WorldManager {
     }
 
     /**
-     * Clean up
+     * Clean up resources
      */
     dispose() {
         this.chunkLoader.dispose();

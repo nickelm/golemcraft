@@ -1,14 +1,20 @@
-import * as THREE from 'three';
-
 /**
- * TerrainWorkerManager - Manages the terrain generation web worker
+ * TerrainWorkerManager - Manages communication with the terrain web worker
  * 
- * Responsibilities:
- * - Initialize and communicate with the terrain worker
- * - Queue chunk generation requests with priority
- * - Cancel requests for chunks no longer needed
- * - Create Three.js meshes from worker-generated geometry data
+ * Handles:
+ * - Worker initialization
+ * - Chunk request queue with priority
+ * - Chunk cancellation when out of range
+ * - Receiving mesh geometry AND block data from worker
+ * - Creating Three.js meshes
+ * - Storing block data in ChunkBlockCache for collision queries
+ * 
+ * The worker is the SINGLE SOURCE OF TRUTH for terrain data.
  */
+
+import * as THREE from 'three';
+import { ChunkBlockCache } from '../world/chunkblockcache.js';
+
 export class TerrainWorkerManager {
     constructor(scene, opaqueMaterial, waterMaterial, onChunkReady) {
         this.scene = scene;
@@ -21,19 +27,23 @@ export class TerrainWorkerManager {
         this.isReady = false;
         this.readyResolve = null;
 
-        // Request tracking
-        this.pendingRequests = new Map(); // key -> { chunkX, chunkZ, priority, timestamp }
-        this.processingChunks = new Set(); // chunks currently being generated
-        this.cancelledChunks = new Set(); // chunks cancelled while processing
+        // Request management
+        this.pendingRequests = new Map();  // key -> { chunkX, chunkZ, priority, context }
+        this.processingChunks = new Set(); // Keys currently being processed
+        this.cancelledChunks = new Set();  // Keys cancelled while processing
+
+        // Block data cache - THE source of truth for collision
+        this.blockCache = new ChunkBlockCache();
 
         // Stats
         this.stats = {
             totalGenerated: 0,
             totalCancelled: 0,
-            avgGenTime: 0,
-            genTimes: []
+            genTimes: [],
+            avgGenTime: 0
         };
 
+        // Create worker
         this.initWorker();
     }
 
@@ -43,14 +53,12 @@ export class TerrainWorkerManager {
             { type: 'module' }
         );
 
-        this.worker.onmessage = (e) => this.handleWorkerMessage(e);
+        this.worker.onmessage = (e) => this.handleWorkerMessage(e.data);
         this.worker.onerror = (e) => this.handleWorkerError(e);
     }
 
-    handleWorkerMessage(e) {
-        const { type, ...data } = e.data;
-
-        switch (type) {
+    handleWorkerMessage(data) {
+        switch (data.type) {
             case 'ready':
                 this.isReady = true;
                 console.log('Terrain worker ready');
@@ -86,14 +94,11 @@ export class TerrainWorkerManager {
 
         // Check if cancelled while processing
         if (this.cancelledChunks.has(key)) {
-            console.log(`[CANCEL-PROCESSING] Chunk ${key} was cancelled while being generated`);
             this.cancelledChunks.delete(key);
             this.stats.totalCancelled++;
             this.processQueue();
             return;
         }
-
-        console.log(`[GENERATED] Chunk ${key} generated in ${genTime.toFixed(1)}ms`);
 
         // Track generation time
         this.stats.genTimes.push(genTime);
@@ -102,6 +107,11 @@ export class TerrainWorkerManager {
         }
         this.stats.avgGenTime = this.stats.genTimes.reduce((a, b) => a + b, 0) / this.stats.genTimes.length;
         this.stats.totalGenerated++;
+
+        // Store block data in cache (for collision queries)
+        if (chunkData.blockData) {
+            this.blockCache.setChunkData(chunkX, chunkZ, chunkData.blockData);
+        }
 
         // Create Three.js meshes
         const meshes = this.createMeshesFromData(chunkData);
@@ -188,7 +198,6 @@ export class TerrainWorkerManager {
             chunkX,
             chunkZ,
             priority,
-            timestamp: performance.now(),
             context
         });
 
@@ -203,34 +212,34 @@ export class TerrainWorkerManager {
 
         if (this.pendingRequests.has(key)) {
             this.pendingRequests.delete(key);
-            return;
         }
 
+        // If already processing, mark for cancellation
         if (this.processingChunks.has(key)) {
             this.cancelledChunks.add(key);
         }
+
+        // Also remove from block cache
+        this.blockCache.removeChunk(chunkX, chunkZ);
     }
 
     /**
      * Update priorities based on camera position
-     * Also cancels chunks that are now beyond unload radius
      */
-    updatePriorities(cameraX, cameraZ, unloadRadiusChunks) {
+    updatePriorities(cameraX, cameraZ, unloadRadius) {
         const CHUNK_SIZE = 16;
         const cameraChunkX = Math.floor(cameraX / CHUNK_SIZE);
         const cameraChunkZ = Math.floor(cameraZ / CHUNK_SIZE);
 
+        // Cancel chunks that are too far
         for (const [key, request] of this.pendingRequests) {
-            // Use chunk distance (matching how ChunkLoader checks)
             const dx = Math.abs(request.chunkX - cameraChunkX);
             const dz = Math.abs(request.chunkZ - cameraChunkZ);
 
-            if (dx > unloadRadiusChunks || dz > unloadRadiusChunks) {
-                // Beyond unload radius - cancel
-                console.log(`[CANCEL-PENDING] Chunk ${key} cancelled (dx=${dx}, dz=${dz}, unloadRadius=${unloadRadiusChunks})`);
+            if (dx > unloadRadius || dz > unloadRadius) {
                 this.pendingRequests.delete(key);
             } else {
-                // Update priority based on distance
+                // Update priority
                 const centerX = request.chunkX * CHUNK_SIZE + CHUNK_SIZE / 2;
                 const centerZ = request.chunkZ * CHUNK_SIZE + CHUNK_SIZE / 2;
                 const distX = centerX - cameraX;
@@ -277,6 +286,21 @@ export class TerrainWorkerManager {
     }
 
     /**
+     * Get block type at world coordinates (queries the block cache)
+     * This is the main thread's way to query terrain data
+     */
+    getBlockType(x, y, z) {
+        return this.blockCache.getBlockType(x, y, z);
+    }
+
+    /**
+     * Check if block data is loaded for a chunk
+     */
+    hasBlockData(chunkX, chunkZ) {
+        return this.blockCache.hasChunk(chunkX, chunkZ);
+    }
+
+    /**
      * Get stats for performance monitor
      */
     getStats() {
@@ -285,7 +309,8 @@ export class TerrainWorkerManager {
             processingCount: this.processingChunks.size,
             totalGenerated: this.stats.totalGenerated,
             totalCancelled: this.stats.totalCancelled,
-            avgGenTime: this.stats.avgGenTime.toFixed(1)
+            avgGenTime: this.stats.avgGenTime.toFixed(1),
+            blockCacheSize: this.blockCache.size
         };
     }
 
@@ -300,5 +325,6 @@ export class TerrainWorkerManager {
         this.pendingRequests.clear();
         this.processingChunks.clear();
         this.cancelledChunks.clear();
+        this.blockCache.clear();
     }
 }
