@@ -182,10 +182,14 @@ export class ChunkedTerrain {
         let minY = Infinity, maxY = -Infinity;
         
         // Scan all positions in chunk
+        // Include extra height for landmarks (temples can be 15+ blocks tall)
+        const LANDMARK_MAX_HEIGHT = 20;
+        
         for (let x = worldMinX; x < worldMaxX; x++) {
             for (let z = worldMinZ; z < worldMaxZ; z++) {
                 const terrainHeight = this.terrain.getHeight(x, z);
-                const maxH = Math.max(terrainHeight, WATER_LEVEL);
+                // Scan up to terrain + landmark height to catch structures above ground
+                const maxH = Math.max(terrainHeight, WATER_LEVEL) + LANDMARK_MAX_HEIGHT;
                 
                 for (let y = 0; y <= maxH; y++) {
                     const blockType = this.terrain.getBlockType(x, y, z);

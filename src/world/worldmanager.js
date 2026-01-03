@@ -3,6 +3,7 @@ import { TerrainGenerator, WATER_LEVEL } from './terrain/terraingenerator.js';
 import { ChunkedTerrain } from './terrain/terrainchunks.js';
 import { ObjectGenerator } from './objects/objectgenerator.js';
 import { ChunkLoader } from './chunkloader.js';
+import { LandmarkSystem } from './landmarks/landmarksystem.js';
 
 /**
  * WorldManager - High-level coordinator for all world systems
@@ -11,6 +12,7 @@ import { ChunkLoader } from './chunkloader.js';
  * - Terrain generation (height, biomes)
  * - Chunk loading/unloading
  * - Object placement (trees, rocks)
+ * - Landmark generation (temples, ruins)
  * - Block modifications (craters, destruction)
  * - World persistence
  * 
@@ -28,11 +30,17 @@ export class WorldManager {
         // Create terrain generator
         this.terrain = new TerrainGenerator(seed);
         
+        // Create landmark system (procedural POIs like temples)
+        this.landmarkSystem = new LandmarkSystem(this.terrain, seed);
+        
+        // Connect landmark system to terrain generator
+        this.terrain.setLandmarkSystem(this.landmarkSystem);
+        
         // Create chunked terrain renderer
         this.chunkedTerrain = new ChunkedTerrain(this.scene, this.terrain, terrainTexture);
         
-        // Create object generator
-        this.objectGenerator = new ObjectGenerator(this.terrain, seed);
+        // Create object generator (with landmark system for exclusion zones)
+        this.objectGenerator = new ObjectGenerator(this.terrain, seed, this.landmarkSystem);
         
         // Create chunk loader (pass null for mobSpawner, will be set later if needed)
         this.chunkLoader = new ChunkLoader(
@@ -70,6 +78,13 @@ export class WorldManager {
         console.log(`Initial world generated in ${genTime.toFixed(0)}ms`);
         console.log(`Chunks: ${this.chunkLoader.loadedChunks.size}`);
         console.log(`Faces: ${this.chunkedTerrain.totalFaces}`);
+        
+        // Log landmark stats
+        const landmarks = this.landmarkSystem.getAllLandmarks();
+        console.log(`Landmarks generated: ${landmarks.length}`);
+        landmarks.forEach(l => {
+            console.log(`  - ${l.type} at (${l.centerX}, ${l.centerZ})`);
+        });
     }
     
     /**
@@ -178,6 +193,30 @@ export class WorldManager {
     }
     
     /**
+     * Get landmarks near a position (for mob spawning, etc.)
+     * @param {number} x - World X coordinate
+     * @param {number} z - World Z coordinate
+     * @param {number} radius - Search radius
+     * @returns {Array} Array of landmarks within radius
+     */
+    getLandmarksNear(x, z, radius) {
+        const landmarks = this.landmarkSystem.getAllLandmarks();
+        return landmarks.filter(l => {
+            const dx = l.centerX - x;
+            const dz = l.centerZ - z;
+            return Math.sqrt(dx * dx + dz * dz) <= radius;
+        });
+    }
+    
+    /**
+     * Get all landmarks in the world (for debug/map display)
+     * @returns {Array} Array of all generated landmarks
+     */
+    getAllLandmarks() {
+        return this.landmarkSystem.getAllLandmarks();
+    }
+    
+    /**
      * Save world state
      */
     save() {
@@ -210,6 +249,7 @@ export class WorldManager {
      */
     getStats() {
         const chunkStats = this.chunkLoader.getStats();
+        const landmarks = this.landmarkSystem.getAllLandmarks();
         
         return {
             seed: this.seed,
@@ -223,6 +263,13 @@ export class WorldManager {
             objects: {
                 renderDistance: this.objectGenerator?.objectRenderDistance || 0,
                 chunkCount: this.objectGenerator?.objectsByChunk.size || 0
+            },
+            landmarks: {
+                count: landmarks.length,
+                types: landmarks.reduce((acc, l) => {
+                    acc[l.type] = (acc[l.type] || 0) + 1;
+                    return acc;
+                }, {})
             }
         };
     }
@@ -233,6 +280,7 @@ export class WorldManager {
     dispose() {
         this.chunkLoader.clearAll();
         this.chunkedTerrain.dispose();
+        this.landmarkSystem.clearCache();
     }
 }
 

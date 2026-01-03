@@ -14,6 +14,17 @@ export class TerrainGenerator {
         this.biomeCache = new Map();
         // Track destroyed blocks (from explosions, etc.)
         this.destroyedBlocks = new Set();
+        
+        // Landmark system (set externally after construction)
+        this.landmarkSystem = null;
+    }
+    
+    /**
+     * Set the landmark system for hollow volumes and block overrides
+     * @param {LandmarkSystem} landmarkSystem
+     */
+    setLandmarkSystem(landmarkSystem) {
+        this.landmarkSystem = landmarkSystem;
     }
     
     /**
@@ -40,22 +51,33 @@ export class TerrainGenerator {
         // Low frequency noise for biome regions
         // Note: with this hash-based noise, values cluster around 0.1-0.45
         const biomeNoise = octaveNoise2D(x, z, 4, 0.05, hash);
-        // Secondary noise for variation
+        // Secondary noise for variation (temperature)
         const tempNoise = octaveNoise2D(x, z, 4, 0.06, hash2);
+        // Third noise for humidity (jungle detection)
+        const humidityNoise = octaveNoise2D(x, z, 3, 0.04, (x, z) => hash(x, z, 77777));
         
         // Remap noise from ~[0.08, 0.45] to [0, 1]
         const remappedNoise = Math.max(0, Math.min(1, (biomeNoise - 0.08) / 0.37));
         const remappedTemp = Math.max(0, Math.min(1, (tempNoise - 0.08) / 0.37));
+        const remappedHumidity = Math.max(0, Math.min(1, (humidityNoise - 0.08) / 0.37));
         
         let biome;
         if (remappedNoise < 0.15) {
             biome = 'ocean';
         } else if (remappedNoise < 0.35) {
-            // Coastal/transitional - plains or desert based on temperature
-            biome = remappedTemp > 0.5 ? 'desert' : 'plains';
+            // Coastal/transitional - plains, desert, or jungle
+            if (remappedHumidity > 0.65 && remappedTemp > 0.4) {
+                biome = 'jungle';
+            } else if (remappedTemp > 0.5) {
+                biome = 'desert';
+            } else {
+                biome = 'plains';
+            }
         } else if (remappedNoise < 0.70) {
-            // Inland - plains, desert, or snow based on temperature
-            if (remappedTemp > 0.55) {
+            // Inland - plains, desert, snow, or jungle
+            if (remappedHumidity > 0.7 && remappedTemp > 0.45) {
+                biome = 'jungle';
+            } else if (remappedTemp > 0.55) {
                 biome = 'desert';
             } else if (remappedTemp < 0.35) {
                 biome = 'snow';
@@ -141,6 +163,12 @@ export class TerrainGenerator {
             }
         }
         
+        // Jungle has more varied terrain with hills
+        if (biome === 'jungle') {
+            const jungleHillNoise = octaveNoise2D(x, z, 4, 0.08);
+            height += jungleHillNoise * 4;
+        }
+        
         // Carve rivers (not in ocean or desert)
         if (biome !== 'ocean' && biome !== 'desert' && this.isRiver(x, z)) {
             height = Math.min(height, WATER_LEVEL - 1);
@@ -189,6 +217,22 @@ export class TerrainGenerator {
         if (this.isBlockDestroyed(x, y, z)) {
             return null;
         }
+        
+        // Check landmark block overrides FIRST (pyramid stones, etc.)
+        // These take priority over everything including chambers
+        if (this.landmarkSystem) {
+            const landmarkBlock = this.landmarkSystem.getLandmarkBlockType(x, y, z);
+            if (landmarkBlock) {
+                return landmarkBlock;
+            }
+        }
+        
+        // Check landmark hollow volumes (chambers) - returns null for air inside
+        // Only checked AFTER confirming no landmark block exists here
+        // TEMPORARILY DISABLED - testing pyramid structure
+        // if (this.landmarkSystem && this.landmarkSystem.isInsideChamber(x, y, z)) {
+        //     return null;
+        // }
         
         const height = this.getHeight(x, z);
         const biome = this.getBiome(x, z);
@@ -283,6 +327,10 @@ export const BLOCK_TYPES = {
     ice: {
         name: 'Ice',
         tile: [6, 0]
+    },
+    mayan_stone: {
+        name: 'Temple Sandstone',
+        tile: [7, 0]  // Use stone texture until custom texture is added at [7,0]
     }
 };
 

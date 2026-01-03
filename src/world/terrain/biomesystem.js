@@ -113,6 +113,26 @@ export const BIOMES = {
             skeleton: 25,
             zombie: 30
         }
+    },
+    
+    jungle: {
+        name: 'Jungle',
+        baseHeight: 10,
+        heightScale: 8,
+        surface: 'grass',
+        subsurface: 'dirt',
+        underwater: 'sand',
+        objects: ['jungleTree', 'rock'],
+        objectDensities: {
+            jungleTree: 0.12,    // Dense jungle trees
+            rock: 0.01
+        },
+        mobs: ['zombie', 'creeper', 'chicken'],
+        spawnWeights: {
+            zombie: 30,
+            creeper: 20,
+            chicken: 35
+        }
     }
 };
 

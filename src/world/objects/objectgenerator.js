@@ -17,9 +17,16 @@ export const OBJECT_TYPES = {
         hasCollision: false,
         usesForestNoise: true
     },
+    jungleTree: {
+        name: 'Jungle Tree',
+        biomes: ['jungle'],
+        density: 0.12,
+        hasCollision: false,
+        usesForestNoise: true
+    },
     rock: {
         name: 'Rock',
-        biomes: ['plains', 'mountains', 'snow'],
+        biomes: ['plains', 'mountains', 'snow', 'jungle'],
         density: 0.015,
         hasCollision: false
     },
@@ -45,9 +52,10 @@ export const OBJECT_TYPES = {
 
 // Generate objects for the terrain
 export class ObjectGenerator {
-    constructor(terrain, seed = 54321) {
+    constructor(terrain, seed = 54321, landmarkSystem = null) {
         this.terrain = terrain;
         this.seed = seed;
+        this.landmarkSystem = landmarkSystem;
         this.collisionMap = new Map();
         
         // Object rendering distance (configurable)
@@ -103,6 +111,7 @@ export class ObjectGenerator {
         const objects = {
             tree: [],
             snowTree: [],
+            jungleTree: [],
             rock: [],
             boulder: [],
             grass: [],
@@ -146,6 +155,7 @@ export class ObjectGenerator {
 
         this.createTrees(scene, objects.tree, false);
         this.createTrees(scene, objects.snowTree, true);
+        this.createJungleTrees(scene, objects.jungleTree);
         this.createRocks(scene, objects.rock, false);
         this.createRocks(scene, objects.boulder, true);
         this.createGrass(scene, objects.grass);
@@ -177,6 +187,7 @@ export class ObjectGenerator {
         const objects = {
             tree: [],
             snowTree: [],
+            jungleTree: [],
             rock: [],
             boulder: [],
             grass: [],
@@ -190,6 +201,11 @@ export class ObjectGenerator {
             for (let z = startZ; z < startZ + CHUNK_SIZE; z++) {
                 const height = this.terrain.getHeight(x, z);
                 if (height < waterLevel) continue;
+                
+                // Skip if inside a landmark's footprint
+                if (this.landmarkSystem && this.landmarkSystem.isInsideLandmark(x, z)) {
+                    continue;
+                }
                 
                 const biome = this.terrain.getBiome(x, z);
                 const y = height + 1;
@@ -226,6 +242,7 @@ export class ObjectGenerator {
         const meshes = [];
         meshes.push(...this.createTrees(scene, objects.tree, false));
         meshes.push(...this.createTrees(scene, objects.snowTree, true));
+        meshes.push(...this.createJungleTrees(scene, objects.jungleTree));
         meshes.push(...this.createRocks(scene, objects.rock, false));
         meshes.push(...this.createRocks(scene, objects.boulder, true));
         meshes.push(...this.createGrass(scene, objects.grass));
@@ -382,6 +399,83 @@ export class ObjectGenerator {
         }
         
         return meshes;
+    }
+
+    /**
+     * Create jungle trees - taller with thicker trunks and larger canopy
+     */
+    createJungleTrees(scene, positions) {
+        if (positions.length === 0) return [];
+
+        const trunkColor = 0x5D4037;  // Darker brown
+        const foliageColor = 0x1B5E20;  // Dark green
+        const vineColor = 0x33691E;  // Slightly lighter green
+
+        // Taller, thicker trunks
+        const trunkGeometry = new THREE.CylinderGeometry(0.25, 0.35, 2.5, 6);
+        const trunkMaterial = new THREE.MeshLambertMaterial({ color: trunkColor });
+        const trunkMesh = new THREE.InstancedMesh(trunkGeometry, trunkMaterial, positions.length);
+        trunkMesh.castShadow = true;
+        trunkMesh.receiveShadow = true;
+
+        // Large spherical canopy
+        const foliageGeometry = new THREE.SphereGeometry(1.5, 8, 6);
+        const foliageMaterial = new THREE.MeshLambertMaterial({ color: foliageColor });
+        const foliageMesh = new THREE.InstancedMesh(foliageGeometry, foliageMaterial, positions.length);
+        foliageMesh.castShadow = true;
+        foliageMesh.receiveShadow = true;
+
+        // Secondary canopy layer for fullness
+        const foliage2Geometry = new THREE.SphereGeometry(1.2, 6, 4);
+        const foliage2Material = new THREE.MeshLambertMaterial({ color: vineColor });
+        const foliage2Mesh = new THREE.InstancedMesh(foliage2Geometry, foliage2Material, positions.length);
+        foliage2Mesh.castShadow = true;
+
+        const matrix = new THREE.Matrix4();
+        const quaternion = new THREE.Quaternion();
+
+        positions.forEach((pos, i) => {
+            const sizeVar = 0.9 + pos.variation * 0.4;  // More size variation
+            
+            // Trunk
+            const trunkY = pos.y + 1.25 * sizeVar - 1;
+            matrix.compose(
+                new THREE.Vector3(pos.x, trunkY, pos.z),
+                quaternion,
+                new THREE.Vector3(sizeVar, sizeVar, sizeVar)
+            );
+            trunkMesh.setMatrixAt(i, matrix);
+
+            // Main canopy
+            const trunkTop = trunkY + 1.25 * sizeVar;
+            const foliageY = trunkTop + 0.8 * sizeVar;
+            matrix.compose(
+                new THREE.Vector3(pos.x, foliageY, pos.z),
+                quaternion,
+                new THREE.Vector3(sizeVar, sizeVar * 0.8, sizeVar)  // Slightly flattened
+            );
+            foliageMesh.setMatrixAt(i, matrix);
+
+            // Secondary canopy (offset slightly)
+            const offset2X = (pos.variation - 0.5) * 0.5;
+            const offset2Z = (this.hash(pos.x, pos.z, 888) - 0.5) * 0.5;
+            matrix.compose(
+                new THREE.Vector3(pos.x + offset2X, foliageY - 0.3 * sizeVar, pos.z + offset2Z),
+                quaternion,
+                new THREE.Vector3(sizeVar * 0.9, sizeVar * 0.7, sizeVar * 0.9)
+            );
+            foliage2Mesh.setMatrixAt(i, matrix);
+        });
+
+        trunkMesh.instanceMatrix.needsUpdate = true;
+        foliageMesh.instanceMatrix.needsUpdate = true;
+        foliage2Mesh.instanceMatrix.needsUpdate = true;
+
+        scene.add(trunkMesh);
+        scene.add(foliageMesh);
+        scene.add(foliage2Mesh);
+
+        return [trunkMesh, foliageMesh, foliage2Mesh];
     }
 
     createRocks(scene, positions, isLarge) {
