@@ -11,6 +11,7 @@ import { MobSpawner, Explosion } from './mobs.js';
 import { AtmosphereController } from './atmosphere/atmospherecontroller.js';
 import { InputController } from './inputcontroller.js';
 import { PerformanceMonitor } from './utils/ui/performance-monitor.js';
+import { LoadingOverlay } from './utils/ui/loading-overlay.js';
 
 export class Game {
     constructor(worldData = null) {
@@ -76,7 +77,6 @@ export class Game {
         // Input controller (handles keyboard, mouse, touch events)
         this.input = new InputController(this.renderer, this.camera);
         this.input.setLeftClickCallback(() => this.handleClick());
-        // this.input.setRightDragCallback((deltaX) => this.handleRightDrag(deltaX));
         this.input.setRightDragCallback((deltaX, deltaY) => this.handleRightDrag(deltaX, deltaY));
         
         // For compatibility with TouchControls
@@ -106,6 +106,10 @@ export class Game {
         // Camera controller (initialized after hero creation)
         this.cameraController = null;
 
+        // Loading overlay for chunk loading
+        this.loadingOverlay = new LoadingOverlay();
+        this.isPaused = false;        
+
         // Fixed timestep simulation with accumulator
         this.lastFrameTime = performance.now();
         this.fixedTimestep = 1 / 60; // Always simulate at 60 Hz (0.0167 seconds)
@@ -114,11 +118,11 @@ export class Game {
 
         // Load terrain texture
         const textureLoader = new THREE.TextureLoader();
-        this.terrainTexture = textureLoader.load('./terrain-atlas.png', () => {
-            this.init();
+        this.terrainTexture = textureLoader.load('./terrain-atlas.png', async () => {
+            await this.init();
             this.animate();
         });
-        
+
         this.terrainTexture.magFilter = THREE.NearestFilter;
         this.terrainTexture.minFilter = THREE.NearestFilter;
         this.terrainTexture.generateMipmaps = false;
@@ -131,11 +135,20 @@ export class Game {
         });
     }
 
-    init() {
+    async init() {
         this.scene.background = new THREE.Color(0x87ceeb);
         this.scene.fog = new THREE.Fog(0x87ceeb, 50, 150);
 
-        // Create world manager (handles terrain, chunks, objects)
+        // Show loading overlay
+        this.loadingOverlay.show();
+
+        // Get initial player position (from saved data or default)
+        const savedPos = this.worldData?.heroPosition;
+        const initialPosition = savedPos 
+            ? { x: savedPos.x, y: savedPos.y, z: savedPos.z }
+            : { x: 0, y: 10, z: 0 };
+
+        // Create world manager (no sync load anymore)
         this.world = new WorldManager(
             this.scene,
             this.terrainTexture,
@@ -143,7 +156,29 @@ export class Game {
             this.worldId,
             this.isMobile
         );
-        
+
+        // Initialize world asynchronously with progress callback
+        await this.world.init(initialPosition, (loaded, total) => {
+            this.loadingOverlay.setProgress(loaded, total);
+        });
+
+        // Hide loading overlay
+        this.loadingOverlay.hide();
+
+        // Set up loading state callback for runtime loading
+        this.world.setLoadingCallback((isLoading) => {
+            this.isPaused = isLoading;
+            if (isLoading) {
+                this.loadingOverlay.show();
+                // Update progress during runtime loading
+                const stats = this.world.chunkLoader.getStats();
+                const pending = this.world.chunkLoader.getPendingCount();
+                this.loadingOverlay.setProgress(stats.withMeshes, stats.withMeshes + pending);
+            } else {
+                this.loadingOverlay.hide();
+            }
+        });
+
         // Initialize spawners
         this.itemSpawner = new ItemSpawner(this.scene, this.world.terrain, this.camera);
         this.mobSpawner = new MobSpawner(this.scene, this.world.terrain);
@@ -276,6 +311,12 @@ export class Game {
     }
 
     update(deltaTime) {
+        // Update world first - it returns true if loading
+        const needsLoading = this.world.update(this.hero.position);
+        
+        // Skip rest of update if loading
+        if (needsLoading) return;
+
         this.touchControls.update(deltaTime);
         this.handleInput(deltaTime);
         
@@ -584,37 +625,75 @@ export class Game {
     animate() {
         requestAnimationFrame(() => this.animate());
         
-        // Calculate actual time elapsed since last frame
         const now = performance.now();
-        const elapsed = (now - this.lastFrameTime) / 1000; // Convert ms to seconds
+        const elapsed = (now - this.lastFrameTime) / 1000;
         this.lastFrameTime = now;
         
-        // Add elapsed time to accumulator
-        this.accumulator += elapsed;
-        
-        // Cap accumulator to prevent spiral of death at very low frame rates
-        if (this.accumulator > this.maxAccumulator) {
-            this.accumulator = this.maxAccumulator;
-        }
-        
-        // Run fixed timestep updates until we've caught up with real time
-        let stepsThisFrame = 0;
-        while (this.accumulator >= this.fixedTimestep) {
-            this.update(this.fixedTimestep); // Always 0.0167s
-            this.accumulator -= this.fixedTimestep;
-            // stepsThisFrame++;
-            // this.simStepsThisSecond++;
-            // this.simStepsTotal++;
+        // Skip simulation when loading
+        if (!this.isPaused) {
+            this.accumulator += elapsed;
+            
+            if (this.accumulator > this.maxAccumulator) {
+                this.accumulator = this.maxAccumulator;
+            }
+            
+            while (this.accumulator >= this.fixedTimestep) {
+                this.update(this.fixedTimestep);
+                this.accumulator -= this.fixedTimestep;
+            }
+        } else {
+            // Still update world to process chunk loading
+            if (this.world && this.hero) {
+                this.world.update(this.hero.position);
+                
+                // Update loading progress
+                const stats = this.world.chunkLoader.getStats();
+                const pending = this.world.chunkLoader.getPendingCount();
+                this.loadingOverlay.setProgress(stats.withMeshes, stats.withMeshes + pending);
+            }
         }
         
         this.fpsCounter.update();
         
+    //     // ... rest of animate
+        
+    //     this.renderer.render(this.scene, this.camera);
+    // }
+    // animate() {
+    //     requestAnimationFrame(() => this.animate());
+        
+    //     // Calculate actual time elapsed since last frame
+    //     const now = performance.now();
+    //     const elapsed = (now - this.lastFrameTime) / 1000; // Convert ms to seconds
+    //     this.lastFrameTime = now;
+        
+    //     // Add elapsed time to accumulator
+    //     this.accumulator += elapsed;
+        
+    //     // Cap accumulator to prevent spiral of death at very low frame rates
+    //     if (this.accumulator > this.maxAccumulator) {
+    //         this.accumulator = this.maxAccumulator;
+    //     }
+        
+    //     // Run fixed timestep updates until we've caught up with real time
+    //     let stepsThisFrame = 0;
+    //     while (this.accumulator >= this.fixedTimestep) {
+    //         this.update(this.fixedTimestep); // Always 0.0167s
+    //         this.accumulator -= this.fixedTimestep;
+    //         // stepsThisFrame++;
+    //         // this.simStepsThisSecond++;
+    //         // this.simStepsTotal++;
+    //     }
+        
+    //     this.fpsCounter.update();
+        
         // Only update performance monitor if visible (saves CPU on mobile)
         if (this.showPerformanceMonitor) {
             const gameStats = {
-                deltaTime: this.fixedTimestep, // Always fixed
+                deltaTime: this.fixedTimestep,
                 chunks: this.world ? this.world.chunkLoader.loadedChunks.size : 0,
-                pendingChunks: this.world ? this.world.chunkLoader.pendingChunks.length : 0,
+                pendingChunks: this.world ? this.world.chunkLoader.getPendingCount() : 0,
+                workerStats: this.world ? this.world.getWorkerStats() : null,
                 mobs: this.mobSpawner ? this.mobSpawner.mobs.length : 0,
                 entities: this.entities.length,
                 arrows: this.arrows.length
