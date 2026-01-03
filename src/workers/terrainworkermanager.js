@@ -279,8 +279,7 @@ export class TerrainWorkerManager {
             data: {
                 chunkX: request.chunkX,
                 chunkZ: request.chunkZ,
-                destroyedBlocks: request.context.destroyedBlocks || [],
-                landmarkBlocks: request.context.landmarkBlocks || []
+                destroyedBlocks: request.context.destroyedBlocks || []
             }
         });
     }

@@ -1,23 +1,24 @@
 /**
  * TerrainWorker - Web Worker for background chunk generation
  * 
- * This worker imports the SAME chunk generation code as the main thread.
- * It only handles:
- * - Receiving chunk requests
- * - Calling the shared generateChunkData function
- * - Sending results back with transferable arrays
+ * This worker is the SINGLE SOURCE OF TRUTH for all terrain data.
+ * It generates:
+ * - Terrain heightmap and blocks
+ * - Landmark structures (temples, ruins, etc.)
+ * - Mesh geometry
+ * - Block data for collision
  * 
- * The terrain logic (noise, biomes, blocks) must be provided by the main thread
- * OR duplicated here. We duplicate the TerrainGenerator logic since it's pure math.
+ * The main thread receives and caches data but does NOT generate terrain.
  */
 
 import { generateChunkData, getTransferables, CHUNK_SIZE, WATER_LEVEL } from '../world/terrain/chunkdatagenerator.js';
+import { BIOMES } from '../world/terrain/biomesystem.js';
+import { WorkerLandmarkSystem } from '../world/landmarks/workerlandmarksystem.js';
 
 // ============================================================================
-// TERRAIN GENERATOR (duplicated - pure math, no dependencies)
+// NOISE FUNCTIONS (pure math, no dependencies)
 // ============================================================================
 
-// Noise functions
 function hash(x, z, seed = 12345) {
     let h = seed + x * 374761393 + z * 668265263;
     h = (h ^ (h >> 13)) * 1274126177;
@@ -49,45 +50,42 @@ function octaveNoise2D(x, z, octaves = 4, baseFreq = 0.05, hashFn = hash) {
     let frequency = baseFreq;
     let amplitude = 1;
     let maxValue = 0;
+
     for (let i = 0; i < octaves; i++) {
         total += noise2D(x * frequency, z * frequency, hashFn) * amplitude;
         maxValue += amplitude;
         amplitude *= 0.5;
         frequency *= 2;
     }
+
     return total / maxValue;
 }
 
-// Biome definitions
-const BIOMES = {
-    ocean: { baseHeight: 3, heightScale: 2, surface: 'sand', subsurface: 'sand', underwater: 'sand' },
-    plains: { baseHeight: 8, heightScale: 6, surface: 'grass', subsurface: 'dirt', underwater: 'sand' },
-    desert: { baseHeight: 7, heightScale: 4, surface: 'sand', subsurface: 'sand', underwater: 'sand' },
-    snow: { baseHeight: 9, heightScale: 5, surface: 'snow', subsurface: 'dirt', underwater: 'sand' },
-    mountains: { baseHeight: 18, heightScale: 20, surface: 'stone', subsurface: 'stone', underwater: 'sand' },
-    jungle: { baseHeight: 10, heightScale: 8, surface: 'grass', subsurface: 'dirt', underwater: 'sand' }
-};
+// ============================================================================
+// WORKER TERRAIN PROVIDER
+// ============================================================================
 
-/**
- * Worker-side terrain provider
- * Implements getHeight() and getBlockType() matching main thread's TerrainGenerator
- */
 class WorkerTerrainProvider {
     constructor(seed) {
         this.seed = seed;
+        this.heightCache = new Map();
+        this.biomeCache = new Map();
         this.destroyedBlocks = new Set();
-        this.landmarkBlocks = new Map();
+        
+        // Landmark system - generates landmarks internally
+        this.landmarkSystem = new WorkerLandmarkSystem(this, seed);
     }
 
     setDestroyedBlocks(blocks) {
         this.destroyedBlocks = new Set(blocks);
     }
 
-    setLandmarkBlocks(blocks) {
-        this.landmarkBlocks = new Map(blocks);
-    }
-
     getBiome(x, z) {
+        const key = `${x},${z}`;
+        if (this.biomeCache.has(key)) {
+            return this.biomeCache.get(key);
+        }
+
         const biomeNoise = octaveNoise2D(x, z, 4, 0.05, hash);
         const tempNoise = octaveNoise2D(x, z, 4, 0.06, hash2);
         const humidityNoise = octaveNoise2D(x, z, 3, 0.04, (x, z) => hash(x, z, 77777));
@@ -96,64 +94,104 @@ class WorkerTerrainProvider {
         const remappedTemp = Math.max(0, Math.min(1, (tempNoise - 0.08) / 0.37));
         const remappedHumidity = Math.max(0, Math.min(1, (humidityNoise - 0.08) / 0.37));
 
-        if (remappedNoise < 0.15) return 'ocean';
-        if (remappedNoise < 0.35) {
-            if (remappedHumidity > 0.65 && remappedTemp > 0.4) return 'jungle';
-            if (remappedTemp > 0.5) return 'desert';
-            return 'plains';
+        let biome;
+        if (remappedNoise < 0.15) {
+            biome = 'ocean';
+        } else if (remappedNoise < 0.35) {
+            if (remappedHumidity > 0.65 && remappedTemp > 0.4) {
+                biome = 'jungle';
+            } else if (remappedTemp > 0.5) {
+                biome = 'desert';
+            } else {
+                biome = 'plains';
+            }
+        } else if (remappedNoise < 0.70) {
+            if (remappedHumidity > 0.7 && remappedTemp > 0.45) {
+                biome = 'jungle';
+            } else if (remappedTemp > 0.55) {
+                biome = 'desert';
+            } else if (remappedTemp < 0.35) {
+                biome = 'snow';
+            } else {
+                biome = 'plains';
+            }
+        } else if (remappedNoise < 0.85) {
+            biome = remappedTemp < 0.3 ? 'snow' : 'mountains';
+        } else {
+            biome = remappedTemp < 0.25 ? 'snow' : 'mountains';
         }
-        if (remappedNoise < 0.70) {
-            if (remappedHumidity > 0.7 && remappedTemp > 0.45) return 'jungle';
-            if (remappedTemp > 0.55) return 'desert';
-            if (remappedTemp < 0.35) return 'snow';
-            return 'plains';
-        }
-        if (remappedNoise < 0.85) return remappedTemp < 0.3 ? 'snow' : 'mountains';
-        return 'mountains';
-    }
 
-    isRiver(x, z) {
-        const riverNoise = octaveNoise2D(x, z, 3, 0.02, hash2);
-        return Math.abs(riverNoise - 0.5) < 0.03;
-    }
-
-    isLake(x, z) {
-        const lakeNoise = octaveNoise2D(x, z, 2, 0.04, hash2);
-        return lakeNoise < 0.2;
+        this.biomeCache.set(key, biome);
+        return biome;
     }
 
     getHeight(x, z) {
+        const key = `${x},${z}`;
+        if (this.heightCache.has(key)) {
+            return this.heightCache.get(key);
+        }
+
         const biome = this.getBiome(x, z);
         const biomeData = BIOMES[biome];
-        const terrainNoise = octaveNoise2D(x, z, 5, 0.03);
-        let height = biomeData.baseHeight + terrainNoise * biomeData.heightScale;
+        const heightNoise = octaveNoise2D(x, z, 5, 0.03);
+        let height = biomeData.baseHeight + heightNoise * biomeData.heightScale;
 
+        // Add mountain peaks in mountain biome (match main thread)
         if (biome === 'mountains') {
             const peakNoise = octaveNoise2D(x, z, 3, 0.06);
-            if (peakNoise > 0.5) height += (peakNoise - 0.5) * 30;
+            if (peakNoise > 0.5) {
+                height += (peakNoise - 0.5) * 30;
+            }
         }
+        
+        // Jungle has more varied terrain with hills (match main thread)
         if (biome === 'jungle') {
             const jungleHillNoise = octaveNoise2D(x, z, 4, 0.08);
             height += jungleHillNoise * 4;
         }
+        
+        // Carve rivers (match main thread)
         if (biome !== 'ocean' && biome !== 'desert' && this.isRiver(x, z)) {
             height = Math.min(height, WATER_LEVEL - 1);
         }
+        
+        // Carve lakes (match main thread)
         if ((biome === 'plains' || biome === 'snow') && this.isLake(x, z)) {
             height = Math.min(height, WATER_LEVEL - 2);
         }
 
+        if (biome === 'ocean') {
+            height = Math.min(height, WATER_LEVEL - 2);
+        }
+
         height = this.smoothBiomeTransition(x, z, height);
-        return Math.floor(Math.max(1, height));
+
+        const finalHeight = Math.floor(Math.max(1, height));
+        this.heightCache.set(key, finalHeight);
+        return finalHeight;
+    }
+    
+    // River detection (match main thread)
+    isRiver(x, z) {
+        const riverNoise = octaveNoise2D(x, z, 2, 0.008, (x, z) => hash(x, z, 55555));
+        return Math.abs(riverNoise - 0.5) < 0.02;
+    }
+    
+    // Lake detection (match main thread)
+    isLake(x, z) {
+        const lakeNoise = octaveNoise2D(x, z, 2, 0.02, (x, z) => hash(x, z, 66666));
+        return lakeNoise > 0.65;
     }
 
     smoothBiomeTransition(x, z, height) {
         const radius = 3;
         let totalHeight = height;
         let count = 1;
+
         for (let dx = -radius; dx <= radius; dx += radius) {
             for (let dz = -radius; dz <= radius; dz += radius) {
                 if (dx === 0 && dz === 0) continue;
+
                 const neighborBiome = this.getBiome(x + dx, z + dz);
                 const neighborData = BIOMES[neighborBiome];
                 const neighborNoise = octaveNoise2D(x + dx, z + dz, 5, 0.03);
@@ -169,10 +207,10 @@ class WorkerTerrainProvider {
         // Check destroyed blocks
         if (this.destroyedBlocks.has(`${x},${y},${z}`)) return null;
 
-        // Check landmark blocks
-        const landmarkKey = `${x},${y},${z}`;
-        if (this.landmarkBlocks.has(landmarkKey)) {
-            return this.landmarkBlocks.get(landmarkKey);
+        // Check landmark blocks FIRST (pyramids, ruins, etc.)
+        const landmarkBlock = this.landmarkSystem.getLandmarkBlockType(x, y, z);
+        if (landmarkBlock) {
+            return landmarkBlock;
         }
 
         const height = this.getHeight(x, z);
@@ -206,6 +244,13 @@ class WorkerTerrainProvider {
         // Deep underground
         return 'stone';
     }
+    
+    /**
+     * Ensure landmarks are generated for a chunk before mesh generation
+     */
+    prepareLandmarksForChunk(chunkX, chunkZ) {
+        this.landmarkSystem.ensureLandmarksForChunk(chunkX, chunkZ);
+    }
 }
 
 // ============================================================================
@@ -234,17 +279,23 @@ self.onmessage = function(e) {
                 return;
             }
 
-            // Update state if provided
+            // Update destroyed blocks if provided
             if (data.destroyedBlocks) {
                 terrainProvider.setDestroyedBlocks(data.destroyedBlocks);
             }
-            if (data.landmarkBlocks) {
-                terrainProvider.setLandmarkBlocks(data.landmarkBlocks);
+
+            // Ensure landmarks are generated for this chunk
+            terrainProvider.prepareLandmarksForChunk(data.chunkX, data.chunkZ);
+            
+            // Debug: Log landmark info for this chunk
+            const landmarkCount = terrainProvider.landmarkSystem.getLandmarksForChunk(data.chunkX, data.chunkZ).length;
+            if (landmarkCount > 0) {
+                console.log(`[WORKER] Chunk ${data.chunkX},${data.chunkZ} has ${landmarkCount} landmarks`);
             }
 
             const startTime = performance.now();
             
-            // Use the SHARED generation function
+            // Generate mesh and block data
             const chunkData = generateChunkData(terrainProvider, data.chunkX, data.chunkZ);
             
             const genTime = performance.now() - startTime;
@@ -264,12 +315,6 @@ self.onmessage = function(e) {
         case 'updateDestroyedBlocks':
             if (terrainProvider) {
                 terrainProvider.setDestroyedBlocks(data.blocks);
-            }
-            break;
-
-        case 'updateLandmarkBlocks':
-            if (terrainProvider) {
-                terrainProvider.setLandmarkBlocks(data.blocks);
             }
             break;
 

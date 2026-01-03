@@ -1,6 +1,9 @@
 /**
  * Landmark Definitions - Procedural generation functions for each landmark type
  * 
+ * This module is used by the web worker and must be pure functions with no
+ * external dependencies (no Three.js, no DOM, etc.)
+ * 
  * Each landmark type has:
  * - Configuration (size, materials, spawn rules)
  * - Generator function (creates blocks, chambers, metadata)
@@ -12,8 +15,8 @@
 export const LANDMARK_TYPES = {
     mayanTemple: {
         name: 'Mayan Temple',
-        biomes: ['jungle', 'plains', 'mountains'],  // plains for testing
-        rarity: 0.5,  // High for testing
+        biomes: ['jungle', 'plains', 'mountains'],
+        rarity: 0.5,
         minHeight: 8,
         maxHeight: 25,
         baseSize: 17,
@@ -22,7 +25,7 @@ export const LANDMARK_TYPES = {
         chamberSize: 5,
         stairWidth: 3,
         blockType: 'mayan_stone',
-        stairBlockType: 'stone',  // Different texture for steep stairs
+        stairBlockType: 'stone',
         generator: generateMayanTemple
     }
 };
@@ -54,117 +57,91 @@ const DIRECTION_VECTORS = {
 };
 
 /**
+ * Generate a landmark structure
+ */
+export function generateLandmarkStructure(typeName, config, centerX, baseY, centerZ, hashFn, gridX, gridZ, entranceDirection) {
+    if (config.generator) {
+        return config.generator(config, centerX, baseY, centerZ, hashFn, gridX, gridZ, entranceDirection);
+    }
+    return null;
+}
+
+/**
  * Generate a Mayan stepped pyramid with interior chamber and single entrance
- * 
- * Structure:
- * - 4-tier stepped pyramid (solid, no external stairs)
- * - Single entrance on one side (random direction) leading to chamber
- * - Steep stairs (2-block steps) on other three sides, using stone texture
- * - Central chamber with altar and corner pillars
- * - Solid roof
- * 
- * @returns {Object} Landmark data
  */
 function generateMayanTemple(config, centerX, baseY, centerZ, hashFn, gridX, gridZ, entranceDirection = '+Z') {
     const blocks = new Map();
     const chambers = [];
     
     const { baseSize, tiers, tierHeight, chamberSize, blockType, stairBlockType } = config;
-    
-    // Calculate tier dimensions
-    const tierShrink = Math.floor((baseSize - 5) / tiers);
+    const tierShrink = 2;
     const halfBase = Math.floor(baseSize / 2);
-    
-    // Chamber position (centered, starting at ground level)
-    const chamberY = baseY;
     const halfChamber = Math.floor(chamberSize / 2);
-    const chamberHeight = chamberSize + 2; // Chamber height including ceiling clearance
     
-    const chamber = {
-        minX: centerX - halfChamber,
-        maxX: centerX + halfChamber + 1,
-        minY: chamberY,
-        maxY: chamberY + chamberHeight,
-        minZ: centerZ - halfChamber,
-        maxZ: centerZ + halfChamber + 1
-    };
-    chambers.push(chamber);
-    
-    // Entrance tunnel parameters - tall enough for mounted hero
-    const entranceWidth = 3;
-    const entranceHeight = 5;  // Increased from 3/4 to 5 for mounted hero
-    const halfEntrance = Math.floor(entranceWidth / 2);
-    
-    // Get entrance direction vector
     const dir = DIRECTION_VECTORS[entranceDirection];
+    const topY = baseY + tiers * tierHeight;
+    const chamberY = baseY + 1;
+    const chamberHeight = tierHeight * 2;
+    const entranceHeight = 3;
+    const halfEntrance = 1;
     
-    // Calculate entrance tunnel bounds based on direction
-    const entrance = calculateEntranceBounds(
-        centerX, centerZ, chamberY, halfChamber, halfBase,
-        halfEntrance, entranceHeight, dir
-    );
-    
-    // Generate each tier (solid stepped pyramid)
+    // Generate solid tiers
     for (let tier = 0; tier < tiers; tier++) {
-        const tierWidth = baseSize - tier * tierShrink;
-        const halfWidth = Math.floor(tierWidth / 2);
-        const tierBaseY = baseY + tier * tierHeight;
+        const tierY = baseY + tier * tierHeight;
+        const shrink = tier * tierShrink;
+        const halfSize = halfBase - Math.floor(shrink / 2);
         
-        // Generate solid blocks for this tier
-        for (let dy = 0; dy < tierHeight; dy++) {
-            const y = tierBaseY + dy;
-            
-            for (let dx = -halfWidth; dx <= halfWidth; dx++) {
-                for (let dz = -halfWidth; dz <= halfWidth; dz++) {
-                    const x = centerX + dx;
-                    const z = centerZ + dz;
-                    
-                    // Skip if inside chamber
-                    if (isInsideVolume(x, y, z, chamber)) {
-                        continue;
-                    }
-                    
-                    // Skip if inside entrance tunnel
-                    if (isInsideVolume(x, y, z, entrance)) {
-                        continue;
-                    }
-                    
+        for (let y = tierY; y < tierY + tierHeight; y++) {
+            for (let x = centerX - halfSize; x <= centerX + halfSize; x++) {
+                for (let z = centerZ - halfSize; z <= centerZ + halfSize; z++) {
                     blocks.set(`${x},${y},${z}`, blockType);
                 }
             }
         }
     }
     
-    // Top platform (solid roof)
-    const topY = baseY + tiers * tierHeight;
-    const topWidth = baseSize - tiers * tierShrink;
-    const halfTop = Math.floor(topWidth / 2);
-    
-    for (let dx = -halfTop; dx <= halfTop; dx++) {
-        for (let dz = -halfTop; dz <= halfTop; dz++) {
-            const x = centerX + dx;
-            const z = centerZ + dz;
-            blocks.set(`${x},${topY},${z}`, blockType);
+    // Carve interior chamber
+    for (let y = chamberY; y < chamberY + chamberHeight; y++) {
+        for (let x = centerX - halfChamber; x <= centerX + halfChamber; x++) {
+            for (let z = centerZ - halfChamber; z <= centerZ + halfChamber; z++) {
+                blocks.delete(`${x},${y},${z}`);
+            }
         }
     }
     
-    // Generate steep stairs on non-entrance sides (using stone texture)
-    generateSteepStairs(blocks, centerX, centerZ, baseY, baseSize, tiers, tierHeight, tierShrink, stairBlockType || 'stone', entranceDirection);
+    // Add chamber to list
+    chambers.push({
+        minX: centerX - halfChamber,
+        maxX: centerX + halfChamber + 1,
+        minY: chamberY,
+        maxY: chamberY + chamberHeight,
+        minZ: centerZ - halfChamber,
+        maxZ: centerZ + halfChamber + 1
+    });
     
-    // Shrine platform in center of chamber (altar)
+    // Carve entrance tunnel
+    const entranceBounds = calculateEntranceBounds(
+        centerX, centerZ, chamberY, halfChamber, halfBase, halfEntrance, entranceHeight, dir
+    );
+    
+    for (let y = entranceBounds.minY; y < entranceBounds.maxY; y++) {
+        for (let x = entranceBounds.minX; x < entranceBounds.maxX; x++) {
+            for (let z = entranceBounds.minZ; z < entranceBounds.maxZ; z++) {
+                blocks.delete(`${x},${y},${z}`);
+            }
+        }
+    }
+    
+    // Add entrance tunnel to chambers
+    chambers.push(entranceBounds);
+    
+    // Shrine altar in center
     const shrineX = centerX;
     const shrineZ = centerZ;
-    
-    // Small 3x3 raised platform
-    for (let dx = -1; dx <= 1; dx++) {
-        for (let dz = -1; dz <= 1; dz++) {
-            blocks.set(`${shrineX + dx},${chamberY},${shrineZ + dz}`, blockType);
-        }
-    }
-    // Center pillar (altar itself)
+    blocks.set(`${shrineX},${chamberY},${shrineZ}`, blockType);
     blocks.set(`${shrineX},${chamberY + 1},${shrineZ}`, blockType);
     
-    // Corner pillars inside chamber
+    // Corner pillars (skip if blocking entrance)
     const pillarInset = halfChamber - 1;
     const pillarPositions = [
         [centerX - pillarInset, centerZ - pillarInset],
@@ -174,7 +151,6 @@ function generateMayanTemple(config, centerX, baseY, centerZ, hashFn, gridX, gri
     ];
     
     for (const [px, pz] of pillarPositions) {
-        // Skip pillars that would block entrance
         if (wouldBlockEntrance(px, pz, centerX, centerZ, halfEntrance, dir)) {
             continue;
         }
@@ -184,15 +160,16 @@ function generateMayanTemple(config, centerX, baseY, centerZ, hashFn, gridX, gri
         }
     }
     
-    // Entrance frame (decorative archway at tunnel exit) - uses stone like stairs
+    // Entrance frame
     generateEntranceFrame(blocks, centerX, centerZ, chamberY, halfBase, halfEntrance, entranceHeight, stairBlockType || 'stone', dir);
     
-    console.log(`Mayan temple at (${centerX}, ${baseY}, ${centerZ}): ${blocks.size} blocks, entrance: ${entranceDirection}`);
+    // Steep stairs on non-entrance sides
+    generateSteepStairs(blocks, centerX, centerZ, baseY, baseSize, tiers, tierHeight, tierShrink, stairBlockType, entranceDirection);
     
-    // Calculate overall bounds (with margin for entrance and stairs)
+    // Calculate bounds
     const bounds = calculateBounds(centerX, centerZ, baseY, topY, halfBase, dir);
     
-    // Mob spawn points around the temple base
+    // Mob spawn points
     const spawnOffset = halfBase + 5;
     const mobSpawnPoints = [
         { x: centerX + spawnOffset, y: baseY, z: centerZ },
@@ -218,12 +195,8 @@ function generateMayanTemple(config, centerX, baseY, centerZ, hashFn, gridX, gri
     };
 }
 
-/**
- * Calculate entrance tunnel bounds based on direction
- */
 function calculateEntranceBounds(centerX, centerZ, chamberY, halfChamber, halfBase, halfEntrance, entranceHeight, dir) {
     if (dir.dx !== 0) {
-        // East (+X) or West (-X) entrance
         const startX = dir.dx > 0 ? centerX + halfChamber : centerX - halfBase - 1;
         const endX = dir.dx > 0 ? centerX + halfBase + 2 : centerX - halfChamber + 1;
         return {
@@ -235,7 +208,6 @@ function calculateEntranceBounds(centerX, centerZ, chamberY, halfChamber, halfBa
             maxZ: centerZ + halfEntrance + 1
         };
     } else {
-        // South (+Z) or North (-Z) entrance
         const startZ = dir.dz > 0 ? centerZ + halfChamber : centerZ - halfBase - 1;
         const endZ = dir.dz > 0 ? centerZ + halfBase + 2 : centerZ - halfChamber + 1;
         return {
@@ -249,9 +221,6 @@ function calculateEntranceBounds(centerX, centerZ, chamberY, halfChamber, halfBa
     }
 }
 
-/**
- * Check if a pillar position would block the entrance
- */
 function wouldBlockEntrance(px, pz, centerX, centerZ, halfEntrance, dir) {
     if (dir.dx > 0 && px > centerX && Math.abs(pz - centerZ) <= halfEntrance) return true;
     if (dir.dx < 0 && px < centerX && Math.abs(pz - centerZ) <= halfEntrance) return true;
@@ -260,57 +229,42 @@ function wouldBlockEntrance(px, pz, centerX, centerZ, halfEntrance, dir) {
     return false;
 }
 
-/**
- * Generate decorative entrance frame/archway
- */
 function generateEntranceFrame(blocks, centerX, centerZ, chamberY, halfBase, halfEntrance, entranceHeight, blockType, dir) {
-    // Position at pyramid edge in entrance direction
     const offset = halfBase + 1;
     
     if (dir.dz !== 0) {
-        // North/South entrance
         const entranceZ = centerZ + dir.dz * offset;
         
         for (let dx = -halfEntrance - 1; dx <= halfEntrance + 1; dx++) {
             const x = centerX + dx;
-            // Side pillars
             if (Math.abs(dx) === halfEntrance + 1) {
                 for (let dy = 0; dy < entranceHeight + 1; dy++) {
                     blocks.set(`${x},${chamberY + dy},${entranceZ}`, blockType);
                 }
             }
-            // Top lintel
             blocks.set(`${x},${chamberY + entranceHeight},${entranceZ}`, blockType);
         }
     } else {
-        // East/West entrance
         const entranceX = centerX + dir.dx * offset;
         
         for (let dz = -halfEntrance - 1; dz <= halfEntrance + 1; dz++) {
             const z = centerZ + dz;
-            // Side pillars
             if (Math.abs(dz) === halfEntrance + 1) {
                 for (let dy = 0; dy < entranceHeight + 1; dy++) {
                     blocks.set(`${entranceX},${chamberY + dy},${z}`, blockType);
                 }
             }
-            // Top lintel
             blocks.set(`${entranceX},${chamberY + entranceHeight},${z}`, blockType);
         }
     }
 }
 
-/**
- * Generate steep stairs (2-block steps) on non-entrance sides
- * Stairs protrude OUTSIDE the pyramid footprint
- */
 function generateSteepStairs(blocks, centerX, centerZ, baseY, baseSize, tiers, tierHeight, tierShrink, stairBlockType, entranceDirection) {
     const stairWidth = 3;
     const halfStair = Math.floor(stairWidth / 2);
     const halfBase = Math.floor(baseSize / 2);
     const totalHeight = tiers * tierHeight;
     
-    // All four cardinal directions
     const allDirections = [
         { name: '+X', dx: 1, dz: 0 },
         { name: '-X', dx: -1, dz: 0 },
@@ -318,47 +272,33 @@ function generateSteepStairs(blocks, centerX, centerZ, baseY, baseSize, tiers, t
         { name: '-Z', dx: 0, dz: -1 }
     ];
     
-    // Generate stairs on non-entrance sides
     for (const stairDir of allDirections) {
         if (stairDir.name === entranceDirection) {
-            continue;  // Skip entrance side - it has the tunnel
+            continue;
         }
         
-        // Stairs protrude 1-2 blocks outside the pyramid base
-        // Each step: 1 block horizontal, 2 blocks vertical rise
-        // Stairs go from ground level up to near the top
-        
-        const numSteps = Math.ceil(totalHeight / 2);  // 2-block rise per step
+        const numSteps = Math.ceil(totalHeight / 2);
         
         for (let step = 0; step < numSteps; step++) {
-            const stepY = baseY + step * 2;  // Each step rises 2 blocks
-            
-            // Stairs stick out from pyramid edge
-            // Step 0 is at halfBase + 1 (just outside base)
-            // Higher steps are closer to pyramid (step inward as you climb)
+            const stepY = baseY + step * 2;
             const distFromCenter = halfBase + 1 - step;
-            
-            // Stop if we've gone past the top tier edge
             const topHalfSize = Math.floor((baseSize - tiers * tierShrink) / 2);
+            
             if (distFromCenter < topHalfSize) {
                 break;
             }
             
-            // Place stair blocks across the width
             for (let w = -halfStair; w <= halfStair; w++) {
                 let x, z;
                 
                 if (stairDir.dx !== 0) {
-                    // East-West stairs
                     x = centerX + stairDir.dx * distFromCenter;
                     z = centerZ + w;
                 } else {
-                    // North-South stairs
                     x = centerX + w;
                     z = centerZ + stairDir.dz * distFromCenter;
                 }
                 
-                // Place two blocks vertically for the steep step
                 blocks.set(`${x},${stepY},${z}`, stairBlockType);
                 if (stepY + 1 < baseY + totalHeight) {
                     blocks.set(`${x},${stepY + 1},${z}`, stairBlockType);
@@ -366,7 +306,7 @@ function generateSteepStairs(blocks, centerX, centerZ, baseY, baseSize, tiers, t
             }
         }
         
-        // Add landing/approach at ground level extending further outward
+        // Ground-level landing
         for (let ext = 2; ext <= 3; ext++) {
             for (let w = -halfStair; w <= halfStair; w++) {
                 let x, z;
@@ -385,52 +325,14 @@ function generateSteepStairs(blocks, centerX, centerZ, baseY, baseSize, tiers, t
     }
 }
 
-/**
- * Calculate overall bounds with margin for entrance and stairs
- */
 function calculateBounds(centerX, centerZ, baseY, topY, halfBase, dir) {
-    // Base bounds include stair protrusions on all sides
-    const stairProtrusion = 3;
-    const bounds = {
-        minX: centerX - halfBase - stairProtrusion,
-        maxX: centerX + halfBase + stairProtrusion,
+    const stairExtension = 3;
+    return {
+        minX: centerX - halfBase - stairExtension,
+        maxX: centerX + halfBase + stairExtension,
         minY: baseY,
-        maxY: topY + 1,
-        minZ: centerZ - halfBase - stairProtrusion,
-        maxZ: centerZ + halfBase + stairProtrusion
+        maxY: topY,
+        minZ: centerZ - halfBase - stairExtension,
+        maxZ: centerZ + halfBase + stairExtension
     };
-    
-    return bounds;
-}
-
-/**
- * Check if a position is inside a volume
- */
-function isInsideVolume(x, y, z, volume) {
-    return x >= volume.minX && x < volume.maxX &&
-           y >= volume.minY && y < volume.maxY &&
-           z >= volume.minZ && z < volume.maxZ;
-}
-
-/**
- * Generate a landmark structure by type
- * Main entry point called by LandmarkSystem
- * 
- * @param {string} type - Landmark type name
- * @param {Object} config - Landmark configuration
- * @param {number} centerX - World X center
- * @param {number} baseY - Base Y (terrain height)
- * @param {number} centerZ - World Z center
- * @param {function} hashFn - Hash function for deterministic randomness
- * @param {number} gridX - Grid cell X (for variation)
- * @param {number} gridZ - Grid cell Z (for variation)
- * @param {string} entranceDirection - Cardinal direction for entrance (+X, -X, +Z, -Z)
- * @returns {Object} Generated landmark data
- */
-export function generateLandmarkStructure(type, config, centerX, baseY, centerZ, hashFn, gridX, gridZ, entranceDirection) {
-    if (!config || !config.generator) {
-        console.error(`Unknown landmark type: ${type}`);
-        return null;
-    }
-    return config.generator(config, centerX, baseY, centerZ, hashFn, gridX, gridZ, entranceDirection);
 }

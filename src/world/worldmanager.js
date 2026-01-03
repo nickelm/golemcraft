@@ -2,17 +2,21 @@
  * WorldManager - High-level coordinator for all world systems
  * 
  * Architecture:
- * - Web worker generates ALL terrain data (mesh + block data)
+ * - Web worker generates ALL terrain data (mesh + block data + landmarks)
  * - Main thread receives and stores block data in ChunkBlockCache
  * - Collision queries the cache - NO terrain regeneration on main thread
  * - Worker is the SINGLE SOURCE OF TRUTH
  * 
  * Manages:
  * - Chunk loading/unloading with worker
- * - Object placement (trees, rocks)
- * - Landmark generation (temples, ruins) - TODO: move to worker
+ * - Object placement (trees, rocks) - uses local TerrainGenerator for now
  * - Block modifications (craters, destruction)
  * - World persistence
+ * 
+ * Note: TerrainGenerator and LandmarkSystem are kept on main thread ONLY for:
+ * - Object exclusion zones (don't spawn trees inside temples)
+ * - Object height placement
+ * TODO: Move object spawning to worker to eliminate main thread terrain entirely
  */
 
 import * as THREE from 'three';
@@ -36,22 +40,25 @@ export class WorldManager {
 
         console.log(`Creating world: seed=${seed}, id=${worldId}`);
 
-        // Create terrain generator (still needed for object placement until moved to worker)
-        // TODO: Remove once object spawning moves to worker
+        // Create terrain generator (kept for object placement - uses height data)
+        // Note: Worker is the source of truth for collision, but objects still need
+        // height queries during placement and landmark exclusion zones
         this.terrain = new TerrainGenerator(seed);
 
-        // Create landmark system (procedural POIs like temples)
-        // TODO: Move to worker
+        // Create landmark system (kept ONLY for object exclusion zones)
+        // The worker has its own LandmarkSystem for actual block generation
         this.landmarkSystem = new LandmarkSystem(this.terrain, seed);
 
-        // Connect landmark system to terrain generator
+        // Connect landmark system to terrain generator (for object height queries)
         this.terrain.setLandmarkSystem(this.landmarkSystem);
 
         // Create chunked terrain renderer
         this.chunkedTerrain = new ChunkedTerrain(this.scene, this.terrain, terrainTexture);
 
-        // Create object generator (with landmark system for exclusion zones)
-        this.objectGenerator = new ObjectGenerator(this.terrain, seed, this.landmarkSystem);
+        // Create object generator
+        // Pass 'this' (WorldManager) as terrain provider - it has getHeight() and getBiome()
+        // that use the block cache, ensuring trees are at correct height
+        this.objectGenerator = new ObjectGenerator(this, seed, this.landmarkSystem);
 
         // Create chunk loader (no initial sync load)
         this.chunkLoader = new ChunkLoader(
@@ -189,15 +196,35 @@ export class WorldManager {
      * Uses the worker's block cache - SINGLE SOURCE OF TRUTH
      */
     getBlockType(x, y, z) {
+        const fx = Math.floor(x);
+        const fy = Math.floor(y);
+        const fz = Math.floor(z);
+        
         if (this.terrainDataProvider) {
-            return this.terrainDataProvider.getBlockType(
-                Math.floor(x), 
-                Math.floor(y), 
-                Math.floor(z)
-            );
+            const result = this.terrainDataProvider.getBlockType(fx, fy, fz);
+            return result;
         }
         // Fallback - should not happen in normal operation
+        console.warn('[BLOCK] Using fallback terrain!');
         return this.terrain.getBlockType(x, y, z);
+    }
+    
+    /**
+     * Debug: Dump block column at position
+     */
+    debugBlockColumn(x, z) {
+        console.log(`\n=== Block Column at (${x}, ${z}) ===`);
+        const chunkX = Math.floor(x / 16);
+        const chunkZ = Math.floor(z / 16);
+        console.log(`Chunk: (${chunkX}, ${chunkZ})`);
+        console.log(`Has block data: ${this.chunkLoader.workerManager.hasBlockData(chunkX, chunkZ)}`);
+        
+        for (let y = 15; y >= 0; y--) {
+            const block = this.getBlockType(x, y, z);
+            const solid = block !== null && block !== 'water' && block !== 'water_full';
+            console.log(`  Y=${y}: ${block || 'air'} ${solid ? '■' : '·'}`);
+        }
+        console.log('===========================\n');
     }
 
     /**

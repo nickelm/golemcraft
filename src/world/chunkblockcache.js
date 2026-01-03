@@ -43,8 +43,10 @@ export function getBlockTypeId(typeName) {
 
 /**
  * Get block type name from ID
+ * Returns null for air (ID 0) to match expected collision behavior
  */
 export function getBlockTypeName(typeId) {
+    if (typeId === 0) return null;  // Air is null, not 'air' string
     return BLOCK_TYPE_NAMES[typeId] ?? null;
 }
 

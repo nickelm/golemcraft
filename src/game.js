@@ -180,8 +180,10 @@ export class Game {
         });
 
         // Initialize spawners
-        this.itemSpawner = new ItemSpawner(this.scene, this.world.terrain, this.camera);
-        this.mobSpawner = new MobSpawner(this.scene, this.world.terrain);
+        // Pass WorldManager (this.world) instead of TerrainGenerator (this.world.terrain)
+        // so they use block cache heights for correct placement
+        this.itemSpawner = new ItemSpawner(this.scene, this.world, this.camera);
+        this.mobSpawner = new MobSpawner(this.scene, this.world);
 
         // Determine spawn position
         let spawnPos;
@@ -289,6 +291,15 @@ export class Game {
         if (this.input.isKeyPressed(' ')) {
             this.hero.jump(12);
         }
+        // Debug: Press 'b' to dump block column at player position
+        if (this.input.isKeyPressed('b') && !this._debugCooldown) {
+            this._debugCooldown = true;
+            const px = Math.floor(this.hero.position.x);
+            const pz = Math.floor(this.hero.position.z);
+            console.log(`Player at Y=${this.hero.position.y.toFixed(2)}`);
+            this.world.debugBlockColumn(px, pz);
+            setTimeout(() => this._debugCooldown = false, 500);
+        }
     }
 
     update(deltaTime) {
@@ -306,7 +317,8 @@ export class Game {
         
         // Update entities
         this.entities.forEach(entity => {
-            entity.update(deltaTime, this.world.terrain, this.world.objectGenerator);
+            // entity.update(deltaTime, this.world.terrain, this.world.objectGenerator);
+            entity.update(deltaTime, this.world, this.world.objectGenerator);
         });
 
         this.entities = this.entities.filter(e => e.health > 0);
