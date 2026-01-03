@@ -30,7 +30,7 @@ export class InputController {
         
         // Callbacks
         this.onLeftClick = null;     // Called on left-click (not drag)
-        this.onRightDrag = null;     // Called during right-drag with deltaX
+        this.onRightDrag = null;     // Called during right-drag with (deltaX, deltaY)
         
         this.setupEventListeners();
     }
@@ -69,8 +69,9 @@ export class InputController {
             // Handle right-click drag for rotation using pointer lock
             if (this.isRightDragging && document.pointerLockElement) {
                 const deltaX = e.movementX;
+                const deltaY = e.movementY;
                 if (this.onRightDrag) {
-                    this.onRightDrag(deltaX);
+                    this.onRightDrag(deltaX, deltaY);
                 }
             }
         });
@@ -155,7 +156,7 @@ export class InputController {
     
     /**
      * Set callback for right-drag rotation
-     * @param {Function} callback - Called with (deltaX)
+     * @param {Function} callback - Called with (deltaX, deltaY)
      */
     setRightDragCallback(callback) {
         this.onRightDrag = callback;

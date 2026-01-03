@@ -76,7 +76,8 @@ export class Game {
         // Input controller (handles keyboard, mouse, touch events)
         this.input = new InputController(this.renderer, this.camera);
         this.input.setLeftClickCallback(() => this.handleClick());
-        this.input.setRightDragCallback((deltaX) => this.handleRightDrag(deltaX));
+        // this.input.setRightDragCallback((deltaX) => this.handleRightDrag(deltaX));
+        this.input.setRightDragCallback((deltaX, deltaY) => this.handleRightDrag(deltaX, deltaY));
         
         // For compatibility with TouchControls
         this.keys = this.input.keys;
@@ -212,7 +213,26 @@ export class Game {
         }
     }
     
-    handleRightDrag(deltaX) {
+    // handleRightDrag(deltaX) {
+    //     const rotationSpeed = 0.002;
+    //     this.hero.rotation -= deltaX * rotationSpeed;
+        
+    //     // In orbit mode, rotate camera around hero
+    //     if (this.cameraController && this.cameraController.mode === 'orbit') {
+    //         const angle = deltaX * rotationSpeed;
+    //         const heroPos = this.hero.position;
+            
+    //         // Rotate camera position around hero
+    //         const dx = this.camera.position.x - heroPos.x;
+    //         const dz = this.camera.position.z - heroPos.z;
+    //         const cos = Math.cos(angle);
+    //         const sin = Math.sin(angle);
+            
+    //         this.camera.position.x = heroPos.x + (dx * cos - dz * sin);
+    //         this.camera.position.z = heroPos.z + (dx * sin + dz * cos);
+    //     }
+    // }
+    handleRightDrag(deltaX, deltaY) {
         const rotationSpeed = 0.002;
         this.hero.rotation -= deltaX * rotationSpeed;
         
@@ -230,7 +250,12 @@ export class Game {
             this.camera.position.x = heroPos.x + (dx * cos - dz * sin);
             this.camera.position.z = heroPos.z + (dx * sin + dz * cos);
         }
-    }
+        
+        // Handle vertical look for first-person mode
+        if (this.cameraController) {
+            this.cameraController.handleLook(deltaX, deltaY);
+        }
+    } 
 
     handleInput(deltaTime) {
         if (this.input.isKeyPressed('a')) {
@@ -449,7 +474,10 @@ export class Game {
         );
         this.gameTime = timeOfDay;  // For saving
         
-        this.controls.update();
+        if (!this.cameraController || this.cameraController.mode !== 'first-person') {
+            this.controls.update();
+        }
+        // this.controls.update();
         this.updateUI();
     }
 

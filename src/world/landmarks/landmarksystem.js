@@ -42,6 +42,45 @@ export class LandmarkSystem {
     }
     
     /**
+     * Get minimum terrain height across a footprint
+     * This ensures the landmark base extends down to meet the lowest ground point
+     * 
+     * @param {number} centerX - Center X position
+     * @param {number} centerZ - Center Z position
+     * @param {number} halfSize - Half the footprint size
+     * @returns {number} Minimum terrain height within the footprint
+     */
+    getMinHeightInFootprint(centerX, centerZ, halfSize) {
+        let minHeight = Infinity;
+        
+        // Sample corners and edges of the footprint
+        // Don't need every block - corners and midpoints catch most slopes
+        const sampleOffsets = [
+            // Corners
+            [-halfSize, -halfSize],
+            [halfSize, -halfSize],
+            [-halfSize, halfSize],
+            [halfSize, halfSize],
+            // Edge midpoints
+            [0, -halfSize],
+            [0, halfSize],
+            [-halfSize, 0],
+            [halfSize, 0],
+            // Center
+            [0, 0]
+        ];
+        
+        for (const [dx, dz] of sampleOffsets) {
+            const h = this.terrain.getHeight(centerX + dx, centerZ + dz);
+            if (h < minHeight) {
+                minHeight = h;
+            }
+        }
+        
+        return minHeight;
+    }
+    
+    /**
      * Get or generate landmark for a grid cell
      * @param {number} gridX - Grid cell X
      * @param {number} gridZ - Grid cell Z
@@ -90,14 +129,24 @@ export class LandmarkSystem {
         const typeIndex = Math.floor(this.hash(gridX, gridZ, 33333) * validTypes.length);
         const [typeName, typeConfig] = validTypes[typeIndex];
         
-        // Get terrain height at landmark center
-        const baseY = this.terrain.getHeight(worldX, worldZ);
+        // Calculate footprint half-size from config
+        const halfSize = Math.floor(typeConfig.baseSize / 2);
+        
+        // Get MINIMUM terrain height across entire footprint
+        // This ensures the base extends down to meet the lowest ground point
+        const baseY = this.getMinHeightInFootprint(worldX, worldZ, halfSize);
         
         // Don't place landmarks underwater or too high
         if (baseY < 8 || baseY > 35) {
             this.landmarkCache.set(key, null);
             return null;
         }
+        
+        // Determine entrance direction (random cardinal)
+        // Use a simple but effective approach: combine world coordinates
+        const directions = ['+X', '-X', '+Z', '-Z'];
+        const dirIndex = Math.abs((worldX * 3 + worldZ * 7 + this.seed) % 4);
+        const entranceDirection = directions[dirIndex];
         
         // Generate the landmark structure
         const landmark = generateLandmarkStructure(
@@ -108,7 +157,8 @@ export class LandmarkSystem {
             worldZ,
             this.hash.bind(this),
             gridX,
-            gridZ
+            gridZ,
+            entranceDirection  // Pass entrance direction to generator
         );
         
         this.landmarkCache.set(key, landmark);
@@ -228,23 +278,9 @@ export class LandmarkSystem {
         const landmarks = this.getLandmarksForChunk(chunkX, chunkZ);
         
         for (const landmark of landmarks) {
-            // Check bounds first (fast rejection)
-            if (x < landmark.bounds.minX || x > landmark.bounds.maxX ||
-                y < landmark.bounds.minY || y > landmark.bounds.maxY ||
-                z < landmark.bounds.minZ || z > landmark.bounds.maxZ) {
-                continue;
-            }
-            
-            // Check block map
-            const blockKey = `${x},${y},${z}`;
-            if (landmark.blocks.has(blockKey)) {
-                // Debug: log first few hits
-                if (!this._debugBlockCount) this._debugBlockCount = 0;
-                if (this._debugBlockCount < 5) {
-                    console.log(`Landmark block found at ${blockKey}: ${landmark.blocks.get(blockKey)}`);
-                    this._debugBlockCount++;
-                }
-                return landmark.blocks.get(blockKey);
+            const key = `${x},${y},${z}`;
+            if (landmark.blocks && landmark.blocks.has(key)) {
+                return landmark.blocks.get(key);
             }
         }
         
@@ -252,17 +288,11 @@ export class LandmarkSystem {
     }
     
     /**
-     * Get all landmarks (for debugging/visualization)
-     */
-    getAllLandmarks() {
-        return Array.from(this.landmarkCache.values()).filter(l => l !== null);
-    }
-    
-    /**
-     * Check if position is inside any landmark's 2D footprint (for object exclusion)
+     * Check if a position is inside any landmark's exclusion zone
+     * Used to prevent trees/rocks from spawning inside landmarks
      * @param {number} x - World X
      * @param {number} z - World Z
-     * @returns {boolean} True if inside a landmark footprint
+     * @returns {boolean} True if inside a landmark exclusion zone
      */
     isInsideLandmark(x, z) {
         const chunkX = Math.floor(x / CHUNK_SIZE);
@@ -278,6 +308,14 @@ export class LandmarkSystem {
         }
         
         return false;
+    }
+    
+    /**
+     * Get all landmarks (for debugging/visualization)
+     * @returns {Array} Array of all generated landmarks
+     */
+    getAllLandmarks() {
+        return Array.from(this.landmarkCache.values()).filter(l => l !== null);
     }
     
     /**

@@ -6,7 +6,7 @@ import * as THREE from 'three';
  * Modes:
  * - 'orbit': Free orbit around hero (default, current behavior)
  * - 'follow': Third-person camera locked behind hero
- * - 'first-person': View from hero's head with look-around
+ * - 'first-person': View from hero's head with mouse look (yaw + pitch)
  */
 export class CameraController {
     constructor(camera, controls, hero) {
@@ -23,6 +23,9 @@ export class CameraController {
         
         // First-person settings
         this.firstPersonHeight = 2.3; // Eye level on mounted hero
+        this.firstPersonPitch = 0;    // Vertical look angle (radians)
+        this.maxPitch = Math.PI / 2 - 0.1;  // ~80 degrees up
+        this.minPitch = -Math.PI / 2 + 0.1; // ~80 degrees down
         
         // Store original orbit settings
         this.originalMinDistance = controls.minDistance;
@@ -125,6 +128,11 @@ export class CameraController {
             this.hero.heroMount.setHeadVisible(mode !== 'first-person');
         }
         
+        // Reset pitch when entering first-person
+        if (mode === 'first-person') {
+            this.firstPersonPitch = 0;
+        }
+        
         // Configure controls based on mode
         switch (mode) {
             case 'orbit':
@@ -153,15 +161,26 @@ export class CameraController {
                 break;
                 
             case 'first-person':
-                // Enable controls for look-around, but set distance to 0
-                this.controls.enabled = true;
-                this.controls.minDistance = 0;
-                this.controls.maxDistance = 0.01;
-                this.controls.maxPolarAngle = Math.PI * 0.9; // Allow looking up/down
+                // DISABLE OrbitControls entirely - we manage camera directly
+                this.controls.enabled = false;
                 break;
         }
         
         this.updateButtonStates();
+    }
+    
+    /**
+     * Handle mouse drag for look rotation (called from game.js handleRightDrag)
+     * @param {number} deltaX - Horizontal mouse movement
+     * @param {number} deltaY - Vertical mouse movement
+     */
+    handleLook(deltaX, deltaY) {
+        if (this.mode === 'first-person') {
+            // Update pitch (vertical look) with clamping
+            const pitchSpeed = 0.002;
+            this.firstPersonPitch -= deltaY * pitchSpeed;
+            this.firstPersonPitch = Math.max(this.minPitch, Math.min(this.maxPitch, this.firstPersonPitch));
+        }
     }
     
     /**
@@ -220,17 +239,23 @@ export class CameraController {
         const eyePos = heroPos.clone();
         eyePos.y += this.firstPersonHeight;
         
-        // Camera position at eye level
+        // Set camera position at eye level
         this.camera.position.copy(eyePos);
         
-        // Orbit target slightly in front (allows look-around)
+        // Calculate look direction from hero yaw and camera pitch
+        const yaw = this.hero.rotation;
+        const pitch = this.firstPersonPitch;
+        
+        // Spherical to Cartesian conversion
         const lookDir = new THREE.Vector3(
-            Math.sin(this.hero.rotation),
-            0,
-            Math.cos(this.hero.rotation)
+            Math.sin(yaw) * Math.cos(pitch),
+            Math.sin(pitch),
+            Math.cos(yaw) * Math.cos(pitch)
         );
         
-        this.controls.target.copy(eyePos.clone().add(lookDir.multiplyScalar(0.01)));
+        // Point camera in that direction
+        const target = eyePos.clone().add(lookDir);
+        this.camera.lookAt(target);
     }
     
     destroy() {
