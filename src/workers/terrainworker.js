@@ -311,6 +311,7 @@ class WorkerTerrainProvider {
         return false;
     }
 
+
     getBlockType(x, y, z) {
         // Check destroyed blocks
         if (this.destroyedBlocks.has(`${x},${y},${z}`)) return null;

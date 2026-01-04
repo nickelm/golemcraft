@@ -13,6 +13,7 @@
  * - Receives both surface mesh (smooth terrain) and voxel mesh (caves/structures)
  * - Stores heightmap and voxelMask for collision routing
  * - Creates separate Three.js meshes for surface and voxel geometry
+ * - Render order: voxels first (0), surface second (1), water last (2)
  * 
  * The worker is the SINGLE SOURCE OF TRUTH for terrain data.
  */
@@ -141,7 +142,12 @@ export class TerrainWorkerManager {
 
     /**
      * Create Three.js meshes from worker-generated geometry data
-     * Now creates both surface mesh (smooth terrain) and voxel mesh (caves/structures)
+     * Creates both surface mesh (smooth terrain) and voxel mesh (caves/structures)
+     * 
+     * RENDER ORDER:
+     * - Voxels render FIRST (renderOrder=0) to write Z-buffer
+     * - Surface renders SECOND (renderOrder=1) and gets Z-rejected under voxels
+     * - Water renders LAST (renderOrder=2) for transparency
      */
     createMeshesFromData(chunkData) {
         const result = {
@@ -152,25 +158,27 @@ export class TerrainWorkerManager {
             worldZ: chunkData.worldZ
         };
 
-        // Create surface mesh (smooth terrain)
-        if (!chunkData.surface.isEmpty) {
-            result.surfaceMesh = this.createMesh(chunkData.surface, this.opaqueMaterial);
-            result.surfaceMesh.position.set(chunkData.worldX, 0, chunkData.worldZ);
-            result.surfaceMesh.receiveShadow = true;
-        }
-
-        // Create voxel opaque mesh (caves, structures, cliffs)
+        // Create voxel opaque mesh (renders first, writes Z-buffer)
         if (!chunkData.opaque.isEmpty) {
             result.opaqueMesh = this.createMesh(chunkData.opaque, this.opaqueMaterial);
             result.opaqueMesh.position.set(chunkData.worldX, 0, chunkData.worldZ);
             result.opaqueMesh.receiveShadow = true;
+            result.opaqueMesh.renderOrder = 0;  // Render first
         }
 
-        // Create water mesh
+        // Create surface mesh (smooth terrain) - renders second
+        if (!chunkData.surface.isEmpty) {
+            result.surfaceMesh = this.createMesh(chunkData.surface, this.opaqueMaterial);
+            result.surfaceMesh.position.set(chunkData.worldX, 0, chunkData.worldZ);
+            result.surfaceMesh.receiveShadow = true;
+            result.surfaceMesh.renderOrder = 1;  // Render after voxels (Z-rejected where voxels exist)
+        }
+
+        // Create water mesh - renders last (transparent)
         if (!chunkData.water.isEmpty) {
             result.waterMesh = this.createMesh(chunkData.water, this.waterMaterial);
             result.waterMesh.position.set(chunkData.worldX, 0, chunkData.worldZ);
-            result.waterMesh.renderOrder = 1;
+            result.waterMesh.renderOrder = 2;  // Render last (transparent)
         }
 
         return result;
@@ -196,17 +204,24 @@ export class TerrainWorkerManager {
     init(seed) {
         return new Promise((resolve) => {
             this.readyResolve = resolve;
-            this.worker.postMessage({ type: 'init', data: { seed } });
+            this.worker.postMessage({
+                type: 'init',
+                data: { seed }
+            });
         });
     }
 
     /**
-     * Request chunk generation with priority
+     * Request a chunk to be generated
+     * @param {number} chunkX - Chunk X coordinate
+     * @param {number} chunkZ - Chunk Z coordinate
+     * @param {number} priority - Lower = higher priority (distance from player)
+     * @param {Object} context - Additional context (destroyed blocks, etc.)
      */
     requestChunk(chunkX, chunkZ, priority, context = {}) {
         const key = `${chunkX},${chunkZ}`;
 
-        // Don't re-request if processing
+        // Don't re-request if already processing
         if (this.processingChunks.has(key)) {
             return;
         }
@@ -218,63 +233,60 @@ export class TerrainWorkerManager {
             return;
         }
 
-        this.pendingRequests.set(key, {
-            chunkX,
-            chunkZ,
-            priority,
-            context
-        });
-
+        this.pendingRequests.set(key, { chunkX, chunkZ, priority, context });
         this.processQueue();
     }
 
     /**
-     * Cancel a pending chunk request
+     * Cancel a pending or processing chunk request
      */
     cancelRequest(chunkX, chunkZ) {
         const key = `${chunkX},${chunkZ}`;
 
-        // Remove from pending
+        // Remove from pending queue
         if (this.pendingRequests.has(key)) {
             this.pendingRequests.delete(key);
             this.stats.totalDropped++;
-            return true;
+            if (DEBUG_CANCELLATION) {
+                console.log(`🗑️ DROPPED chunk ${key} from queue (total: ${this.stats.totalDropped})`);
+            }
+            return;
         }
 
-        // Mark for cancellation if currently processing
+        // Mark as cancelled if currently processing
         if (this.processingChunks.has(key)) {
             this.cancelledChunks.add(key);
-            return true;
+            if (DEBUG_CANCELLATION) {
+                console.log(`⏳ CANCELLING chunk ${key} (in progress)`);
+            }
         }
-
-        return false;
     }
 
     /**
-     * Process the request queue
+     * Process the request queue, sending highest priority chunks to worker
      */
     processQueue() {
         if (!this.isReady) return;
-        if (this.processingChunks.size > 0) return; // One at a time
         if (this.pendingRequests.size === 0) return;
 
-        // Find highest priority (lowest value)
+        // Find highest priority request (lowest priority number)
         let bestKey = null;
         let bestPriority = Infinity;
 
-        for (const [key, request] of this.pendingRequests) {
+        this.pendingRequests.forEach((request, key) => {
             if (request.priority < bestPriority) {
                 bestPriority = request.priority;
                 bestKey = key;
             }
-        }
+        });
 
-        if (!bestKey) return;
+        if (bestKey === null) return;
 
         const request = this.pendingRequests.get(bestKey);
         this.pendingRequests.delete(bestKey);
         this.processingChunks.add(bestKey);
 
+        // Send to worker
         this.worker.postMessage({
             type: 'generateChunk',
             data: {
@@ -286,8 +298,7 @@ export class TerrainWorkerManager {
     }
 
     /**
-     * Get block type at world coordinates (queries the block cache)
-     * This is the main thread's way to query terrain data
+     * Get block type at world coordinates (from cache)
      */
     getBlockType(x, y, z) {
         return this.blockCache.getBlockType(x, y, z);
@@ -295,52 +306,45 @@ export class TerrainWorkerManager {
 
     /**
      * Get ground height at world coordinates
-     * Automatically routes to smooth (heightmap) or voxel collision
+     * Routes to smooth (heightmap) or voxel collision based on mask
      */
     getGroundHeight(x, z) {
         return this.blockCache.getGroundHeight(x, z);
     }
 
     /**
-     * Check if a position uses voxel collision (vs heightmap)
+     * Check if a chunk has been loaded
      */
-    usesVoxelCollision(x, z) {
-        return this.blockCache.usesVoxelCollision(x, z);
-    }
-
-    /**
-     * Check if block data is loaded for a chunk
-     */
-    hasBlockData(chunkX, chunkZ) {
+    isChunkLoaded(chunkX, chunkZ) {
         return this.blockCache.hasChunk(chunkX, chunkZ);
     }
 
     /**
-     * Get stats for performance monitor
+     * Unload a chunk from the cache
      */
-    getStats() {
-        return {
-            pendingCount: this.pendingRequests.size,
-            processingCount: this.processingChunks.size,
-            totalGenerated: this.stats.totalGenerated,
-            totalCancelled: this.stats.totalCancelled,
-            totalDropped: this.stats.totalDropped,
-            avgGenTime: this.stats.avgGenTime.toFixed(1),
-            blockCacheSize: this.blockCache.size
-        };
+    unloadChunk(chunkX, chunkZ) {
+        this.blockCache.removeChunk(chunkX, chunkZ);
     }
 
     /**
-     * Clean up
+     * Update destroyed blocks in worker
      */
-    dispose() {
-        if (this.worker) {
-            this.worker.terminate();
-            this.worker = null;
-        }
-        this.pendingRequests.clear();
-        this.processingChunks.clear();
-        this.cancelledChunks.clear();
-        this.blockCache.clear();
+    updateDestroyedBlocks(blocks) {
+        this.worker.postMessage({
+            type: 'updateDestroyedBlocks',
+            data: { blocks: Array.from(blocks) }
+        });
+    }
+
+    /**
+     * Get stats for debugging
+     */
+    getStats() {
+        return {
+            ...this.stats,
+            pendingRequests: this.pendingRequests.size,
+            processingChunks: this.processingChunks.size,
+            cachedChunks: this.blockCache.size
+        };
     }
 }
