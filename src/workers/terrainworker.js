@@ -16,6 +16,11 @@ import { BIOMES } from '../world/terrain/biomesystem.js';
 import { WorkerLandmarkSystem } from '../world/landmarks/workerlandmarksystem.js';
 
 // ============================================================================
+// DEBUG: Set to 0 for production, 200+ for testing chunk cancellation
+// ============================================================================
+const DEBUG_CHUNK_DELAY_MS = 0;  // Set to 200 for testing, 0 for production
+
+// ============================================================================
 // NOISE FUNCTIONS (pure math, no dependencies)
 // ============================================================================
 
@@ -254,6 +259,38 @@ class WorkerTerrainProvider {
 }
 
 // ============================================================================
+// CHUNK GENERATION FUNCTION
+// ============================================================================
+
+function doGenerateChunk(data) {
+    // Update destroyed blocks if provided
+    if (data.destroyedBlocks) {
+        terrainProvider.setDestroyedBlocks(data.destroyedBlocks);
+    }
+
+    // Ensure landmarks are generated for this chunk
+    terrainProvider.prepareLandmarksForChunk(data.chunkX, data.chunkZ);
+
+    const startTime = performance.now();
+    
+    // Generate mesh and block data
+    const chunkData = generateChunkData(terrainProvider, data.chunkX, data.chunkZ);
+    
+    const genTime = performance.now() - startTime;
+
+    // Get transferable buffers for zero-copy transfer
+    const transferables = getTransferables(chunkData);
+
+    self.postMessage({
+        type: 'chunkGenerated',
+        chunkX: data.chunkX,
+        chunkZ: data.chunkZ,
+        chunkData,
+        genTime
+    }, transferables);
+}
+
+// ============================================================================
 // WORKER STATE AND MESSAGE HANDLING
 // ============================================================================
 
@@ -265,6 +302,9 @@ self.onmessage = function(e) {
     switch (type) {
         case 'init':
             terrainProvider = new WorkerTerrainProvider(data.seed);
+            if (DEBUG_CHUNK_DELAY_MS > 0) {
+                console.warn(`[WORKER] DEBUG MODE: ${DEBUG_CHUNK_DELAY_MS}ms delay per chunk`);
+            }
             self.postMessage({ type: 'ready' });
             break;
 
@@ -279,37 +319,12 @@ self.onmessage = function(e) {
                 return;
             }
 
-            // Update destroyed blocks if provided
-            if (data.destroyedBlocks) {
-                terrainProvider.setDestroyedBlocks(data.destroyedBlocks);
+            // DEBUG: Artificial delay for testing chunk cancellation
+            if (DEBUG_CHUNK_DELAY_MS > 0) {
+                setTimeout(() => doGenerateChunk(data), DEBUG_CHUNK_DELAY_MS);
+            } else {
+                doGenerateChunk(data);
             }
-
-            // Ensure landmarks are generated for this chunk
-            terrainProvider.prepareLandmarksForChunk(data.chunkX, data.chunkZ);
-            
-            // Debug: Log landmark info for this chunk
-            const landmarkCount = terrainProvider.landmarkSystem.getLandmarksForChunk(data.chunkX, data.chunkZ).length;
-            if (landmarkCount > 0) {
-                console.log(`[WORKER] Chunk ${data.chunkX},${data.chunkZ} has ${landmarkCount} landmarks`);
-            }
-
-            const startTime = performance.now();
-            
-            // Generate mesh and block data
-            const chunkData = generateChunkData(terrainProvider, data.chunkX, data.chunkZ);
-            
-            const genTime = performance.now() - startTime;
-
-            // Get transferable buffers for zero-copy transfer
-            const transferables = getTransferables(chunkData);
-
-            self.postMessage({
-                type: 'chunkGenerated',
-                chunkX: data.chunkX,
-                chunkZ: data.chunkZ,
-                chunkData,
-                genTime
-            }, transferables);
             break;
 
         case 'updateDestroyedBlocks':

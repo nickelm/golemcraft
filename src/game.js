@@ -163,6 +163,7 @@ export class Game {
         );
 
         // Initialize world asynchronously with progress callback
+        // waitForSafeTerrain passes (loaded, total) where total = max(pending+loaded, minSafeChunks)
         await this.world.init(initialPosition, (loaded, total) => {
             this.loadingOverlay.setProgress(loaded, total);
         });
@@ -176,10 +177,12 @@ export class Game {
             if (isLoading) {
                 this.loadingOverlay.show();
                 this.terrainIndicator.forceHide();  // Hide subtle indicator when blocking
-                // Update progress during runtime loading
-                const stats = this.world.chunkLoader.getStats();
-                const pending = this.world.chunkLoader.getPendingCount();
-                this.loadingOverlay.setProgress(stats.withMeshes, stats.withMeshes + pending);
+                
+                // Count how many of the buffer chunks are loaded
+                // We need the full buffer to unpause, so show progress toward that
+                const bufferChunksLoaded = this.countBufferChunksLoaded();
+                const bufferChunksTotal = this.getBufferChunksTotal();
+                this.loadingOverlay.setProgress(bufferChunksLoaded, bufferChunksTotal);
             } else {
                 this.loadingOverlay.hide();
             }
@@ -621,6 +624,41 @@ export class Game {
         this.world.createExplosionCrater(position, radius);
     }
 
+    /**
+     * Count how many of the required buffer chunks around the player are loaded
+     * Uses resumeBufferDistance (larger radius) since that's the unpause target
+     * @returns {number} Number of buffer chunks that have meshes
+     */
+    countBufferChunksLoaded() {
+        if (!this.world || !this.hero) return 0;
+        
+        const CHUNK_SIZE = 16;
+        const playerChunkX = Math.floor(this.hero.position.x / CHUNK_SIZE);
+        const playerChunkZ = Math.floor(this.hero.position.z / CHUNK_SIZE);
+        const bufferDistance = this.world.chunkLoader.resumeBufferDistance;
+        
+        let count = 0;
+        for (let dx = -bufferDistance; dx <= bufferDistance; dx++) {
+            for (let dz = -bufferDistance; dz <= bufferDistance; dz++) {
+                const key = `${playerChunkX + dx},${playerChunkZ + dz}`;
+                if (this.world.chunkLoader.chunksWithMeshes.has(key)) {
+                    count++;
+                }
+            }
+        }
+        return count;
+    }
+
+    /**
+     * Get the total buffer chunks needed to unpause
+     * @returns {number} Total chunks in buffer radius
+     */
+    getBufferChunksTotal() {
+        if (!this.world) return 81; // Default 9x9
+        const bufferDistance = this.world.chunkLoader.resumeBufferDistance;
+        return (bufferDistance * 2 + 1) ** 2;
+    }
+
     animate() {
         requestAnimationFrame(() => this.animate());
         
@@ -653,10 +691,10 @@ export class Game {
             if (this.world && this.hero) {
                 this.world.update(this.hero.position);
                 
-                // Update loading progress
-                const stats = this.world.chunkLoader.getStats();
-                const pending = this.world.chunkLoader.getPendingCount();
-                this.loadingOverlay.setProgress(stats.withMeshes, stats.withMeshes + pending);
+                // Update loading progress toward buffer target
+                const bufferChunksLoaded = this.countBufferChunksLoaded();
+                const bufferChunksTotal = this.getBufferChunksTotal();
+                this.loadingOverlay.setProgress(bufferChunksLoaded, bufferChunksTotal);
             }
         }
         

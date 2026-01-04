@@ -15,6 +15,9 @@
 import * as THREE from 'three';
 import { ChunkBlockCache } from '../world/chunkblockcache.js';
 
+// DEBUG: Set to true to see cancellation logging
+const DEBUG_CANCELLATION = false;
+
 export class TerrainWorkerManager {
     constructor(scene, opaqueMaterial, waterMaterial, onChunkReady) {
         this.scene = scene;
@@ -39,6 +42,7 @@ export class TerrainWorkerManager {
         this.stats = {
             totalGenerated: 0,
             totalCancelled: 0,
+            totalDropped: 0,  // Dropped from queue before processing
             genTimes: [],
             avgGenTime: 0
         };
@@ -96,6 +100,9 @@ export class TerrainWorkerManager {
         if (this.cancelledChunks.has(key)) {
             this.cancelledChunks.delete(key);
             this.stats.totalCancelled++;
+            if (DEBUG_CANCELLATION) {
+                console.log(`🚫 CANCELLED chunk ${key} after generation (total: ${this.stats.totalCancelled})`);
+            }
             this.processQueue();
             return;
         }
@@ -212,11 +219,18 @@ export class TerrainWorkerManager {
 
         if (this.pendingRequests.has(key)) {
             this.pendingRequests.delete(key);
+            this.stats.totalDropped++;
+            if (DEBUG_CANCELLATION) {
+                console.log(`🗑️ Dropped pending chunk ${key} (total dropped: ${this.stats.totalDropped})`);
+            }
         }
 
         // If already processing, mark for cancellation
         if (this.processingChunks.has(key)) {
             this.cancelledChunks.add(key);
+            if (DEBUG_CANCELLATION) {
+                console.log(`⏳ Marked processing chunk ${key} for cancellation`);
+            }
         }
 
         // Also remove from block cache
@@ -231,6 +245,8 @@ export class TerrainWorkerManager {
         const cameraChunkX = Math.floor(cameraX / CHUNK_SIZE);
         const cameraChunkZ = Math.floor(cameraZ / CHUNK_SIZE);
 
+        let droppedCount = 0;
+
         // Cancel chunks that are too far
         for (const [key, request] of this.pendingRequests) {
             const dx = Math.abs(request.chunkX - cameraChunkX);
@@ -238,6 +254,8 @@ export class TerrainWorkerManager {
 
             if (dx > unloadRadius || dz > unloadRadius) {
                 this.pendingRequests.delete(key);
+                this.stats.totalDropped++;
+                droppedCount++;
             } else {
                 // Update priority
                 const centerX = request.chunkX * CHUNK_SIZE + CHUNK_SIZE / 2;
@@ -246,6 +264,10 @@ export class TerrainWorkerManager {
                 const distZ = centerZ - cameraZ;
                 request.priority = distX * distX + distZ * distZ;
             }
+        }
+
+        if (DEBUG_CANCELLATION && droppedCount > 0) {
+            console.log(`🗑️ updatePriorities dropped ${droppedCount} distant chunks (total: ${this.stats.totalDropped})`);
         }
     }
 
@@ -308,6 +330,7 @@ export class TerrainWorkerManager {
             processingCount: this.processingChunks.size,
             totalGenerated: this.stats.totalGenerated,
             totalCancelled: this.stats.totalCancelled,
+            totalDropped: this.stats.totalDropped,
             avgGenTime: this.stats.avgGenTime.toFixed(1),
             blockCacheSize: this.blockCache.size
         };

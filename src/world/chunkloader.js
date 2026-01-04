@@ -9,6 +9,7 @@ import { TerrainWorkerManager } from '../workers/terrainworkermanager.js';
  * Features:
  * - Priority queue based on distance from player
  * - Loading state detection (shows overlay when player too close to unloaded chunks)
+ * - Hysteresis: pause early, but wait for buffer before unpausing
  * - Automatic chunk unloading beyond draw distance
  * - Block modification persistence
  */
@@ -28,9 +29,10 @@ export class ChunkLoader {
         this.loadRadius = 8;
         this.unloadRadius = 10;
         
-        // Loading state detection
-        this.minSafeDistance = 2;  // Minimum chunks of loaded terrain needed around player
-        this.isLoading = false;    // True when waiting for critical chunks
+        // Loading state detection with hysteresis
+        this.minSafeDistance = 2;      // Pause if missing chunks within this radius (5x5 = 25)
+        this.resumeBufferDistance = 4; // Don't unpause until this radius is loaded (9x9 = 81)
+        this.isLoading = false;        // True when waiting for critical chunks
         this.onLoadingStateChange = null;  // Callback for loading state changes
 
         // Worker manager
@@ -175,6 +177,7 @@ export class ChunkLoader {
 
     /**
      * Check if minimum safe terrain exists around player
+     * Used to determine if we need to PAUSE (missing critical chunks)
      * @param {Object} position - Player position
      * @returns {boolean} True if safe to continue
      */
@@ -192,6 +195,50 @@ export class ChunkLoader {
             }
         }
         return true;
+    }
+
+    /**
+     * Check if we have enough buffer to resume gameplay
+     * Used to determine if we can UNPAUSE (have enough chunks to play smoothly)
+     * @param {Object} position - Player position
+     * @returns {boolean} True if buffer is sufficient
+     */
+    hasBufferTerrainAround(position) {
+        const playerChunkX = Math.floor(position.x / CHUNK_SIZE);
+        const playerChunkZ = Math.floor(position.z / CHUNK_SIZE);
+
+        // Check chunks in buffer radius
+        for (let dx = -this.resumeBufferDistance; dx <= this.resumeBufferDistance; dx++) {
+            for (let dz = -this.resumeBufferDistance; dz <= this.resumeBufferDistance; dz++) {
+                const key = `${playerChunkX + dx},${playerChunkZ + dz}`;
+                if (!this.chunksWithMeshes.has(key)) {
+                    return false;
+                }
+            }
+        }
+        return true;
+    }
+
+    /**
+     * Count loaded chunks within a radius around player
+     * @param {Object} position - Player position
+     * @param {number} radius - Chunk radius to check
+     * @returns {number} Number of loaded chunks in radius
+     */
+    countChunksInRadius(position, radius) {
+        const playerChunkX = Math.floor(position.x / CHUNK_SIZE);
+        const playerChunkZ = Math.floor(position.z / CHUNK_SIZE);
+
+        let count = 0;
+        for (let dx = -radius; dx <= radius; dx++) {
+            for (let dz = -radius; dz <= radius; dz++) {
+                const key = `${playerChunkX + dx},${playerChunkZ + dz}`;
+                if (this.chunksWithMeshes.has(key)) {
+                    count++;
+                }
+            }
+        }
+        return count;
     }
 
     /**
@@ -252,8 +299,17 @@ export class ChunkLoader {
             this.unloadChunk(x, z, key);
         });
 
-        // Check if we need to pause for loading
-        const needsLoading = !this.hasSafeTerrainAround(playerPosition);
+        // Hysteresis for loading state:
+        // - PAUSE if missing any safe chunks (tight radius)
+        // - UNPAUSE only when buffer is full (larger radius)
+        let needsLoading;
+        if (this.isLoading) {
+            // Currently paused - wait for full buffer before resuming
+            needsLoading = !this.hasBufferTerrainAround(playerPosition);
+        } else {
+            // Currently playing - pause if missing critical chunks
+            needsLoading = !this.hasSafeTerrainAround(playerPosition);
+        }
         
         if (needsLoading !== this.isLoading) {
             this.isLoading = needsLoading;

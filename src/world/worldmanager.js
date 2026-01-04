@@ -123,7 +123,7 @@ export class WorldManager {
                 const total = loaded + pending;
 
                 if (onProgress) {
-                    onProgress(loaded, Math.max(total, minSafeChunks));
+                    onProgress(loaded, minSafeChunks);
                 }
 
                 if (this.chunkLoader.hasSafeTerrainAround(position)) {

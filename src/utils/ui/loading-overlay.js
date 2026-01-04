@@ -5,6 +5,9 @@
  * - Initial world load
  * - When player catches up to terrain generation
  * - Teleportation
+ * 
+ * Progress is shown as percentage based on minimum safe chunks needed
+ * to unpause the game (not total world chunks).
  */
 export class LoadingOverlay {
     constructor() {
@@ -77,7 +80,7 @@ export class LoadingOverlay {
 
         // Progress text
         this.progressText = document.createElement('div');
-        this.progressText.textContent = '0 / 0 chunks';
+        this.progressText.textContent = '0%';
         this.progressText.style.cssText = `
             font-size: 14px;
             color: #888;
@@ -109,12 +112,13 @@ export class LoadingOverlay {
     /**
      * Update progress display
      * @param {number} loaded - Number of chunks loaded
-     * @param {number} total - Total chunks needed
+     * @param {number} required - Number of chunks required to unpause
      */
-    setProgress(loaded, total) {
-        const percent = total > 0 ? Math.min(100, (loaded / total) * 100) : 0;
+    setProgress(loaded, required) {
+        // Clamp to 0-100% range
+        const percent = required > 0 ? Math.min(100, Math.max(0, (loaded / required) * 100)) : 0;
         this.progressBar.style.width = `${percent}%`;
-        this.progressText.textContent = `${loaded} / ${total} chunks`;
+        this.progressText.textContent = `${Math.floor(percent)}%`;
     }
 
     /**
