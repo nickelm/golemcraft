@@ -12,6 +12,7 @@ import { AtmosphereController } from './atmosphere/atmospherecontroller.js';
 import { InputController } from './inputcontroller.js';
 import { PerformanceMonitor } from './utils/ui/performance-monitor.js';
 import { LoadingOverlay } from './utils/ui/loading-overlay.js';
+import { TerrainLoadingIndicator } from './utils/ui/terrain-loading-indicator.js';
 
 export class Game {
     constructor(worldData = null) {
@@ -106,8 +107,12 @@ export class Game {
         // Camera controller (initialized after hero creation)
         this.cameraController = null;
 
-        // Loading overlay for chunk loading
+        // Loading overlay for chunk loading (blocking, for initial load)
         this.loadingOverlay = new LoadingOverlay();
+        
+        // Terrain streaming indicator (non-blocking, corner display)
+        this.terrainIndicator = new TerrainLoadingIndicator();
+        
         this.isPaused = false;        
 
         // Fixed timestep simulation with accumulator
@@ -170,6 +175,7 @@ export class Game {
             this.isPaused = isLoading;
             if (isLoading) {
                 this.loadingOverlay.show();
+                this.terrainIndicator.forceHide();  // Hide subtle indicator when blocking
                 // Update progress during runtime loading
                 const stats = this.world.chunkLoader.getStats();
                 const pending = this.world.chunkLoader.getPendingCount();
@@ -633,6 +639,14 @@ export class Game {
             while (this.accumulator >= this.fixedTimestep) {
                 this.update(this.fixedTimestep);
                 this.accumulator -= this.fixedTimestep;
+            }
+            
+            // Update terrain streaming indicator (non-blocking)
+            if (this.world && this.terrainIndicator) {
+                const pending = this.world.chunkLoader.getPendingCount();
+                const loaded = this.world.chunkLoader.chunksWithMeshes.size;
+                const total = this.world.chunkLoader.getRequiredChunkCount();
+                this.terrainIndicator.update(pending, loaded, total);
             }
         } else {
             // Still update world to process chunk loading
