@@ -6,8 +6,13 @@
  * - Chunk request queue with priority
  * - Chunk cancellation when out of range
  * - Receiving mesh geometry AND block data from worker
- * - Creating Three.js meshes
- * - Storing block data in ChunkBlockCache for collision queries
+ * - Creating Three.js meshes (surface + voxel)
+ * - Storing terrain data in ChunkBlockCache for collision queries
+ * 
+ * SMOOTH TERRAIN ARCHITECTURE:
+ * - Receives both surface mesh (smooth terrain) and voxel mesh (caves/structures)
+ * - Stores heightmap and voxelMask for collision routing
+ * - Creates separate Three.js meshes for surface and voxel geometry
  * 
  * The worker is the SINGLE SOURCE OF TRUTH for terrain data.
  */
@@ -35,7 +40,7 @@ export class TerrainWorkerManager {
         this.processingChunks = new Set(); // Keys currently being processed
         this.cancelledChunks = new Set();  // Keys cancelled while processing
 
-        // Block data cache - THE source of truth for collision
+        // Terrain data cache - THE source of truth for collision
         this.blockCache = new ChunkBlockCache();
 
         // Stats
@@ -115,10 +120,13 @@ export class TerrainWorkerManager {
         this.stats.avgGenTime = this.stats.genTimes.reduce((a, b) => a + b, 0) / this.stats.genTimes.length;
         this.stats.totalGenerated++;
 
-        // Store block data in cache (for collision queries)
-        if (chunkData.blockData) {
-            this.blockCache.setChunkData(chunkX, chunkZ, chunkData.blockData);
-        }
+        // Store terrain data in cache (heightmap, voxelMask, blockData)
+        this.blockCache.setChunkData(chunkX, chunkZ, {
+            heightmap: chunkData.heightmap,
+            voxelMask: chunkData.voxelMask,
+            surfaceTypes: chunkData.surfaceTypes,
+            blockData: chunkData.blockData
+        });
 
         // Create Three.js meshes
         const meshes = this.createMeshesFromData(chunkData);
@@ -133,16 +141,25 @@ export class TerrainWorkerManager {
 
     /**
      * Create Three.js meshes from worker-generated geometry data
+     * Now creates both surface mesh (smooth terrain) and voxel mesh (caves/structures)
      */
     createMeshesFromData(chunkData) {
         const result = {
-            opaqueMesh: null,
-            waterMesh: null,
+            surfaceMesh: null,   // Smooth terrain
+            opaqueMesh: null,    // Voxel geometry (caves, structures)
+            waterMesh: null,     // Water
             worldX: chunkData.worldX,
             worldZ: chunkData.worldZ
         };
 
-        // Create opaque mesh
+        // Create surface mesh (smooth terrain)
+        if (!chunkData.surface.isEmpty) {
+            result.surfaceMesh = this.createMesh(chunkData.surface, this.opaqueMaterial);
+            result.surfaceMesh.position.set(chunkData.worldX, 0, chunkData.worldZ);
+            result.surfaceMesh.receiveShadow = true;
+        }
+
+        // Create voxel opaque mesh (caves, structures, cliffs)
         if (!chunkData.opaque.isEmpty) {
             result.opaqueMesh = this.createMesh(chunkData.opaque, this.opaqueMaterial);
             result.opaqueMesh.position.set(chunkData.worldX, 0, chunkData.worldZ);
@@ -217,62 +234,24 @@ export class TerrainWorkerManager {
     cancelRequest(chunkX, chunkZ) {
         const key = `${chunkX},${chunkZ}`;
 
+        // Remove from pending
         if (this.pendingRequests.has(key)) {
             this.pendingRequests.delete(key);
             this.stats.totalDropped++;
-            if (DEBUG_CANCELLATION) {
-                console.log(`🗑️ Dropped pending chunk ${key} (total dropped: ${this.stats.totalDropped})`);
-            }
+            return true;
         }
 
-        // If already processing, mark for cancellation
+        // Mark for cancellation if currently processing
         if (this.processingChunks.has(key)) {
             this.cancelledChunks.add(key);
-            if (DEBUG_CANCELLATION) {
-                console.log(`⏳ Marked processing chunk ${key} for cancellation`);
-            }
+            return true;
         }
 
-        // Also remove from block cache
-        this.blockCache.removeChunk(chunkX, chunkZ);
+        return false;
     }
 
     /**
-     * Update priorities based on camera position
-     */
-    updatePriorities(cameraX, cameraZ, unloadRadius) {
-        const CHUNK_SIZE = 16;
-        const cameraChunkX = Math.floor(cameraX / CHUNK_SIZE);
-        const cameraChunkZ = Math.floor(cameraZ / CHUNK_SIZE);
-
-        let droppedCount = 0;
-
-        // Cancel chunks that are too far
-        for (const [key, request] of this.pendingRequests) {
-            const dx = Math.abs(request.chunkX - cameraChunkX);
-            const dz = Math.abs(request.chunkZ - cameraChunkZ);
-
-            if (dx > unloadRadius || dz > unloadRadius) {
-                this.pendingRequests.delete(key);
-                this.stats.totalDropped++;
-                droppedCount++;
-            } else {
-                // Update priority
-                const centerX = request.chunkX * CHUNK_SIZE + CHUNK_SIZE / 2;
-                const centerZ = request.chunkZ * CHUNK_SIZE + CHUNK_SIZE / 2;
-                const distX = centerX - cameraX;
-                const distZ = centerZ - cameraZ;
-                request.priority = distX * distX + distZ * distZ;
-            }
-        }
-
-        if (DEBUG_CANCELLATION && droppedCount > 0) {
-            console.log(`🗑️ updatePriorities dropped ${droppedCount} distant chunks (total: ${this.stats.totalDropped})`);
-        }
-    }
-
-    /**
-     * Process the queue - send next chunk to worker
+     * Process the request queue
      */
     processQueue() {
         if (!this.isReady) return;
@@ -312,6 +291,21 @@ export class TerrainWorkerManager {
      */
     getBlockType(x, y, z) {
         return this.blockCache.getBlockType(x, y, z);
+    }
+
+    /**
+     * Get ground height at world coordinates
+     * Automatically routes to smooth (heightmap) or voxel collision
+     */
+    getGroundHeight(x, z) {
+        return this.blockCache.getGroundHeight(x, z);
+    }
+
+    /**
+     * Check if a position uses voxel collision (vs heightmap)
+     */
+    usesVoxelCollision(x, z) {
+        return this.blockCache.usesVoxelCollision(x, z);
     }
 
     /**

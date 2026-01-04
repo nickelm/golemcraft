@@ -3,12 +3,18 @@
  * 
  * This worker is the SINGLE SOURCE OF TRUTH for all terrain data.
  * It generates:
- * - Terrain heightmap and blocks
+ * - Terrain heightmap (continuous floats) and blocks
  * - Landmark structures (temples, ruins, etc.)
- * - Mesh geometry
- * - Block data for collision
+ * - Surface mesh (smooth heightmap triangulation)
+ * - Voxel mesh (for caves, structures, cliffs)
+ * - Block data for collision in voxel regions
  * 
  * The main thread receives and caches data but does NOT generate terrain.
+ * 
+ * SMOOTH TERRAIN ARCHITECTURE:
+ * - getContinuousHeight() returns float heights for smooth terrain
+ * - getHeight() returns integer heights for voxel regions
+ * - voxelMask indicates which XZ cells use voxel collision vs heightmap
  */
 
 import { generateChunkData, getTransferables, CHUNK_SIZE, WATER_LEVEL } from '../world/terrain/chunkdatagenerator.js';
@@ -73,7 +79,8 @@ function octaveNoise2D(x, z, octaves = 4, baseFreq = 0.05, hashFn = hash) {
 class WorkerTerrainProvider {
     constructor(seed) {
         this.seed = seed;
-        this.heightCache = new Map();
+        this.heightCache = new Map();           // Integer heights (for voxels)
+        this.continuousHeightCache = new Map(); // Float heights (for smooth terrain)
         this.biomeCache = new Map();
         this.destroyedBlocks = new Set();
         
@@ -130,10 +137,18 @@ class WorkerTerrainProvider {
         return biome;
     }
 
-    getHeight(x, z) {
+    /**
+     * Get continuous (float) height at position - for smooth terrain
+     * This is the TRUE height before discretization
+     * 
+     * @param {number} x - World X coordinate
+     * @param {number} z - World Z coordinate
+     * @returns {number} Continuous height value (float)
+     */
+    getContinuousHeight(x, z) {
         const key = `${x},${z}`;
-        if (this.heightCache.has(key)) {
-            return this.heightCache.get(key);
+        if (this.continuousHeightCache.has(key)) {
+            return this.continuousHeightCache.get(key);
         }
 
         const biome = this.getBiome(x, z);
@@ -141,7 +156,7 @@ class WorkerTerrainProvider {
         const heightNoise = octaveNoise2D(x, z, 5, 0.03);
         let height = biomeData.baseHeight + heightNoise * biomeData.heightScale;
 
-        // Add mountain peaks in mountain biome (match main thread)
+        // Add mountain peaks in mountain biome
         if (biome === 'mountains') {
             const peakNoise = octaveNoise2D(x, z, 3, 0.06);
             if (peakNoise > 0.5) {
@@ -149,18 +164,18 @@ class WorkerTerrainProvider {
             }
         }
         
-        // Jungle has more varied terrain with hills (match main thread)
+        // Jungle has more varied terrain with hills
         if (biome === 'jungle') {
             const jungleHillNoise = octaveNoise2D(x, z, 4, 0.08);
             height += jungleHillNoise * 4;
         }
         
-        // Carve rivers (match main thread)
+        // Carve rivers
         if (biome !== 'ocean' && biome !== 'desert' && this.isRiver(x, z)) {
             height = Math.min(height, WATER_LEVEL - 1);
         }
         
-        // Carve lakes (match main thread)
+        // Carve lakes
         if ((biome === 'plains' || biome === 'snow') && this.isLake(x, z)) {
             height = Math.min(height, WATER_LEVEL - 2);
         }
@@ -169,26 +184,42 @@ class WorkerTerrainProvider {
             height = Math.min(height, WATER_LEVEL - 2);
         }
 
-        height = this.smoothBiomeTransition(x, z, height);
+        // Apply biome transition smoothing
+        height = this.smoothBiomeTransitionContinuous(x, z, height);
+        
+        // Clamp to valid range but keep as float
+        const finalHeight = Math.max(1.0, height);
+        this.continuousHeightCache.set(key, finalHeight);
+        return finalHeight;
+    }
 
-        const finalHeight = Math.floor(Math.max(1, height));
+    /**
+     * Get integer height at position - for voxel regions
+     * This is the discretized height for block placement
+     * 
+     * @param {number} x - World X coordinate
+     * @param {number} z - World Z coordinate
+     * @returns {number} Integer height value
+     */
+    getHeight(x, z) {
+        const key = `${x},${z}`;
+        if (this.heightCache.has(key)) {
+            return this.heightCache.get(key);
+        }
+
+        // Get continuous height and floor it
+        const continuousHeight = this.getContinuousHeight(x, z);
+        const finalHeight = Math.floor(continuousHeight);
+        
         this.heightCache.set(key, finalHeight);
         return finalHeight;
     }
     
-    // River detection (match main thread)
-    isRiver(x, z) {
-        const riverNoise = octaveNoise2D(x, z, 2, 0.008, (x, z) => hash(x, z, 55555));
-        return Math.abs(riverNoise - 0.5) < 0.02;
-    }
-    
-    // Lake detection (match main thread)
-    isLake(x, z) {
-        const lakeNoise = octaveNoise2D(x, z, 2, 0.02, (x, z) => hash(x, z, 66666));
-        return lakeNoise > 0.65;
-    }
-
-    smoothBiomeTransition(x, z, height) {
+    /**
+     * Smooth biome transition for continuous heights
+     * Returns float values, not integers
+     */
+    smoothBiomeTransitionContinuous(x, z, height) {
         const radius = 3;
         let totalHeight = height;
         let count = 1;
@@ -200,12 +231,84 @@ class WorkerTerrainProvider {
                 const neighborBiome = this.getBiome(x + dx, z + dz);
                 const neighborData = BIOMES[neighborBiome];
                 const neighborNoise = octaveNoise2D(x + dx, z + dz, 5, 0.03);
-                const neighborHeight = neighborData.baseHeight + neighborNoise * neighborData.heightScale;
+                let neighborHeight = neighborData.baseHeight + neighborNoise * neighborData.heightScale;
+                
+                // Apply same modifications as main height calculation
+                if (neighborBiome === 'mountains') {
+                    const peakNoise = octaveNoise2D(x + dx, z + dz, 3, 0.06);
+                    if (peakNoise > 0.5) {
+                        neighborHeight += (peakNoise - 0.5) * 30;
+                    }
+                }
+                
+                if (neighborBiome === 'jungle') {
+                    const jungleHillNoise = octaveNoise2D(x + dx, z + dz, 4, 0.08);
+                    neighborHeight += jungleHillNoise * 4;
+                }
+                
                 totalHeight += neighborHeight;
                 count++;
             }
         }
         return totalHeight / count;
+    }
+    
+    // River detection
+    isRiver(x, z) {
+        const riverNoise = octaveNoise2D(x, z, 2, 0.008, (x, z) => hash(x, z, 55555));
+        return Math.abs(riverNoise - 0.5) < 0.02;
+    }
+    
+    // Lake detection
+    isLake(x, z) {
+        const lakeNoise = octaveNoise2D(x, z, 2, 0.02, (x, z) => hash(x, z, 66666));
+        return lakeNoise > 0.65;
+    }
+
+    /**
+     * Determine if a cell should use voxel rendering/collision
+     * Returns true if the cell has features that require voxel representation
+     * 
+     * @param {number} x - World X coordinate
+     * @param {number} z - World Z coordinate
+     * @returns {boolean} True if cell should use voxels
+     */
+    shouldUseVoxels(x, z) {
+        // Check if there's a landmark at this position
+        if (this.landmarkSystem.isInsideLandmark(x, z)) {
+            return true;
+        }
+        
+        // Check for steep slopes (potential cliffs)
+        const height = this.getContinuousHeight(x, z);
+        const heightN = this.getContinuousHeight(x, z - 1);
+        const heightS = this.getContinuousHeight(x, z + 1);
+        const heightE = this.getContinuousHeight(x + 1, z);
+        const heightW = this.getContinuousHeight(x - 1, z);
+        
+        const maxSlope = Math.max(
+            Math.abs(height - heightN),
+            Math.abs(height - heightS),
+            Math.abs(height - heightE),
+            Math.abs(height - heightW)
+        );
+        
+        // If slope is greater than 2 blocks, use voxels (cliff face)
+        if (maxSlope > 2.0) {
+            return true;
+        }
+        
+        // Check for craggy mountain peaks
+        const biome = this.getBiome(x, z);
+        if (biome === 'mountains' && height > 25) {
+            // High mountain areas use voxels for craggy appearance
+            return true;
+        }
+        
+        // TODO: Add cave entrance detection here
+        // if (hasCaveEntrance(x, z)) return true;
+        
+        return false;
     }
 
     getBlockType(x, y, z) {
@@ -251,6 +354,23 @@ class WorkerTerrainProvider {
     }
     
     /**
+     * Get surface block type at position (for texture blending)
+     * @param {number} x - World X coordinate
+     * @param {number} z - World Z coordinate
+     * @returns {string} Surface block type
+     */
+    getSurfaceBlockType(x, z) {
+        const height = this.getHeight(x, z);
+        const biome = this.getBiome(x, z);
+        const biomeData = BIOMES[biome];
+        
+        if (height < WATER_LEVEL) return biomeData.underwater || 'sand';
+        if (height <= WATER_LEVEL + 2 && biome !== 'desert' && biome !== 'snow') return 'sand';
+        if (biome === 'mountains' && height > 22) return 'snow';
+        return biomeData.surface;
+    }
+    
+    /**
      * Ensure landmarks are generated for a chunk before mesh generation
      */
     prepareLandmarksForChunk(chunkX, chunkZ) {
@@ -273,7 +393,7 @@ function doGenerateChunk(data) {
 
     const startTime = performance.now();
     
-    // Generate mesh and block data
+    // Generate mesh and block data (now includes heightmap and voxelMask)
     const chunkData = generateChunkData(terrainProvider, data.chunkX, data.chunkZ);
     
     const genTime = performance.now() - startTime;

@@ -6,6 +6,12 @@ import { TerrainWorkerManager } from '../workers/terrainworkermanager.js';
  * 
  * All chunk generation happens in the worker. No synchronous fallback.
  * 
+ * SMOOTH TERRAIN ARCHITECTURE:
+ * - Receives both surfaceMesh (smooth terrain) and opaqueMesh (voxels)
+ * - Stores both meshes per chunk
+ * - surfaceMesh: rolling hills, plains, smooth landscape
+ * - opaqueMesh: caves, structures, cliffs, craggy peaks
+ * 
  * Features:
  * - Priority queue based on distance from player
  * - Loading state detection (shows overlay when player too close to unloaded chunks)
@@ -67,12 +73,14 @@ export class ChunkLoader {
 
     /**
      * Callback when worker finishes generating a chunk
+     * Now handles surfaceMesh (smooth terrain) + opaqueMesh (voxels) + waterMesh
      */
     onChunkReady(chunkX, chunkZ, meshes) {
         const key = `${chunkX},${chunkZ}`;
 
         // Check if chunk was unloaded while generating
         if (!this.loadedChunks.has(key)) {
+            if (meshes.surfaceMesh) meshes.surfaceMesh.geometry.dispose();
             if (meshes.opaqueMesh) meshes.opaqueMesh.geometry.dispose();
             if (meshes.waterMesh) meshes.waterMesh.geometry.dispose();
             return;
@@ -80,12 +88,16 @@ export class ChunkLoader {
 
         // Check if mesh already exists
         if (this.chunksWithMeshes.has(key)) {
+            if (meshes.surfaceMesh) meshes.surfaceMesh.geometry.dispose();
             if (meshes.opaqueMesh) meshes.opaqueMesh.geometry.dispose();
             if (meshes.waterMesh) meshes.waterMesh.geometry.dispose();
             return;
         }
 
         // Add meshes to scene
+        if (meshes.surfaceMesh) {
+            this.chunkedTerrain.scene.add(meshes.surfaceMesh);
+        }
         if (meshes.opaqueMesh) {
             this.chunkedTerrain.scene.add(meshes.opaqueMesh);
         }
@@ -93,8 +105,9 @@ export class ChunkLoader {
             this.chunkedTerrain.scene.add(meshes.waterMesh);
         }
 
-        // Store in chunk map
+        // Store in chunk map (now with surfaceMesh)
         this.chunkedTerrain.chunks.set(key, {
+            surfaceMesh: meshes.surfaceMesh,
             opaqueMesh: meshes.opaqueMesh,
             waterMesh: meshes.waterMesh
         });
@@ -198,10 +211,10 @@ export class ChunkLoader {
     }
 
     /**
-     * Check if we have enough buffer to resume gameplay
-     * Used to determine if we can UNPAUSE (have enough chunks to play smoothly)
+     * Check if buffer terrain exists around player
+     * Used to determine if we can UNPAUSE (enough chunks loaded)
      * @param {Object} position - Player position
-     * @returns {boolean} True if buffer is sufficient
+     * @returns {boolean} True if buffer is full
      */
     hasBufferTerrainAround(position) {
         const playerChunkX = Math.floor(position.x / CHUNK_SIZE);
@@ -220,40 +233,28 @@ export class ChunkLoader {
     }
 
     /**
-     * Count loaded chunks within a radius around player
-     * @param {Object} position - Player position
-     * @param {number} radius - Chunk radius to check
-     * @returns {number} Number of loaded chunks in radius
+     * Update loading state based on terrain coverage
+     * @param {boolean} needsLoading - True if critical terrain is missing
      */
-    countChunksInRadius(position, radius) {
-        const playerChunkX = Math.floor(position.x / CHUNK_SIZE);
-        const playerChunkZ = Math.floor(position.z / CHUNK_SIZE);
-
-        let count = 0;
-        for (let dx = -radius; dx <= radius; dx++) {
-            for (let dz = -radius; dz <= radius; dz++) {
-                const key = `${playerChunkX + dx},${playerChunkZ + dz}`;
-                if (this.chunksWithMeshes.has(key)) {
-                    count++;
-                }
+    updateLoadingState(needsLoading) {
+        if (needsLoading !== this.isLoading) {
+            this.isLoading = needsLoading;
+            if (this.onLoadingStateChange) {
+                this.onLoadingStateChange(needsLoading);
             }
         }
-        return count;
     }
 
     /**
-     * Update chunk loading based on player position
-     * @param {Object} playerPosition - Current player position
+     * Main update loop - call every frame
+     * @param {Object} playerPosition - Player {x, z} position
      * @returns {boolean} True if game should pause for loading
      */
     update(playerPosition) {
-        if (!this.workerReady) return true; // Pause if worker not ready
+        if (!this.workerReady) return false;
 
         const playerChunkX = Math.floor(playerPosition.x / CHUNK_SIZE);
         const playerChunkZ = Math.floor(playerPosition.z / CHUNK_SIZE);
-
-        // Update worker priorities and cancel distant chunks
-        this.workerManager.updatePriorities(playerPosition.x, playerPosition.z, this.unloadRadius);
 
         // Queue chunks that need loading
         for (let dx = -this.loadRadius; dx <= this.loadRadius; dx++) {
@@ -307,50 +308,92 @@ export class ChunkLoader {
             // Currently paused - wait for full buffer before resuming
             needsLoading = !this.hasBufferTerrainAround(playerPosition);
         } else {
-            // Currently playing - pause if missing critical chunks
+            // Currently running - pause if missing safe chunks
             needsLoading = !this.hasSafeTerrainAround(playerPosition);
         }
-        
-        if (needsLoading !== this.isLoading) {
-            this.isLoading = needsLoading;
-            if (this.onLoadingStateChange) {
-                this.onLoadingStateChange(needsLoading);
-            }
-        }
 
+        this.updateLoadingState(needsLoading);
         return needsLoading;
     }
 
     /**
-     * Unload a chunk
+     * Unload a chunk and its resources
+     * Now handles surfaceMesh + opaqueMesh + waterMesh
      */
     unloadChunk(chunkX, chunkZ, key) {
-        // Cancel pending worker request
+        // Cancel pending request
         if (this.workerManager) {
             this.workerManager.cancelRequest(chunkX, chunkZ);
         }
 
-        const chunkData = this.chunkedTerrain.chunks.get(key);
+        // Remove from tracking
+        this.loadedChunks.delete(key);
+        this.chunksWithMeshes.delete(key);
 
-        if (chunkData) {
-            if (chunkData.opaqueMesh) {
-                chunkData.opaqueMesh.geometry.dispose();
-                this.chunkedTerrain.scene.remove(chunkData.opaqueMesh);
+        // Remove meshes from scene
+        const chunk = this.chunkedTerrain.chunks.get(key);
+        if (chunk) {
+            if (chunk.surfaceMesh) {
+                chunk.surfaceMesh.geometry.dispose();
+                this.chunkedTerrain.scene.remove(chunk.surfaceMesh);
             }
-            if (chunkData.waterMesh) {
-                chunkData.waterMesh.geometry.dispose();
-                this.chunkedTerrain.scene.remove(chunkData.waterMesh);
+            if (chunk.opaqueMesh) {
+                chunk.opaqueMesh.geometry.dispose();
+                this.chunkedTerrain.scene.remove(chunk.opaqueMesh);
+            }
+            if (chunk.waterMesh) {
+                chunk.waterMesh.geometry.dispose();
+                this.chunkedTerrain.scene.remove(chunk.waterMesh);
             }
             this.chunkedTerrain.chunks.delete(key);
         }
 
+        // Remove objects
         if (this.objectGenerator) {
             this.objectGenerator.unloadChunk(chunkX, chunkZ);
         }
 
-        this.loadedChunks.delete(key);
-        this.chunksWithMeshes.delete(key);
+        // Remove block cache data
+        if (this.workerManager && this.workerManager.blockCache) {
+            this.workerManager.blockCache.removeChunk(chunkX, chunkZ);
+        }
+
         this.chunksUnloaded++;
+    }
+
+    /**
+     * Load modified chunks from localStorage
+     */
+    loadModifiedChunks() {
+        try {
+            const saved = localStorage.getItem(`golemcraft_${this.worldId}_modified`);
+            if (saved) {
+                this.modifiedChunks = new Map(JSON.parse(saved));
+            }
+        } catch (e) {
+            console.warn('Failed to load modified chunks:', e);
+        }
+    }
+
+    /**
+     * Save modified chunks to localStorage
+     */
+    saveModifiedChunks() {
+        try {
+            localStorage.setItem(
+                `golemcraft_${this.worldId}_modified`,
+                JSON.stringify(Array.from(this.modifiedChunks.entries()))
+            );
+        } catch (e) {
+            console.warn('Failed to save modified chunks:', e);
+        }
+    }
+
+    /**
+     * Get worker manager for external queries
+     */
+    getWorkerManager() {
+        return this.workerManager;
     }
 
     /**
@@ -385,81 +428,11 @@ export class ChunkLoader {
     }
 
     /**
-     * Mark a block as destroyed
-     */
-    markBlockDestroyed(x, y, z) {
-        const chunkX = Math.floor(x / CHUNK_SIZE);
-        const chunkZ = Math.floor(z / CHUNK_SIZE);
-        const key = `${chunkX},${chunkZ}`;
-
-        if (!this.modifiedChunks.has(key)) {
-            this.modifiedChunks.set(key, new Set());
-        }
-        this.modifiedChunks.get(key).add(`${x},${y},${z}`);
-    }
-
-    /**
-     * Save modified chunks to localStorage
-     */
-    saveModifiedChunks() {
-        const data = {};
-        this.modifiedChunks.forEach((blocks, chunkKey) => {
-            data[chunkKey] = Array.from(blocks);
-        });
-
-        try {
-            localStorage.setItem(`${this.worldId}_chunks`, JSON.stringify(data));
-        } catch (e) {
-            console.error('Failed to save modified chunks:', e);
-        }
-    }
-
-    /**
-     * Load modified chunks from localStorage
-     */
-    loadModifiedChunks() {
-        try {
-            const data = localStorage.getItem(`${this.worldId}_chunks`);
-            if (!data) return;
-
-            const parsed = JSON.parse(data);
-            Object.entries(parsed).forEach(([chunkKey, blocks]) => {
-                this.modifiedChunks.set(chunkKey, new Set(blocks));
-            });
-        } catch (e) {
-            console.error('Failed to load modified chunks:', e);
-        }
-    }
-
-    /**
-     * Set draw distance
-     */
-    setDrawDistance(chunks) {
-        this.loadRadius = chunks;
-        this.unloadRadius = chunks + 2;
-    }
-
-    /**
-     * Get stats
-     */
-    getStats() {
-        return {
-            loaded: this.loadedChunks.size,
-            withMeshes: this.chunksWithMeshes.size,
-            modified: this.modifiedChunks.size,
-            totalLoaded: this.chunksLoaded,
-            totalUnloaded: this.chunksUnloaded,
-            isLoading: this.isLoading
-        };
-    }
-
-    /**
-     * Clean up
+     * Dispose all resources
      */
     dispose() {
         if (this.workerManager) {
             this.workerManager.dispose();
-            this.workerManager = null;
         }
         this.loadedChunks.clear();
         this.chunksWithMeshes.clear();

@@ -1280,7 +1280,7 @@ export class MobSpawner {
         this.mobs = [];
         
         // Spawn settings
-        this.maxMobs = 25;          // Reduced from 40
+        this.maxMobs = 0; //25;          // Reduced from 40
         this.spawnRadius = 45;      // Spawn within 45 blocks of player
         this.minSpawnDistance = 20; // Don't spawn too close
         this.despawnDistance = 50;  // Remove mobs more than 50 units away
