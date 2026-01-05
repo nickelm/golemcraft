@@ -163,7 +163,7 @@ function getHeightmapIndex(localX, localZ) {
  * @returns {Object} { tileIndices: [4], weights: [4] } - padded to 4 entries
  */
 function computeBlendWeights(worldX, worldZ, terrainProvider, biomes) {
-    const SAMPLE_RADIUS = 2;  // 5x5 sample area
+    const SAMPLE_RADIUS = 1;  // 5x5 sample area
     const surfaceVotes = new Map();  // surfaceType -> count
 
     // Sample biomes in a grid around the vertex
@@ -244,6 +244,41 @@ function remapWeightsToTileOrder(vertexBlend, quadTileIndices) {
     }
 
     return remappedWeights;
+}
+
+/**
+ * Compute unified tile indices from all 4 quad vertices.
+ * Collects all unique tile indices from the vertices and picks
+ * the top 4 by total weight contribution.
+ */
+function computeQuadTileIndices(blend00, blend10, blend01, blend11) {
+    const tileWeights = new Map(); // tileIndex -> totalWeight
+
+    // Accumulate weights from all 4 vertices
+    for (const blend of [blend00, blend10, blend01, blend11]) {
+        for (let i = 0; i < 4; i++) {
+            const tile = blend.tileIndices[i];
+            const weight = blend.weights[i];
+            tileWeights.set(tile, (tileWeights.get(tile) || 0) + weight);
+        }
+    }
+
+    // Sort by total weight, take top 4
+    const sorted = [...tileWeights.entries()]
+        .sort((a, b) => b[1] - a[1])
+        .slice(0, 4);
+
+    // Build result array, padded to 4 entries
+    const result = [];
+    for (let i = 0; i < 4; i++) {
+        if (i < sorted.length) {
+            result.push(sorted[i][0]);
+        } else {
+            result.push(result[0] ?? 0);
+        }
+    }
+
+    return result;
 }
 
 // ============================================================================
@@ -523,12 +558,8 @@ function generateSurfaceMesh(heightmap, voxelMask, surfaceTypes, terrainProvider
             const blend01 = computeBlendWeights(worldMinX + lx, worldMinZ + lz + 1, terrainProvider, BIOMES);
             const blend11 = computeBlendWeights(worldMinX + lx + 1, worldMinZ + lz + 1, terrainProvider, BIOMES);
 
-            // Use tile indices from cell center (same for all 4 vertices to prevent interpolation)
-            // But weights vary per vertex for smooth transitions
-            const cellCenterX = worldMinX + lx + 0.5;
-            const cellCenterZ = worldMinZ + lz + 0.5;
-            const centerBlend = computeBlendWeights(cellCenterX, cellCenterZ, terrainProvider, BIOMES);
-            const quadTileIndices = centerBlend.tileIndices;
+            // Compute tile indices from union of all 4 vertices (prevents weight loss at boundaries)
+            const quadTileIndices = computeQuadTileIndices(blend00, blend10, blend01, blend11);
 
             // Remap each vertex's weights to match the quad's tile index order
             const weights00 = remapWeightsToTileOrder(blend00, quadTileIndices);

@@ -74,6 +74,10 @@ void main() {
  * Samples 4 tiles from the atlas and blends based on weights.
  * Tile indices are CONSTANT per quad (no interpolation) - set by CPU.
  * Includes Lambert lighting for consistency with existing materials.
+ * 
+ * LIGHTING FIX: Clamps total irradiance to prevent overbright surfaces.
+ * Without clamping, ambient (0.6) + directional (0.8) = 1.4, which
+ * causes blown-out highlights, especially on bright textures like snow.
  */
 export const terrainSplatFragmentShader = /* glsl */ `
 #include <common>
@@ -163,6 +167,10 @@ void main() {
             irradiance += mix(hemisphereLights[i].groundColor, hemisphereLights[i].skyColor, hemiWeight);
         }
     #endif
+
+    // Clamp irradiance to prevent overbright surfaces
+    // Without this, ambient + directional can exceed 1.0 and blow out highlights
+    irradiance = min(irradiance, vec3(1.0));
 
     blendedColor.rgb *= irradiance;
 
@@ -259,6 +267,9 @@ void main() {
             irradiance += mix(hemisphereLights[i].groundColor, hemisphereLights[i].skyColor, hemiWeight);
         }
     #endif
+
+    // Clamp irradiance to prevent overbright surfaces
+    irradiance = min(irradiance, vec3(1.0));
 
     blendedColor.rgb *= irradiance;
 

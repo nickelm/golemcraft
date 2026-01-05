@@ -7,29 +7,39 @@ import * as THREE from 'three';
  * - Preset definitions (sunrise, day, sunset, night)
  * - Color and intensity interpolation between presets
  * - Smooth transitions during dawn/dusk
+ * 
+ * TUNING NOTES:
+ * - Day ambient + directional should sum to ~0.9-1.0 for natural lighting
+ * - Higher values cause overbright surfaces (especially snow)
+ * - Shader now clamps irradiance, but keeping presets balanced is still good practice
  */
 
 /**
  * Lighting preset definitions
+ * 
+ * Previous values caused overbright (ambient 0.6 + directional 0.8 = 1.4):
+ * - Reduced ambient from 0.6 → 0.5
+ * - Reduced directional from 0.8 → 0.5
+ * - Total irradiance on lit surfaces: ~1.0 (clamped by shader)
  */
 export const PRESETS = {
     sunrise: {
-        ambient: { color: 0xffaa66, intensity: 0.4 },
-        directional: { color: 0xff8844, intensity: 0.5 },
+        ambient: { color: 0xffaa66, intensity: 0.35 },
+        directional: { color: 0xff8844, intensity: 0.45 },
         sky: 0xff7744,
         fog: 0xffaa88,
         torch: 2.0
     },
     day: {
-        ambient: { color: 0xffffff, intensity: 0.6 },
-        directional: { color: 0xffffff, intensity: 0.8 },
+        ambient: { color: 0xffffff, intensity: 0.5 },
+        directional: { color: 0xffffff, intensity: 0.5 },
         sky: 0x87ceeb,
         fog: 0x87ceeb,
         torch: 0
     },
     sunset: {
-        ambient: { color: 0xffa366, intensity: 0.4 },
-        directional: { color: 0xff7733, intensity: 0.6 },
+        ambient: { color: 0xffa366, intensity: 0.35 },
+        directional: { color: 0xff7733, intensity: 0.5 },
         sky: 0xff6b35,
         fog: 0xd4a574,
         torch: 1.0
