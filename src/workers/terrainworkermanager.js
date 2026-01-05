@@ -269,6 +269,9 @@ export class TerrainWorkerManager {
         if (!this.isReady) return;
         if (this.pendingRequests.size === 0) return;
 
+        // Only process one chunk at a time - worker is single-threaded
+        if (this.processingChunks.size > 0) return;
+
         // Find highest priority request (lowest priority number)
         let bestKey = null;
         let bestPriority = Infinity;
@@ -342,8 +345,8 @@ export class TerrainWorkerManager {
     getStats() {
         return {
             ...this.stats,
-            pendingRequests: this.pendingRequests.size,
-            processingChunks: this.processingChunks.size,
+            pendingCount: this.pendingRequests.size,
+            processingCount: this.processingChunks.size,
             cachedChunks: this.blockCache.size
         };
     }
