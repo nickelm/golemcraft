@@ -13,18 +13,35 @@ import { InputController } from './inputcontroller.js';
 import { PerformanceMonitor } from './utils/ui/performance-monitor.js';
 import { LoadingOverlay } from './utils/ui/loading-overlay.js';
 import { TerrainLoadingIndicator } from './utils/ui/terrain-loading-indicator.js';
+import { settingsManager } from './settings.js';
 
 export class Game {
     constructor(worldData = null) {
         this.worldData = worldData;
-        
+
+        // Get resolved settings (auto values resolved to detected tier)
+        this.textureBlending = settingsManager.get('textureBlending');
+        this.drawDistance = settingsManager.get('drawDistance');
+        this.showFpsSetting = settingsManager.get('showFps');
+        this.showPerformanceSetting = settingsManager.get('showPerformance');
+        this.showLoadingIndicatorSetting = settingsManager.get('showLoadingIndicator');
+
+        // Legacy isMobile - used for some rendering options
         this.isMobile = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
+
+        // Camera far plane based on draw distance setting
+        const cameraFar = {
+            far: 1000,
+            medium: 500,
+            near: 300
+        }[this.drawDistance] || 500;
+
         this.scene = new THREE.Scene();
         this.camera = new THREE.PerspectiveCamera(
             60,
             window.innerWidth / window.innerHeight,
             0.1,
-            this.isMobile ? 500 : 1000
+            cameraFar
         );
         
         // Enable layer 1 rendering for celestial objects (sun/moon)
@@ -84,20 +101,23 @@ export class Game {
         this.keys = this.input.keys;
         this.raycaster = this.input.raycaster;
 
-        // FPS Counter
+        // FPS Counter (visibility controlled by settings)
         this.fpsCounter = new FPSCounter();
+        this.fpsCounter.element.style.display = this.showFpsSetting ? 'block' : 'none';
 
-        // Performance Monitor (desktop only by default, toggle with P key)
+        // Performance Monitor (visibility controlled by settings, toggle with P key)
         this.performanceMonitor = new PerformanceMonitor();
-        this.showPerformanceMonitor = false;
-        this.performanceMonitor.element.style.display = 'none';
-        
-        // Toggle performance monitor with P key (desktop only)
+        this.showPerformanceMonitor = this.showPerformanceSetting;
+        this.performanceMonitor.element.style.display = this.showPerformanceMonitor ? 'block' : 'none';
+
+        // Toggle performance monitor with P key
         window.addEventListener('keydown', (e) => {
             if (e.key === 'p' || e.key === 'P') {
                 this.showPerformanceMonitor = !this.showPerformanceMonitor;
-                this.performanceMonitor.element.style.display = 
+                this.performanceMonitor.element.style.display =
                     this.showPerformanceMonitor ? 'block' : 'none';
+                // Update setting
+                settingsManager.set('showPerformance', this.showPerformanceMonitor);
             }
         });
 
@@ -142,7 +162,15 @@ export class Game {
 
     async init() {
         this.scene.background = new THREE.Color(0x87ceeb);
-        this.scene.fog = new THREE.Fog(0x87ceeb, 50, 150);
+
+        // Fog distance based on draw distance setting
+        const fogDistances = {
+            far: { near: 100, far: 300 },
+            medium: { near: 50, far: 150 },
+            near: { near: 30, far: 100 }
+        };
+        const fog = fogDistances[this.drawDistance] || fogDistances.medium;
+        this.scene.fog = new THREE.Fog(0x87ceeb, fog.near, fog.far);
 
         // Show loading overlay
         this.loadingOverlay.show();
@@ -153,13 +181,16 @@ export class Game {
             ? { x: savedPos.x, y: savedPos.y, z: savedPos.z }
             : { x: 0, y: 10, z: 0 };
 
-        // Create world manager (no sync load anymore)
+        // Create world manager with graphics settings
         this.world = new WorldManager(
             this.scene,
             this.terrainTexture,
             this.seed,
             this.worldId,
-            this.isMobile
+            {
+                textureBlending: this.textureBlending,
+                drawDistance: this.drawDistance
+            }
         );
 
         // Initialize world asynchronously with progress callback
@@ -679,8 +710,8 @@ export class Game {
                 this.accumulator -= this.fixedTimestep;
             }
             
-            // Update terrain streaming indicator (non-blocking)
-            if (this.world && this.terrainIndicator) {
+            // Update terrain streaming indicator (non-blocking, if enabled in settings)
+            if (this.world && this.terrainIndicator && this.showLoadingIndicatorSetting) {
                 const pending = this.world.chunkLoader.getPendingCount();
                 const loaded = this.world.chunkLoader.chunksWithMeshes.size;
                 const total = this.world.chunkLoader.getRequiredChunkCount();

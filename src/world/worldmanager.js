@@ -32,14 +32,30 @@ import { initHeightfieldCollision } from '../collision.js';
 export { WATER_LEVEL };
 
 export class WorldManager {
-    constructor(scene, terrainTexture, seed, worldId, isMobile = false) {
+    /**
+     * @param {THREE.Scene} scene
+     * @param {THREE.Texture} terrainTexture
+     * @param {number} seed
+     * @param {string} worldId
+     * @param {Object} options - Graphics options
+     * @param {string} options.textureBlending - 'high' | 'medium' | 'low'
+     * @param {string} options.drawDistance - 'far' | 'medium' | 'near'
+     */
+    constructor(scene, terrainTexture, seed, worldId, options = {}) {
         this.scene = scene;
         this.seed = seed;
         this.worldId = worldId;
-        this.isMobile = isMobile;
+
+        // Graphics settings (resolved from settingsManager)
+        this.textureBlending = options.textureBlending || 'high';
+        this.drawDistance = options.drawDistance || 'far';
+
+        // Legacy isMobile detection - now derived from textureBlending
+        this.isMobile = this.textureBlending !== 'high';
+
         this.initialized = false;
 
-        console.log(`Creating world: seed=${seed}, id=${worldId}`);
+        console.log(`Creating world: seed=${seed}, id=${worldId}, textureBlending=${this.textureBlending}`);
 
         // Create terrain generator (kept for object placement - uses height data)
         // Note: Worker is the source of truth for collision, but objects still need
@@ -54,7 +70,7 @@ export class WorldManager {
         this.terrain.setLandmarkSystem(this.landmarkSystem);
 
         // Create chunked terrain renderer
-        this.chunkedTerrain = new ChunkedTerrain(this.scene, this.terrain, terrainTexture);
+        this.chunkedTerrain = new ChunkedTerrain(this.scene, this.terrain, terrainTexture, this.textureBlending);
 
         // Create object generator
         // Pass 'this' (WorldManager) as terrain provider - it has getHeight() and getBiome()
@@ -88,8 +104,8 @@ export class WorldManager {
         console.log('Initializing world...');
         const startTime = performance.now();
 
-        // Initialize worker
-        await this.chunkLoader.initWorker(this.seed);
+        // Initialize worker with textureBlending setting
+        await this.chunkLoader.initWorker(this.seed, this.textureBlending);
 
         // Create terrain data provider that routes to worker's block cache
         this.terrainDataProvider = new TerrainDataProvider(this.chunkLoader.workerManager);

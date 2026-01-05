@@ -9,6 +9,7 @@
  */
 
 import { sessionManager } from './session.js';
+import { settingsManager } from './settings.js';
 
 export class MenuSystem {
     constructor() {
@@ -60,6 +61,7 @@ export class MenuSystem {
         this.continueBtn = document.getElementById('btn-continue');
         this.loadBtn = document.getElementById('btn-load');
         this.newBtn = document.getElementById('btn-new');
+        this.settingsBtn = document.getElementById('btn-settings');
         this.debugBtn = document.getElementById('btn-debug');
         
         // World list screen
@@ -75,6 +77,19 @@ export class MenuSystem {
         this.createWorldBtn = document.getElementById('btn-create-world');
         this.cancelNewBtn = document.getElementById('btn-cancel-new');
         
+        // Settings screen
+        this.settingsScreen = document.getElementById('settings-screen');
+        this.settingsBackBtn = document.getElementById('btn-settings-back');
+        this.settingsResetBtn = document.getElementById('btn-settings-reset');
+        this.settingsDetectedInfo = document.getElementById('settings-detected');
+
+        // Settings controls
+        this.textureBlendingSelect = document.getElementById('setting-texture-blending');
+        this.drawDistanceSelect = document.getElementById('setting-draw-distance');
+        this.showFpsCheckbox = document.getElementById('setting-show-fps');
+        this.showPerformanceCheckbox = document.getElementById('setting-show-performance');
+        this.showLoadingCheckbox = document.getElementById('setting-show-loading');
+
         // Modal overlay
         this.modalOverlay = document.getElementById('modal-overlay');
     }
@@ -84,6 +99,7 @@ export class MenuSystem {
         this.continueBtn?.addEventListener('click', () => this.handleContinue());
         this.loadBtn?.addEventListener('click', () => this.showScreen('load'));
         this.newBtn?.addEventListener('click', () => this.showScreen('new'));
+        this.settingsBtn?.addEventListener('click', () => this.showScreen('settings'));
         this.debugBtn?.addEventListener('click', () => this.handleDebug());
         
         // World list buttons
@@ -93,6 +109,29 @@ export class MenuSystem {
         // New world buttons
         this.createWorldBtn?.addEventListener('click', () => this.handleCreateWorld());
         this.cancelNewBtn?.addEventListener('click', () => this.showScreen('main'));
+
+        // Settings buttons
+        this.settingsBackBtn?.addEventListener('click', () => this.showScreen('main'));
+        this.settingsResetBtn?.addEventListener('click', () => this.handleSettingsReset());
+
+        // Settings controls - immediate save on change
+        this.textureBlendingSelect?.addEventListener('change', (e) => {
+            settingsManager.set('textureBlending', e.target.value);
+            this.updateSettingsDetectedInfo();
+        });
+        this.drawDistanceSelect?.addEventListener('change', (e) => {
+            settingsManager.set('drawDistance', e.target.value);
+            this.updateSettingsDetectedInfo();
+        });
+        this.showFpsCheckbox?.addEventListener('change', (e) => {
+            settingsManager.set('showFps', e.target.checked);
+        });
+        this.showPerformanceCheckbox?.addEventListener('change', (e) => {
+            settingsManager.set('showPerformance', e.target.checked);
+        });
+        this.showLoadingCheckbox?.addEventListener('change', (e) => {
+            settingsManager.set('showLoadingIndicator', e.target.checked);
+        });
         
         // Enter key in inputs
         this.worldNameInput?.addEventListener('keypress', (e) => {
@@ -150,24 +189,30 @@ export class MenuSystem {
         this.mainMenu?.classList.add('hidden');
         this.worldListScreen?.classList.add('hidden');
         this.newWorldScreen?.classList.add('hidden');
+        this.settingsScreen?.classList.add('hidden');
         this.modalOverlay?.classList.add('hidden');
-        
+
         switch (screen) {
             case 'main':
                 this.mainMenu?.classList.remove('hidden');
                 this.updateMainMenu();
                 break;
-                
+
             case 'load':
                 this.worldListScreen?.classList.remove('hidden');
                 this.renderWorldList();
                 break;
-                
+
             case 'new':
                 this.newWorldScreen?.classList.remove('hidden');
                 this.worldNameInput.value = '';
                 this.worldSeedInput.value = '';
                 this.worldNameInput?.focus();
+                break;
+
+            case 'settings':
+                this.settingsScreen?.classList.remove('hidden');
+                this.loadSettingsValues();
                 break;
         }
     }
@@ -344,6 +389,67 @@ export class MenuSystem {
                 sessionManager.clearAllWorlds();
                 this.updateMainMenu();
                 this.showScreen('main');
+            }
+        );
+    }
+
+    // Settings methods
+    loadSettingsValues() {
+        // Load current values from settingsManager
+        const rawSettings = settingsManager.getAllRaw();
+
+        if (this.textureBlendingSelect) {
+            this.textureBlendingSelect.value = rawSettings.textureBlending;
+        }
+        if (this.drawDistanceSelect) {
+            this.drawDistanceSelect.value = rawSettings.drawDistance;
+        }
+        if (this.showFpsCheckbox) {
+            this.showFpsCheckbox.checked = rawSettings.showFps;
+        }
+        if (this.showPerformanceCheckbox) {
+            this.showPerformanceCheckbox.checked = rawSettings.showPerformance;
+        }
+        if (this.showLoadingCheckbox) {
+            this.showLoadingCheckbox.checked = rawSettings.showLoadingIndicator;
+        }
+
+        this.updateSettingsDetectedInfo();
+    }
+
+    updateSettingsDetectedInfo() {
+        if (!this.settingsDetectedInfo) return;
+
+        const detectedTier = settingsManager.getDetectedTier();
+        const detectedDistance = settingsManager.getDetectedDrawDistance();
+        const resolvedTier = settingsManager.get('textureBlending');
+        const resolvedDistance = settingsManager.get('drawDistance');
+
+        const tierLabels = {
+            high: 'High (4-texture)',
+            medium: 'Medium (2-texture)',
+            low: 'Low (dithered)'
+        };
+
+        const distanceLabels = {
+            far: 'Far',
+            medium: 'Medium',
+            near: 'Near'
+        };
+
+        this.settingsDetectedInfo.innerHTML = `
+            <strong>Detected:</strong> ${tierLabels[detectedTier]} graphics, ${distanceLabels[detectedDistance]} draw distance<br>
+            <strong>Active:</strong> ${tierLabels[resolvedTier]} graphics, ${distanceLabels[resolvedDistance]} draw distance
+        `;
+    }
+
+    handleSettingsReset() {
+        this.showConfirmDialog(
+            'Reset Settings?',
+            'This will restore all settings to their default values.',
+            () => {
+                settingsManager.reset();
+                this.loadSettingsValues();
             }
         );
     }

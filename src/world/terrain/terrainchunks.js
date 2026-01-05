@@ -3,7 +3,9 @@ import { BLOCK_TYPES, WATER_LEVEL } from './terraingenerator.js';
 import {
     terrainSplatVertexShader,
     terrainSplatFragmentShader,
-    terrainSplatFragmentShaderMobile
+    terrainSplatFragmentShaderMobile,
+    terrainSplatVertexShaderLowPower,
+    terrainSplatFragmentShaderLowPower
 } from '../../shaders/terrainsplat.js';
 
 /**
@@ -95,28 +97,28 @@ const FACE_AO_NEIGHBORS = {
 
 const AO_LEVELS = [1.0, 0.75, 0.5, 0.35];
 
-/**
- * Detect if running on mobile device
- */
-function isMobileDevice() {
-    return /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
-}
-
 export class ChunkedTerrain {
-    constructor(scene, terrain, terrainTexture) {
+    /**
+     * @param {THREE.Scene} scene
+     * @param {Object} terrain
+     * @param {THREE.Texture} terrainTexture
+     * @param {string} textureBlending - 'high' | 'medium' | 'low' (texture quality tier)
+     */
+    constructor(scene, terrain, terrainTexture, textureBlending = 'high') {
         this.scene = scene;
         this.terrain = terrain;
         this.terrainTexture = terrainTexture;
+        this.textureBlending = textureBlending;
         this.chunks = new Map();
 
-        // Detect platform for material selection
-        const isMobile = isMobileDevice();
-
         // Create splatting material for surface mesh (smooth terrain with biome blending)
-        this.surfaceMaterial = this.createSplatMaterial(terrainTexture, isMobile);
+        this.surfaceMaterial = this.createSplatMaterial(terrainTexture, textureBlending);
 
-        if (!isMobile) {
-            // PBR materials for desktop - better lighting response
+        // Material selection based on tier
+        const useSimpleMaterials = (textureBlending === 'low' || textureBlending === 'medium');
+
+        if (!useSimpleMaterials) {
+            // PBR materials for desktop/high tier - better lighting response
             this.opaqueMaterial = new THREE.MeshStandardMaterial({
                 map: terrainTexture,
                 side: THREE.FrontSide,
@@ -137,9 +139,9 @@ export class ChunkedTerrain {
                 depthWrite: false     // Prevents transparency sorting issues
             });
 
-            console.log('Using PBR materials + splatting shader (desktop)');
+            console.log('Using PBR materials + 4-texture splatting (high)');
         } else {
-            // Lambert materials for mobile - better performance
+            // Lambert materials for mobile/low tier - better performance
             this.opaqueMaterial = new THREE.MeshLambertMaterial({
                 map: terrainTexture,
                 side: THREE.FrontSide,
@@ -155,7 +157,11 @@ export class ChunkedTerrain {
                 depthWrite: false
             });
 
-            console.log('Using Lambert materials + mobile splatting (2-texture)');
+            if (textureBlending === 'low') {
+                console.log('Using Lambert materials + dithered tiles (low)');
+            } else {
+                console.log('Using Lambert materials + 2-texture splatting (medium)');
+            }
         }
 
         // Stats
@@ -164,15 +170,32 @@ export class ChunkedTerrain {
     }
 
     /**
-     * Create the texture splatting ShaderMaterial for smooth terrain
+     * Create the texture splatting/dithering ShaderMaterial for smooth terrain
      * @param {THREE.Texture} terrainTexture - The terrain atlas texture
-     * @param {boolean} isMobile - Use simplified 2-texture blend on mobile
+     * @param {string} textureBlending - 'high' | 'medium' | 'low'
      * @returns {THREE.ShaderMaterial}
      */
-    createSplatMaterial(terrainTexture, isMobile) {
-        const fragmentShader = isMobile
-            ? terrainSplatFragmentShaderMobile
-            : terrainSplatFragmentShader;
+    createSplatMaterial(terrainTexture, textureBlending) {
+        let vertexShader, fragmentShader;
+
+        switch (textureBlending) {
+            case 'low':
+                // Dithered single-texture mode
+                vertexShader = terrainSplatVertexShaderLowPower;
+                fragmentShader = terrainSplatFragmentShaderLowPower;
+                break;
+            case 'medium':
+                // 2-texture blending
+                vertexShader = terrainSplatVertexShader;
+                fragmentShader = terrainSplatFragmentShaderMobile;
+                break;
+            case 'high':
+            default:
+                // 4-texture blending
+                vertexShader = terrainSplatVertexShader;
+                fragmentShader = terrainSplatFragmentShader;
+                break;
+        }
 
         return new THREE.ShaderMaterial({
             uniforms: THREE.UniformsUtils.merge([
@@ -184,7 +207,7 @@ export class ChunkedTerrain {
                     uAtlas: { value: terrainTexture }
                 }
             ]),
-            vertexShader: terrainSplatVertexShader,
+            vertexShader: vertexShader,
             fragmentShader: fragmentShader,
             lights: true,
             fog: true,

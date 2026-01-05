@@ -56,9 +56,10 @@ export class ChunkLoader {
     /**
      * Initialize the terrain worker
      * @param {number} seed - World seed
+     * @param {string} textureBlending - 'high' | 'medium' | 'low' (controls dithering mode in worker)
      * @returns {Promise} Resolves when worker is ready
      */
-    async initWorker(seed) {
+    async initWorker(seed, textureBlending = 'high') {
         this.workerManager = new TerrainWorkerManager(
             this.chunkedTerrain.scene,
             this.chunkedTerrain.opaqueMaterial,
@@ -67,9 +68,9 @@ export class ChunkLoader {
             this.chunkedTerrain.surfaceMaterial  // Splatting shader for smooth terrain
         );
 
-        await this.workerManager.init(seed);
+        await this.workerManager.init(seed, textureBlending);
         this.workerReady = true;
-        console.log('ChunkLoader: Worker ready');
+        console.log(`ChunkLoader: Worker ready (textureBlending=${textureBlending})`);
     }
 
     /**

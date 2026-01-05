@@ -43,8 +43,8 @@ const SURFACE_TILE_INDICES = {
 };
 
 // Texture splatting noise and height bias configuration
-const BLEND_NOISE_SCALE = 0.3;       // Spatial frequency of noise
-const BLEND_NOISE_AMPLITUDE = 0.15;  // How much noise affects weights (±15%)
+const BLEND_NOISE_SCALE = 0.2;       // Spatial frequency of noise (lower = smoother)
+const BLEND_NOISE_AMPLITUDE = 0.08;  // How much noise affects weights (±8%) - reduced for less spotty dithering
 
 const HEIGHT_BIAS = {
     snow:  { minHeight: 18, bonus: 0.3 },
@@ -158,14 +158,23 @@ function getHeightmapIndex(localX, localZ) {
 }
 
 /**
- * Simple hash function for blend noise
+ * Improved hash function for blend noise with better distribution
+ * Uses multiple rounds of mixing for more uniform results
  * @returns {number} Value between 0 and 1
  */
 function blendHash(x, z, seed = 12345) {
-    let h = seed + x * 374761393 + z * 668265263;
-    h = (h ^ (h >> 13)) * 1274126177;
-    return ((h ^ (h >> 16)) & 0xffffffff) / 0xffffffff;
+    // Use 32-bit safe operations
+    let h = (seed | 0) >>> 0;
+    h = ((h + (x | 0)) | 0) >>> 0;
+    h = (h ^ (h >>> 16)) >>> 0;
+    h = ((h * 0x85ebca6b) | 0) >>> 0;
+    h = ((h + (z | 0)) | 0) >>> 0;
+    h = (h ^ (h >>> 13)) >>> 0;
+    h = ((h * 0xc2b2ae35) | 0) >>> 0;
+    h = (h ^ (h >>> 16)) >>> 0;
+    return h / 0xffffffff;
 }
+
 
 /**
  * Interpolated noise for smooth blend perturbation
@@ -207,7 +216,7 @@ function blendNoise(x, z, seed) {
  * @returns {Object} { tileIndices: [4], weights: [4] } - padded to 4 entries
  */
 function computeBlendWeights(worldX, worldZ, terrainHeight, terrainProvider, biomes) {
-    const SAMPLE_RADIUS = 1;  // 3x3 sample area
+    const SAMPLE_RADIUS = 1;  // 3x3 sample area - narrower transitions, less spotty dithering
     const surfaceVotes = new Map();  // surfaceType -> count
 
     // Sample biomes in a grid around the vertex
@@ -292,6 +301,63 @@ function computeBlendWeights(worldX, worldZ, terrainHeight, terrainProvider, bio
     }
 
     return { tileIndices, weights };
+}
+
+/**
+ * Select a single tile for a quad using noise-based dithering.
+ * Uses deterministic hash noise to create natural-looking stippled
+ * transitions at biome boundaries.
+ *
+ * This is used in low-power mode instead of texture blending,
+ * creating a classic 8-bit style stippled transition effect.
+ *
+ * @param {number} worldX - World X coordinate of quad center
+ * @param {number} worldZ - World Z coordinate of quad center
+ * @param {number} terrainHeight - Height at this position
+ * @param {Object} terrainProvider - Provider with getBiome()
+ * @param {Object} biomes - BIOMES configuration
+ * @returns {number} Single tile index for this quad
+ */
+function computeDitheredTileSelection(worldX, worldZ, terrainHeight, terrainProvider, biomes) {
+    // Get blend weights using existing function
+    const blend = computeBlendWeights(worldX, worldZ, terrainHeight, terrainProvider, biomes);
+
+    // Get the two most significant tiles
+    const primaryTile = blend.tileIndices[0];
+    const secondaryTile = blend.tileIndices[1];
+    const secondaryWeight = blend.weights[1];
+
+    // If completely dominant tile (>95% weight), skip dithering
+    if (secondaryWeight < 0.05) {
+        return primaryTile;
+    }
+
+    // Use integer coordinates for hash
+    const ix = Math.floor(worldX);
+    const iz = Math.floor(worldZ);
+
+    // Generate per-quad noise using hash function
+    // The hash function should give unique values for each (ix, iz) pair
+    const noise = blendHash(ix, iz, 54321);
+
+    // Threshold dithering: compare noise against secondary weight
+    // If noise < secondary weight, pick secondary tile
+    // This creates natural-looking stippled patterns
+    if (noise < secondaryWeight) {
+        return secondaryTile;
+    }
+
+    // Also check third tile if it has significant weight
+    const tertiaryWeight = blend.weights[2];
+    if (tertiaryWeight > 0.08) {
+        // Use different seed for tertiary tile check
+        const noise2 = blendHash(ix, iz, 98765);
+        if (noise2 < tertiaryWeight) {
+            return blend.tileIndices[2];
+        }
+    }
+
+    return primaryTile;
 }
 
 /**
@@ -610,7 +676,7 @@ function computeHeightmapAO(heightmap, lx, lz, terrainProvider, worldMinX, world
     return Math.max(0.5, 1.0 - occlusion);
 }
 
-function generateSurfaceMesh(heightmap, voxelMask, surfaceTypes, terrainProvider, chunkX, chunkZ) {
+function generateSurfaceMesh(heightmap, voxelMask, surfaceTypes, terrainProvider, chunkX, chunkZ, useDithering = false) {
     const worldMinX = chunkX * CHUNK_SIZE;
     const worldMinZ = chunkZ * CHUNK_SIZE;
 
@@ -619,9 +685,13 @@ function generateSurfaceMesh(heightmap, voxelMask, surfaceTypes, terrainProvider
     const uvs = [];
     const colors = [];
     const indices = [];
-    // New splatting attributes
+
+    // Splatting attributes - only used when NOT dithering
     const tileIndices = [];   // vec4: 4 tile indices per vertex
     const blendWeights = [];  // vec4: 4 blend weights per vertex
+
+    // Dithering attribute - only used when dithering
+    const selectedTiles = []; // float: 1 tile index per vertex
 
     for (let lz = 0; lz < CHUNK_SIZE; lz++) {
         for (let lx = 0; lx < CHUNK_SIZE; lx++) {
@@ -641,71 +711,117 @@ function generateSurfaceMesh(heightmap, voxelMask, surfaceTypes, terrainProvider
             const ao01 = computeHeightmapAO(heightmap, lx, lz + 1, terrainProvider, worldMinX, worldMinZ);
             const ao11 = computeHeightmapAO(heightmap, lx + 1, lz + 1, terrainProvider, worldMinX, worldMinZ);
 
-            // Compute blend weights at each vertex position (pass height for height-based bias)
-            const blend00 = computeBlendWeights(worldMinX + lx, worldMinZ + lz, h00, terrainProvider, BIOMES);
-            const blend10 = computeBlendWeights(worldMinX + lx + 1, worldMinZ + lz, h10, terrainProvider, BIOMES);
-            const blend01 = computeBlendWeights(worldMinX + lx, worldMinZ + lz + 1, h01, terrainProvider, BIOMES);
-            const blend11 = computeBlendWeights(worldMinX + lx + 1, worldMinZ + lz + 1, h11, terrainProvider, BIOMES);
-
-            // Compute tile indices from union of all 4 vertices (prevents weight loss at boundaries)
-            const quadTileIndices = computeQuadTileIndices(blend00, blend10, blend01, blend11);
-
-            // Remap each vertex's weights to match the quad's tile index order
-            const weights00 = remapWeightsToTileOrder(blend00, quadTileIndices);
-            const weights10 = remapWeightsToTileOrder(blend10, quadTileIndices);
-            const weights01 = remapWeightsToTileOrder(blend01, quadTileIndices);
-            const weights11 = remapWeightsToTileOrder(blend11, quadTileIndices);
-
             // Pass LOCAL tile UVs (0-1) for splatting shader to use
             const baseVertex = positions.length / 3;
 
-            // Vertex 0: (lx, lz) -> local UV (0, 0)
-            positions.push(lx, h00, lz);
-            normals.push(...n00);
-            uvs.push(0, 0);
-            colors.push(ao00, ao00, ao00);
-            tileIndices.push(...quadTileIndices);
-            blendWeights.push(...weights00);
+            if (useDithering) {
+                // DITHERED MODE: Pick one tile for entire quad using weighted dithering
+                const centerX = worldMinX + lx + 0.5;
+                const centerZ = worldMinZ + lz + 0.5;
+                const centerH = (h00 + h10 + h01 + h11) / 4;
+                const selectedTile = computeDitheredTileSelection(
+                    centerX, centerZ, centerH, terrainProvider, BIOMES
+                );
 
-            // Vertex 1: (lx+1, lz) -> local UV (1, 0)
-            positions.push(lx + 1, h10, lz);
-            normals.push(...n10);
-            uvs.push(1, 0);
-            colors.push(ao10, ao10, ao10);
-            tileIndices.push(...quadTileIndices);
-            blendWeights.push(...weights10);
+                // Vertex 0: (lx, lz) -> local UV (0, 0)
+                positions.push(lx, h00, lz);
+                normals.push(...n00);
+                uvs.push(0, 0);
+                colors.push(ao00, ao00, ao00);
+                selectedTiles.push(selectedTile);
 
-            // Vertex 2: (lx+1, lz+1) -> local UV (1, 1)
-            positions.push(lx + 1, h11, lz + 1);
-            normals.push(...n11);
-            uvs.push(1, 1);
-            colors.push(ao11, ao11, ao11);
-            tileIndices.push(...quadTileIndices);
-            blendWeights.push(...weights11);
+                // Vertex 1: (lx+1, lz) -> local UV (1, 0)
+                positions.push(lx + 1, h10, lz);
+                normals.push(...n10);
+                uvs.push(1, 0);
+                colors.push(ao10, ao10, ao10);
+                selectedTiles.push(selectedTile);
 
-            // Vertex 3: (lx, lz+1) -> local UV (0, 1)
-            positions.push(lx, h01, lz + 1);
-            normals.push(...n01);
-            uvs.push(0, 1);
-            colors.push(ao01, ao01, ao01);
-            tileIndices.push(...quadTileIndices);
-            blendWeights.push(...weights01);
+                // Vertex 2: (lx+1, lz+1) -> local UV (1, 1)
+                positions.push(lx + 1, h11, lz + 1);
+                normals.push(...n11);
+                uvs.push(1, 1);
+                colors.push(ao11, ao11, ao11);
+                selectedTiles.push(selectedTile);
+
+                // Vertex 3: (lx, lz+1) -> local UV (0, 1)
+                positions.push(lx, h01, lz + 1);
+                normals.push(...n01);
+                uvs.push(0, 1);
+                colors.push(ao01, ao01, ao01);
+                selectedTiles.push(selectedTile);
+            } else {
+                // SPLATTING MODE: Compute blend weights for texture blending
+                const blend00 = computeBlendWeights(worldMinX + lx, worldMinZ + lz, h00, terrainProvider, BIOMES);
+                const blend10 = computeBlendWeights(worldMinX + lx + 1, worldMinZ + lz, h10, terrainProvider, BIOMES);
+                const blend01 = computeBlendWeights(worldMinX + lx, worldMinZ + lz + 1, h01, terrainProvider, BIOMES);
+                const blend11 = computeBlendWeights(worldMinX + lx + 1, worldMinZ + lz + 1, h11, terrainProvider, BIOMES);
+
+                // Compute tile indices from union of all 4 vertices (prevents weight loss at boundaries)
+                const quadTileIndices = computeQuadTileIndices(blend00, blend10, blend01, blend11);
+
+                // Remap each vertex's weights to match the quad's tile index order
+                const weights00 = remapWeightsToTileOrder(blend00, quadTileIndices);
+                const weights10 = remapWeightsToTileOrder(blend10, quadTileIndices);
+                const weights01 = remapWeightsToTileOrder(blend01, quadTileIndices);
+                const weights11 = remapWeightsToTileOrder(blend11, quadTileIndices);
+
+                // Vertex 0: (lx, lz) -> local UV (0, 0)
+                positions.push(lx, h00, lz);
+                normals.push(...n00);
+                uvs.push(0, 0);
+                colors.push(ao00, ao00, ao00);
+                tileIndices.push(...quadTileIndices);
+                blendWeights.push(...weights00);
+
+                // Vertex 1: (lx+1, lz) -> local UV (1, 0)
+                positions.push(lx + 1, h10, lz);
+                normals.push(...n10);
+                uvs.push(1, 0);
+                colors.push(ao10, ao10, ao10);
+                tileIndices.push(...quadTileIndices);
+                blendWeights.push(...weights10);
+
+                // Vertex 2: (lx+1, lz+1) -> local UV (1, 1)
+                positions.push(lx + 1, h11, lz + 1);
+                normals.push(...n11);
+                uvs.push(1, 1);
+                colors.push(ao11, ao11, ao11);
+                tileIndices.push(...quadTileIndices);
+                blendWeights.push(...weights11);
+
+                // Vertex 3: (lx, lz+1) -> local UV (0, 1)
+                positions.push(lx, h01, lz + 1);
+                normals.push(...n01);
+                uvs.push(0, 1);
+                colors.push(ao01, ao01, ao01);
+                tileIndices.push(...quadTileIndices);
+                blendWeights.push(...weights01);
+            }
 
             indices.push(baseVertex, baseVertex + 2, baseVertex + 1);
             indices.push(baseVertex, baseVertex + 3, baseVertex + 2);
         }
     }
 
-    return {
+    // Return appropriate data structure based on mode
+    const result = {
         positions: new Float32Array(positions),
         normals: new Float32Array(normals),
         uvs: new Float32Array(uvs),
         colors: new Float32Array(colors),
         indices: new Uint32Array(indices),
-        tileIndices: new Float32Array(tileIndices),
-        blendWeights: new Float32Array(blendWeights),
         isEmpty: positions.length === 0
     };
+
+    if (useDithering) {
+        result.selectedTiles = new Float32Array(selectedTiles);
+    } else {
+        result.tileIndices = new Float32Array(tileIndices);
+        result.blendWeights = new Float32Array(blendWeights);
+    }
+
+    return result;
 }
 
 // ============================================================================
@@ -868,19 +984,19 @@ function generateVoxelMesh(terrainProvider, voxelMask, chunkX, chunkZ) {
 // MAIN
 // ============================================================================
 
-export function generateChunkData(terrainProvider, chunkX, chunkZ) {
+export function generateChunkData(terrainProvider, chunkX, chunkZ, useDithering = false) {
     const worldMinX = chunkX * CHUNK_SIZE;
     const worldMinZ = chunkZ * CHUNK_SIZE;
-    
+
     const heightmap = generateHeightmap(terrainProvider, chunkX, chunkZ);
     const voxelMask = generateVoxelMask(terrainProvider, chunkX, chunkZ);
     const surfaceTypes = generateSurfaceTypes(terrainProvider, chunkX, chunkZ);
     const blockData = generateBlockData(terrainProvider, chunkX, chunkZ);
-    
-    const surface = generateSurfaceMesh(heightmap, voxelMask, surfaceTypes, terrainProvider, chunkX, chunkZ);
+
+    const surface = generateSurfaceMesh(heightmap, voxelMask, surfaceTypes, terrainProvider, chunkX, chunkZ, useDithering);
     const { opaque: voxelOpaque } = generateVoxelMesh(terrainProvider, voxelMask, chunkX, chunkZ);
     const water = generateWaterMesh(heightmap);
-    
+
     return {
         heightmap,
         voxelMask,
@@ -895,7 +1011,7 @@ export function generateChunkData(terrainProvider, chunkX, chunkZ) {
 }
 
 export function getTransferables(chunkData) {
-    return [
+    const transferables = [
         chunkData.heightmap.buffer,
         chunkData.voxelMask.buffer,
         chunkData.surfaceTypes.buffer,
@@ -904,8 +1020,6 @@ export function getTransferables(chunkData) {
         chunkData.surface.uvs.buffer,
         chunkData.surface.colors.buffer,
         chunkData.surface.indices.buffer,
-        chunkData.surface.tileIndices.buffer,    // Splatting: tile indices
-        chunkData.surface.blendWeights.buffer,   // Splatting: blend weights
         chunkData.opaque.positions.buffer,
         chunkData.opaque.normals.buffer,
         chunkData.opaque.uvs.buffer,
@@ -918,4 +1032,16 @@ export function getTransferables(chunkData) {
         chunkData.water.indices.buffer,
         chunkData.blockData.buffer
     ];
+
+    // Add mode-specific surface buffers
+    if (chunkData.surface.selectedTiles) {
+        // Dithering mode: single tile per vertex
+        transferables.push(chunkData.surface.selectedTiles.buffer);
+    } else if (chunkData.surface.tileIndices && chunkData.surface.blendWeights) {
+        // Splatting mode: 4 tiles + weights per vertex
+        transferables.push(chunkData.surface.tileIndices.buffer);
+        transferables.push(chunkData.surface.blendWeights.buffer);
+    }
+
+    return transferables;
 }

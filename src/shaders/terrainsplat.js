@@ -181,6 +181,132 @@ void main() {
 `;
 
 /**
+ * Vertex Shader - Low-power version (single tile per quad)
+ *
+ * Simplified version for low-power devices that receives a single
+ * pre-selected tile index instead of 4 tile indices with blend weights.
+ * Tile selection happens during mesh generation using dithering.
+ */
+export const terrainSplatVertexShaderLowPower = /* glsl */ `
+#include <common>
+#include <color_pars_vertex>
+#include <fog_pars_vertex>
+
+attribute float aSelectedTile;
+
+varying float vSelectedTile;
+varying vec3 vVertexColor;
+varying vec2 vLocalUV;
+varying vec3 vNormal;
+
+void main() {
+    // Pass single tile index (constant per quad)
+    vSelectedTile = aSelectedTile;
+
+    #include <color_vertex>
+    vVertexColor = vColor;  // AO from vertex colors
+
+    // Pass local UV (0-1 within quad) for texture sampling
+    vLocalUV = uv;
+
+    // Normal in view space for lighting
+    vNormal = normalize(normalMatrix * normal);
+
+    // Model-view transform
+    vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
+    gl_Position = projectionMatrix * mvPosition;
+
+    #include <fog_vertex>
+}
+`;
+
+/**
+ * Fragment Shader - Low-power version (single texture, no blending)
+ *
+ * Maximum performance version that only samples ONE texture per fragment.
+ * The tile is pre-selected during mesh generation using weighted dithering,
+ * creating a stippled/8-bit transition effect at biome boundaries.
+ */
+export const terrainSplatFragmentShaderLowPower = /* glsl */ `
+#include <common>
+#include <packing>
+#include <fog_pars_fragment>
+#include <bsdfs>
+#include <lights_pars_begin>
+
+uniform sampler2D uAtlas;
+
+varying float vSelectedTile;
+varying vec3 vVertexColor;
+varying vec2 vLocalUV;
+varying vec3 vNormal;
+
+// Atlas configuration
+#define SPLAT_ATLAS_SIZE 720.0
+#define SPLAT_CELL_SIZE 72.0
+#define SPLAT_TILE_SIZE 64.0
+#define SPLAT_GUTTER 4.0
+#define SPLAT_TILES_PER_ROW 10.0
+
+vec4 sampleTile(float tileIndex, vec2 localUV) {
+    float col = mod(tileIndex, SPLAT_TILES_PER_ROW);
+    float row = floor(tileIndex / SPLAT_TILES_PER_ROW);
+
+    float uMin = (col * SPLAT_CELL_SIZE + SPLAT_GUTTER) / SPLAT_ATLAS_SIZE;
+    float vMax = 1.0 - (row * SPLAT_CELL_SIZE + SPLAT_GUTTER) / SPLAT_ATLAS_SIZE;
+    float tileUVSize = SPLAT_TILE_SIZE / SPLAT_ATLAS_SIZE;
+
+    vec2 atlasUV = vec2(
+        uMin + localUV.x * tileUVSize,
+        vMax - localUV.y * tileUVSize
+    );
+
+    return texture2D(uAtlas, atlasUV);
+}
+
+void main() {
+    // SINGLE texture lookup - maximum performance
+    vec4 color = sampleTile(vSelectedTile, vLocalUV);
+
+    // Apply ambient occlusion from vertex colors
+    color.rgb *= vVertexColor;
+
+    // Lambert lighting (same as mobile version but simpler)
+    vec3 normal = normalize(vNormal);
+
+    // Ambient light
+    vec3 irradiance = ambientLightColor;
+
+    // Directional lights
+    #if NUM_DIR_LIGHTS > 0
+        for (int i = 0; i < NUM_DIR_LIGHTS; i++) {
+            vec3 lightDir = directionalLights[i].direction;
+            float NdotL = max(dot(normal, lightDir), 0.0);
+            irradiance += directionalLights[i].color * NdotL;
+        }
+    #endif
+
+    // Hemisphere light
+    #if NUM_HEMI_LIGHTS > 0
+        for (int i = 0; i < NUM_HEMI_LIGHTS; i++) {
+            float dotNL = dot(normal, hemisphereLights[i].direction);
+            float hemiWeight = 0.5 * dotNL + 0.5;
+            irradiance += mix(hemisphereLights[i].groundColor, hemisphereLights[i].skyColor, hemiWeight);
+        }
+    #endif
+
+    // Clamp irradiance to prevent overbright surfaces
+    irradiance = min(irradiance, vec3(1.0));
+
+    color.rgb *= irradiance;
+
+    gl_FragColor = color;
+
+    #include <fog_fragment>
+}
+`;
+
+/**
  * Fragment Shader - Mobile version (2 texture blending)
  *
  * Simplified version that only blends 2 textures for better mobile performance.

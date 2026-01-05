@@ -314,7 +314,7 @@ function doGenerateChunk(data) {
     terrainProvider.prepareLandmarksForChunk(data.chunkX, data.chunkZ);
 
     const startTime = performance.now();
-    const chunkData = generateChunkData(terrainProvider, data.chunkX, data.chunkZ);
+    const chunkData = generateChunkData(terrainProvider, data.chunkX, data.chunkZ, useDithering);
     const genTime = performance.now() - startTime;
 
     const transferables = getTransferables(chunkData);
@@ -333,6 +333,7 @@ function doGenerateChunk(data) {
 // ============================================================================
 
 let terrainProvider = null;
+let useDithering = false;
 
 self.onmessage = function(e) {
     const { type, data } = e.data;
@@ -340,9 +341,12 @@ self.onmessage = function(e) {
     switch (type) {
         case 'init':
             terrainProvider = new WorkerTerrainProvider(data.seed);
+            // Set dithering mode based on texture blending tier
+            useDithering = (data.textureBlending === 'low');
             if (DEBUG_CHUNK_DELAY_MS > 0) {
                 console.warn(`[WORKER] DEBUG MODE: ${DEBUG_CHUNK_DELAY_MS}ms delay per chunk`);
             }
+            console.log(`[WORKER] Initialized with textureBlending=${data.textureBlending}, useDithering=${useDithering}`);
             self.postMessage({ type: 'ready' });
             break;
 

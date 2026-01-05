@@ -203,8 +203,8 @@ export class TerrainWorkerManager {
     }
 
     /**
-     * Create a surface mesh with splatting attributes
-     * Includes additional vertex attributes for texture blending
+     * Create a surface mesh with splatting or dithering attributes
+     * Includes additional vertex attributes for texture handling
      */
     createSurfaceMesh(data, material) {
         const geometry = new THREE.BufferGeometry();
@@ -215,8 +215,12 @@ export class TerrainWorkerManager {
         geometry.setAttribute('uv', new THREE.BufferAttribute(data.uvs, 2));
         geometry.setAttribute('color', new THREE.BufferAttribute(data.colors, 3));
 
-        // Splatting attributes for texture blending
-        if (data.tileIndices && data.blendWeights) {
+        // Check which mode the data was generated in
+        if (data.selectedTiles) {
+            // Dithering mode: single tile per vertex
+            geometry.setAttribute('aSelectedTile', new THREE.BufferAttribute(data.selectedTiles, 1));
+        } else if (data.tileIndices && data.blendWeights) {
+            // Splatting mode: 4 tiles + weights per vertex
             geometry.setAttribute('aTileIndices', new THREE.BufferAttribute(data.tileIndices, 4));
             geometry.setAttribute('aBlendWeights', new THREE.BufferAttribute(data.blendWeights, 4));
         }
@@ -228,14 +232,16 @@ export class TerrainWorkerManager {
     }
 
     /**
-     * Initialize the worker with world seed
+     * Initialize the worker with world seed and settings
+     * @param {number} seed - World seed
+     * @param {string} textureBlending - 'high' | 'medium' | 'low'
      */
-    init(seed) {
+    init(seed, textureBlending = 'high') {
         return new Promise((resolve) => {
             this.readyResolve = resolve;
             this.worker.postMessage({
                 type: 'init',
-                data: { seed }
+                data: { seed, textureBlending }
             });
         });
     }

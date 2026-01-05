@@ -1,6 +1,6 @@
 # GolemCraft
 
-A 3D voxel adventure game built with Three.js, targeting 60 FPS on iPad.
+A 3D heightmap/voxel RPG adventure game built with Three.js, playable in first-person or third-person view (WoW-style). Targets 60 FPS on modern iPads.
 
 ## Quick Start
 
@@ -9,6 +9,14 @@ npm install
 npm run dev      # Development server at localhost:5173
 npm run build    # Production build to dist/
 ```
+
+## Game Design
+
+**Genre**: Single-player RPG with voxel aesthetics. "Theme park MMO for one"—procedurally generated worlds with diverse biomes, landmarks, and adventure-focused gameplay.
+
+**Perspective**: First-person or third-person camera (toggle), inspired by World of Warcraft.
+
+**Visual target**: Eye-level detail with voxel charm. PBR materials planned for future iterations.
 
 ## Architecture Overview
 
@@ -28,6 +36,7 @@ npm run build    # Production build to dist/
 ```
 src/
 ├── workers/           # Web workers (terrainworker.js is critical)
+├── shaders/           # GLSL shaders
 ├── world/
 │   ├── terrain/       # Terrain generation, chunks, biomes
 │   └── landmarks/     # Procedural structures (temples)
@@ -43,6 +52,7 @@ src/
 - `src/world/terrain/chunkdatagenerator.js` - Pure functions for mesh generation
 - `src/world/terrain/biomesystem.js` - Biome definitions (source of truth for biome config)
 - `src/world/terrain/terrainchunks.js` - Chunk mesh management
+- `src/shaders/` - Custom GLSL shaders
 - `src/game.js` - Main game loop and initialization
 
 ## Texture Atlas
@@ -52,9 +62,15 @@ src/
 Block types defined in `terraingenerator.js`:
 - grass [0,0], stone [1,0], snow [2,0], dirt [3,0], water [4,0], sand [5,0], ice [6,0], mayan_stone [7,0]
 
-## Performance Constraints
+## Performance Targets
 
-- Target: 60 FPS on iPad
+| Device | Target FPS |
+|--------|------------|
+| iPad (current gen) | 60 |
+| iPhone 14 Pro | 60 |
+| iPad 6th gen | 15–25 |
+
+**Optimizations**:
 - Chunk size: 16×16
 - Load radius: 8 chunks, unload radius: 10 chunks
 - Surface-only water rendering (no side faces)
@@ -71,8 +87,9 @@ Block types defined in `terraingenerator.js`:
 
 Test on multiple devices:
 - Desktop (Chrome/Firefox)
-- iPad (Safari)
-- iPhone (Safari)
+- iPad current gen (Safari) — must hit 60 FPS
+- iPad 6th gen (Safari) — 15–25 FPS acceptable
+- iPhone 14 Pro (Safari) — must hit 60 FPS
 
 Debug tools:
 - `P` key: Performance monitor
@@ -96,3 +113,7 @@ See TODO file for current bugs and planned features.
 **Adding a landmark**:
 1. Create definition in `landmarkdefinitions.js`
 2. Register in `WorkerLandmarkSystem`
+
+**Adding a shader**:
+1. Create `.glsl` or `.vert`/`.frag` files in `src/shaders/`
+2. Import via Vite's raw loader or shader chunk system

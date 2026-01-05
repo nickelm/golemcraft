@@ -25,6 +25,9 @@
             <button class="menu-btn" id="btn-new">
                 New World
             </button>
+            <button class="menu-btn" id="btn-settings">
+                Settings
+            </button>
             <button class="menu-btn menu-btn--small menu-btn--danger" id="btn-debug">
                 Clear Data
             </button>
@@ -74,6 +77,91 @@
             </div>
         </div>
         
+        <!-- Settings Screen -->
+        <div class="menu-panel hidden" id="settings-screen">
+            <div class="panel-header">Settings</div>
+
+            <div class="settings-group">
+                <div class="setting-row">
+                    <div class="setting-label">
+                        <span class="setting-name">Texture Blending</span>
+                        <span class="setting-desc">Quality of biome transitions</span>
+                    </div>
+                    <div class="setting-control">
+                        <select class="setting-select" id="setting-texture-blending">
+                            <option value="auto">Auto</option>
+                            <option value="high">High (4-texture)</option>
+                            <option value="medium">Medium (2-texture)</option>
+                            <option value="low">Low (dithered)</option>
+                        </select>
+                    </div>
+                </div>
+
+                <div class="setting-row">
+                    <div class="setting-label">
+                        <span class="setting-name">Draw Distance</span>
+                        <span class="setting-desc">How far you can see</span>
+                    </div>
+                    <div class="setting-control">
+                        <select class="setting-select" id="setting-draw-distance">
+                            <option value="auto">Auto</option>
+                            <option value="far">Far</option>
+                            <option value="medium">Medium</option>
+                            <option value="near">Near</option>
+                        </select>
+                    </div>
+                </div>
+
+                <div class="setting-row">
+                    <div class="setting-label">
+                        <span class="setting-name">FPS Meter</span>
+                        <span class="setting-desc">Show frames per second</span>
+                    </div>
+                    <div class="setting-control">
+                        <label class="setting-toggle">
+                            <input type="checkbox" id="setting-show-fps">
+                            <span class="toggle-slider"></span>
+                        </label>
+                    </div>
+                </div>
+
+                <div class="setting-row">
+                    <div class="setting-label">
+                        <span class="setting-name">Performance Monitor</span>
+                        <span class="setting-desc">Detailed performance stats</span>
+                    </div>
+                    <div class="setting-control">
+                        <label class="setting-toggle">
+                            <input type="checkbox" id="setting-show-performance">
+                            <span class="toggle-slider"></span>
+                        </label>
+                    </div>
+                </div>
+
+                <div class="setting-row">
+                    <div class="setting-label">
+                        <span class="setting-name">Loading Indicator</span>
+                        <span class="setting-desc">Show terrain loading progress</span>
+                    </div>
+                    <div class="setting-control">
+                        <label class="setting-toggle">
+                            <input type="checkbox" id="setting-show-loading">
+                            <span class="toggle-slider"></span>
+                        </label>
+                    </div>
+                </div>
+            </div>
+
+            <div class="settings-info" id="settings-detected">
+                <!-- Detected device info shown here -->
+            </div>
+
+            <div class="btn-row">
+                <button class="menu-btn" id="btn-settings-back">Back</button>
+                <button class="menu-btn menu-btn--small" id="btn-settings-reset">Reset</button>
+            </div>
+        </div>
+
         <!-- Modal Overlay (for confirmations) -->
         <div class="modal-overlay hidden" id="modal-overlay">
             <!-- Content injected by JavaScript -->
