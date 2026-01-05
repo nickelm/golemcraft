@@ -1,13 +1,16 @@
 /**
- * ChunkDataGenerator - SIMPLIFIED APPROACH
+ * ChunkDataGenerator - IMPROVED VERSION
  * 
- * New strategy:
+ * Strategy:
  * - Heightfield renders EVERYWHERE (no holes for voxel regions)
  * - Voxels render ON TOP of heightfield where shouldUseVoxels() is true
  * - Render order: voxels first (write Z), heightfield second (gets Z-rejected under voxels)
- * - No transition band, no seam stitching, no gaps!
  * 
- * Future: Add hole mask for cave entrances where heightfield should NOT render.
+ * IMPROVEMENTS in this version:
+ * 1. Fixed normal computation (was using arbitrary ny=2.0)
+ * 2. Added heightmap smoothing to eliminate single-block peaks
+ * 3. Improved water transparency with better depth colors
+ * 4. Edge pixels NOT smoothed to preserve chunk boundary continuity
  */
 
 // ============================================================================
@@ -132,21 +135,110 @@ function getHeightmapIndex(localX, localZ) {
 }
 
 // ============================================================================
-// BASIC GENERATION
+// HEIGHTMAP GENERATION WITH SMOOTHING
 // ============================================================================
 
 function generateHeightmap(terrainProvider, chunkX, chunkZ) {
     const worldMinX = chunkX * CHUNK_SIZE;
     const worldMinZ = chunkZ * CHUNK_SIZE;
-    const heightmap = new Float32Array(HEIGHTMAP_SIZE * HEIGHTMAP_SIZE);
     
+    // First pass: sample raw continuous heights
+    const rawHeightmap = new Float32Array(HEIGHTMAP_SIZE * HEIGHTMAP_SIZE);
     for (let lz = 0; lz < HEIGHTMAP_SIZE; lz++) {
         for (let lx = 0; lx < HEIGHTMAP_SIZE; lx++) {
-            heightmap[getHeightmapIndex(lx, lz)] = terrainProvider.getContinuousHeight(worldMinX + lx, worldMinZ + lz);
+            rawHeightmap[getHeightmapIndex(lx, lz)] = 
+                terrainProvider.getContinuousHeight(worldMinX + lx, worldMinZ + lz);
         }
     }
-    return heightmap;
+    
+    // Second pass: Gaussian smoothing (interior only)
+    const smoothed = smoothHeightmap(rawHeightmap, HEIGHTMAP_SIZE, 0.35);
+    
+    // Third pass: remove isolated peaks (interior only)
+    return removeIsolatedPeaks(smoothed, HEIGHTMAP_SIZE, 0.7);
 }
+
+/**
+ * Apply Gaussian smoothing to heightmap
+ * IMPORTANT: Only smooth interior pixels to preserve chunk boundary continuity
+ */
+function smoothHeightmap(heightmap, size, strength) {
+    const output = new Float32Array(heightmap.length);
+    output.set(heightmap);  // Start with original values (preserves edges)
+    
+    const kernel = [
+        [1, 2, 1],
+        [2, 4, 2],
+        [1, 2, 1]
+    ];
+    const kernelSum = 16;
+    
+    // Only smooth interior pixels (1 to size-2)
+    for (let z = 1; z < size - 1; z++) {
+        for (let x = 1; x < size - 1; x++) {
+            const idx = z * size + x;
+            let sum = 0;
+            
+            for (let kz = -1; kz <= 1; kz++) {
+                for (let kx = -1; kx <= 1; kx++) {
+                    sum += heightmap[(z + kz) * size + (x + kx)] * kernel[kz + 1][kx + 1];
+                }
+            }
+            
+            output[idx] = heightmap[idx] * (1 - strength) + (sum / kernelSum) * strength;
+        }
+    }
+    
+    return output;
+}
+
+/**
+ * Remove isolated peaks and valleys
+ * IMPORTANT: Only process interior pixels to preserve chunk boundary continuity
+ */
+function removeIsolatedPeaks(heightmap, size, threshold) {
+    const output = new Float32Array(heightmap.length);
+    output.set(heightmap);
+    
+    // Only process interior pixels (1 to size-2)
+    for (let z = 1; z < size - 1; z++) {
+        for (let x = 1; x < size - 1; x++) {
+            const idx = z * size + x;
+            const h = heightmap[idx];
+            
+            let maxNeighbor = -Infinity;
+            let minNeighbor = Infinity;
+            let sum = 0;
+            let count = 0;
+            
+            for (let dz = -1; dz <= 1; dz++) {
+                for (let dx = -1; dx <= 1; dx++) {
+                    if (dx === 0 && dz === 0) continue;
+                    const nh = heightmap[(z + dz) * size + (x + dx)];
+                    maxNeighbor = Math.max(maxNeighbor, nh);
+                    minNeighbor = Math.min(minNeighbor, nh);
+                    sum += nh;
+                    count++;
+                }
+            }
+            
+            const avg = sum / count;
+            
+            if (h > maxNeighbor + threshold) {
+                output[idx] = avg + threshold * 0.25;
+            }
+            else if (h < minNeighbor - threshold) {
+                output[idx] = avg - threshold * 0.25;
+            }
+        }
+    }
+    
+    return output;
+}
+
+// ============================================================================
+// VOXEL MASK AND SURFACE TYPES
+// ============================================================================
 
 function generateVoxelMask(terrainProvider, chunkX, chunkZ) {
     const worldMinX = chunkX * CHUNK_SIZE;
@@ -198,9 +290,13 @@ function generateBlockData(terrainProvider, chunkX, chunkZ) {
 }
 
 // ============================================================================
-// SURFACE MESH - NOW RENDERS EVERYWHERE (no voxel mask skip)
+// SURFACE MESH - IMPROVED NORMAL COMPUTATION
 // ============================================================================
 
+/**
+ * Compute heightmap normal using proper gradient calculation
+ * FIXED: Original used arbitrary ny=2.0 constant
+ */
 function computeHeightmapNormal(heightmap, lx, lz) {
     const getH = (x, z) => {
         const cx = Math.max(0, Math.min(HEIGHTMAP_SIZE - 1, x));
@@ -213,9 +309,13 @@ function computeHeightmapNormal(heightmap, lx, lz) {
     const hD = getH(lx, lz - 1);
     const hU = getH(lx, lz + 1);
     
-    const nx = hL - hR;
-    const ny = 2.0;
-    const nz = hD - hU;
+    const dHdx = (hR - hL) * 0.5;
+    const dHdz = (hU - hD) * 0.5;
+    
+    let nx = -dHdx;
+    let ny = 1.0;
+    let nz = -dHdz;
+    
     const len = Math.sqrt(nx * nx + ny * ny + nz * nz);
     return [nx / len, ny / len, nz / len];
 }
@@ -227,13 +327,8 @@ function generateSurfaceMesh(heightmap, voxelMask, surfaceTypes) {
     const colors = [];
     const indices = [];
     
-    // Generate triangles for ALL cells - no skipping for voxels!
-    // The heightfield renders under voxels; Z-buffer handles occlusion.
     for (let lz = 0; lz < CHUNK_SIZE; lz++) {
         for (let lx = 0; lx < CHUNK_SIZE; lx++) {
-            // NO SKIP - render heightfield everywhere
-            // Future: skip if holeMask[lz * CHUNK_SIZE + lx] === 1 (cave entrances)
-            
             const h00 = heightmap[getHeightmapIndex(lx, lz)];
             const h10 = heightmap[getHeightmapIndex(lx + 1, lz)];
             const h01 = heightmap[getHeightmapIndex(lx, lz + 1)];
@@ -271,7 +366,6 @@ function generateSurfaceMesh(heightmap, voxelMask, surfaceTypes) {
             uvs.push(blockUvs.uMin, blockUvs.vMax);
             colors.push(ao, ao, ao);
             
-            // Original winding order
             indices.push(baseVertex, baseVertex + 2, baseVertex + 1);
             indices.push(baseVertex, baseVertex + 3, baseVertex + 2);
         }
@@ -288,7 +382,7 @@ function generateSurfaceMesh(heightmap, voxelMask, surfaceTypes) {
 }
 
 // ============================================================================
-// WATER MESH
+// WATER MESH - MORE TRANSPARENT
 // ============================================================================
 
 function generateWaterMesh(heightmap) {
@@ -299,7 +393,7 @@ function generateWaterMesh(heightmap) {
     const indices = [];
     
     const waterUvs = getBlockUVs('water');
-    const waterY = WATER_LEVEL - 0.2;
+    const waterY = WATER_LEVEL - 0.15;
     
     for (let lz = 0; lz < CHUNK_SIZE; lz++) {
         for (let lx = 0; lx < CHUNK_SIZE; lx++) {
@@ -308,8 +402,15 @@ function generateWaterMesh(heightmap) {
             
             const baseVertex = positions.length / 3;
             const depth = WATER_LEVEL - cellHeight;
-            const darken = Math.max(0.3, 1.0 - depth * 0.1);
-            const r = 0.6 * darken, g = 0.8 * darken, b = 1.0 * darken;
+            
+            // Less aggressive darkening for more transparent water
+            // Material opacity is 0.65, vertex colors add depth variation
+            const depthFactor = Math.max(0.6, 1.0 - depth * 0.05);
+            
+            // Brighter, more cyan-tinted water
+            const r = 0.6 * depthFactor;
+            const g = 0.88 * depthFactor;
+            const b = 0.98 * depthFactor;
             
             positions.push(lx, waterY, lz);
             normals.push(0, 1, 0);
@@ -347,7 +448,7 @@ function generateWaterMesh(heightmap) {
 }
 
 // ============================================================================
-// VOXEL MESH - Renders where shouldUseVoxels is true, ON TOP of heightfield
+// VOXEL MESH
 // ============================================================================
 
 function generateVoxelMesh(terrainProvider, voxelMask, chunkX, chunkZ) {
@@ -379,7 +480,6 @@ function generateVoxelMesh(terrainProvider, voxelMask, chunkX, chunkZ) {
                     const neighborZ = z + nz;
                     const neighborType = terrainProvider.getBlockType(neighborX, neighborY, neighborZ);
                     
-                    // Standard visibility check
                     let visible = false;
                     if (neighborType === null) {
                         visible = true;
@@ -387,9 +487,6 @@ function generateVoxelMesh(terrainProvider, voxelMask, chunkX, chunkZ) {
                         visible = true;
                     }
                     
-                    // Boundary check: for horizontal faces, also render if neighbor cell
-                    // is NOT voxelized (i.e., it's heightfield territory)
-                    // This ensures voxel blocks have solid walls at the boundary
                     if (!visible && ny === 0) {
                         if (!terrainProvider.shouldUseVoxels(neighborX, neighborZ)) {
                             visible = true;
@@ -453,13 +550,8 @@ export function generateChunkData(terrainProvider, chunkX, chunkZ) {
     const surfaceTypes = generateSurfaceTypes(terrainProvider, chunkX, chunkZ);
     const blockData = generateBlockData(terrainProvider, chunkX, chunkZ);
     
-    // Surface mesh renders EVERYWHERE now
     const surface = generateSurfaceMesh(heightmap, voxelMask, surfaceTypes);
-    
-    // Voxels render on top where mask says so
     const { opaque: voxelOpaque } = generateVoxelMesh(terrainProvider, voxelMask, chunkX, chunkZ);
-    
-    // Water
     const water = generateWaterMesh(heightmap);
     
     return {

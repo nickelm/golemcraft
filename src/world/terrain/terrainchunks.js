@@ -7,25 +7,24 @@ import { BLOCK_TYPES, WATER_LEVEL } from './terraingenerator.js';
  * Each chunk is a SINGLE mesh with all block faces merged into one geometry.
  * This minimizes draw calls (1 per chunk) while enabling frustum culling.
  * 
- * For a 500x500 world with 32x32 chunks:
- * - ~256 total chunks
- * - Maybe 30-50 visible at ground level looking one direction
- * - = 30-50 draw calls instead of thousands
+ * IMPROVEMENTS in this version:
+ * - PBR materials (MeshStandardMaterial) for better lighting response
+ * - More transparent water (opacity 0.65)
+ * - Optional mobile fallback to Lambert materials
  */
 
 export const CHUNK_SIZE = 16;
 
 // Texture atlas configuration
-const ATLAS_SIZE = 720;      // 720x720 pixels
-const CELL_SIZE = 72;        // Each cell is 72x72 (64 tile + 4 gutter on each side)
-const TILE_SIZE = 64;        // Actual tile is 64x64
-const GUTTER = 4;            // 4px gutter
+const ATLAS_SIZE = 720;
+const CELL_SIZE = 72;
+const TILE_SIZE = 64;
+const GUTTER = 4;
 
 // Get UV coordinates for a block type
 function getBlockUVs(blockType) {
     const [col, row] = BLOCK_TYPES[blockType].tile;
     
-    // Calculate UV bounds with gutter offset
     const uMin = (col * CELL_SIZE + GUTTER) / ATLAS_SIZE;
     const uMax = (col * CELL_SIZE + GUTTER + TILE_SIZE) / ATLAS_SIZE;
     const vMax = 1 - (row * CELL_SIZE + GUTTER) / ATLAS_SIZE;
@@ -35,7 +34,6 @@ function getBlockUVs(blockType) {
 }
 
 // Face definitions: normal direction and vertex offsets
-// Vertices must be in CCW order when looking at the face from outside the cube
 const FACES = {
     top:    { dir: [0, 1, 0],  verts: [[0,1,1], [1,1,1], [1,1,0], [0,1,0]] },
     bottom: { dir: [0, -1, 0], verts: [[0,0,0], [1,0,0], [1,0,1], [0,0,1]] },
@@ -45,89 +43,111 @@ const FACES = {
     left:   { dir: [-1, 0, 0], verts: [[0,0,1], [0,1,1], [0,1,0], [0,0,0]] }
 };
 
-// UV coordinates for each face vertex
-// Maps to: bottom-left, top-left, top-right, bottom-right of texture
 const FACE_UVS = [[0, 0], [0, 1], [1, 1], [1, 0]];
 
 /**
  * Ambient Occlusion neighbor offsets for each face vertex
- * 
- * For each vertex of a face, we check 3 neighboring blocks that form
- * the corner at that vertex. The number of solid neighbors determines
- * the darkness level (0=bright, 3=darkest).
- * 
- * Structure: FACE_AO_NEIGHBORS[faceName][vertexIndex] = [[dx,dy,dz], [dx,dy,dz], [dx,dy,dz]]
  */
 const FACE_AO_NEIGHBORS = {
-    // Top face (Y+) - checking blocks above and to the sides
     top: [
-        [[-1, 1, 0], [-1, 1, 1], [0, 1, 1]],   // vertex 0: corner at -X, +Z
-        [[1, 1, 0], [1, 1, 1], [0, 1, 1]],     // vertex 1: corner at +X, +Z
-        [[1, 1, 0], [1, 1, -1], [0, 1, -1]],   // vertex 2: corner at +X, -Z
-        [[-1, 1, 0], [-1, 1, -1], [0, 1, -1]]  // vertex 3: corner at -X, -Z
+        [[-1, 1, 0], [-1, 1, 1], [0, 1, 1]],
+        [[1, 1, 0], [1, 1, 1], [0, 1, 1]],
+        [[1, 1, 0], [1, 1, -1], [0, 1, -1]],
+        [[-1, 1, 0], [-1, 1, -1], [0, 1, -1]]
     ],
-    // Bottom face (Y-) - checking blocks below and to the sides
     bottom: [
-        [[-1, -1, 0], [-1, -1, -1], [0, -1, -1]], // vertex 0
-        [[1, -1, 0], [1, -1, -1], [0, -1, -1]],   // vertex 1
-        [[1, -1, 0], [1, -1, 1], [0, -1, 1]],     // vertex 2
-        [[-1, -1, 0], [-1, -1, 1], [0, -1, 1]]    // vertex 3
+        [[-1, -1, 0], [-1, -1, -1], [0, -1, -1]],
+        [[1, -1, 0], [1, -1, -1], [0, -1, -1]],
+        [[1, -1, 0], [1, -1, 1], [0, -1, 1]],
+        [[-1, -1, 0], [-1, -1, 1], [0, -1, 1]]
     ],
-    // Front face (Z+)
     front: [
-        [[1, 0, 1], [1, -1, 1], [0, -1, 1]],   // vertex 0: bottom-right
-        [[1, 0, 1], [1, 1, 1], [0, 1, 1]],     // vertex 1: top-right
-        [[-1, 0, 1], [-1, 1, 1], [0, 1, 1]],   // vertex 2: top-left
-        [[-1, 0, 1], [-1, -1, 1], [0, -1, 1]]  // vertex 3: bottom-left
+        [[1, 0, 1], [1, -1, 1], [0, -1, 1]],
+        [[1, 0, 1], [1, 1, 1], [0, 1, 1]],
+        [[-1, 0, 1], [-1, 1, 1], [0, 1, 1]],
+        [[-1, 0, 1], [-1, -1, 1], [0, -1, 1]]
     ],
-    // Back face (Z-)
     back: [
-        [[-1, 0, -1], [-1, -1, -1], [0, -1, -1]], // vertex 0
-        [[-1, 0, -1], [-1, 1, -1], [0, 1, -1]],   // vertex 1
-        [[1, 0, -1], [1, 1, -1], [0, 1, -1]],     // vertex 2
-        [[1, 0, -1], [1, -1, -1], [0, -1, -1]]    // vertex 3
+        [[-1, 0, -1], [-1, -1, -1], [0, -1, -1]],
+        [[-1, 0, -1], [-1, 1, -1], [0, 1, -1]],
+        [[1, 0, -1], [1, 1, -1], [0, 1, -1]],
+        [[1, 0, -1], [1, -1, -1], [0, -1, -1]]
     ],
-    // Right face (X+)
     right: [
-        [[1, 0, -1], [1, -1, -1], [1, -1, 0]],  // vertex 0
-        [[1, 0, -1], [1, 1, -1], [1, 1, 0]],    // vertex 1
-        [[1, 0, 1], [1, 1, 1], [1, 1, 0]],      // vertex 2
-        [[1, 0, 1], [1, -1, 1], [1, -1, 0]]     // vertex 3
+        [[1, 0, -1], [1, -1, -1], [1, -1, 0]],
+        [[1, 0, -1], [1, 1, -1], [1, 1, 0]],
+        [[1, 0, 1], [1, 1, 1], [1, 1, 0]],
+        [[1, 0, 1], [1, -1, 1], [1, -1, 0]]
     ],
-    // Left face (X-)
     left: [
-        [[-1, 0, 1], [-1, -1, 1], [-1, -1, 0]],  // vertex 0
-        [[-1, 0, 1], [-1, 1, 1], [-1, 1, 0]],    // vertex 1
-        [[-1, 0, -1], [-1, 1, -1], [-1, 1, 0]],  // vertex 2
-        [[-1, 0, -1], [-1, -1, -1], [-1, -1, 0]] // vertex 3
+        [[-1, 0, 1], [-1, -1, 1], [-1, -1, 0]],
+        [[-1, 0, 1], [-1, 1, 1], [-1, 1, 0]],
+        [[-1, 0, -1], [-1, 1, -1], [-1, 1, 0]],
+        [[-1, 0, -1], [-1, -1, -1], [-1, -1, 0]]
     ]
 };
 
-// AO intensity levels based on neighbor count (0-3 solid neighbors)
-// 1.0 = full brightness, lower = darker
 const AO_LEVELS = [1.0, 0.75, 0.5, 0.35];
+
+/**
+ * Detect if running on mobile device
+ */
+function isMobileDevice() {
+    return /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
+}
 
 export class ChunkedTerrain {
     constructor(scene, terrain, terrainTexture) {
         this.scene = scene;
         this.terrain = terrain;
         this.terrainTexture = terrainTexture;
-        this.chunks = new Map(); // key: "chunkX,chunkZ" -> { mesh, waterMesh }
+        this.chunks = new Map();
         
-        // Create shared materials with vertex colors for AO
-        this.opaqueMaterial = new THREE.MeshLambertMaterial({
-            map: terrainTexture,
-            side: THREE.FrontSide,
-            vertexColors: true
-        });
+        // Detect platform for material selection
+        const usePBR = !isMobileDevice();
         
-        this.waterMaterial = new THREE.MeshLambertMaterial({
-            map: terrainTexture,
-            transparent: true,
-            opacity: 0.7,
-            side: THREE.DoubleSide,
-            vertexColors: true
-        });
+        if (usePBR) {
+            // PBR materials for desktop - better lighting response
+            this.opaqueMaterial = new THREE.MeshStandardMaterial({
+                map: terrainTexture,
+                side: THREE.FrontSide,
+                vertexColors: true,
+                roughness: 0.85,      // Matte terrain surface
+                metalness: 0.0,       // Non-metallic
+                flatShading: false    // Use smooth normals
+            });
+            
+            this.waterMaterial = new THREE.MeshStandardMaterial({
+                map: terrainTexture,
+                transparent: true,
+                opacity: 0.65,        // More transparent water
+                side: THREE.DoubleSide,
+                vertexColors: true,
+                roughness: 0.15,      // Slightly reflective
+                metalness: 0.0,
+                depthWrite: false     // Prevents transparency sorting issues
+            });
+            
+            console.log('Using PBR materials (MeshStandardMaterial)');
+        } else {
+            // Lambert materials for mobile - better performance
+            this.opaqueMaterial = new THREE.MeshLambertMaterial({
+                map: terrainTexture,
+                side: THREE.FrontSide,
+                vertexColors: true
+            });
+            
+            this.waterMaterial = new THREE.MeshLambertMaterial({
+                map: terrainTexture,
+                transparent: true,
+                opacity: 0.65,        // More transparent water
+                side: THREE.DoubleSide,
+                vertexColors: true,
+                depthWrite: false
+            });
+            
+            console.log('Using Lambert materials (mobile fallback)');
+        }
         
         // Stats
         this.totalChunks = 0;
@@ -169,26 +189,21 @@ export class ChunkedTerrain {
     generateChunk(chunkX, chunkZ) {
         const key = `${chunkX},${chunkZ}`;
         
-        // World coordinate bounds
         const worldMinX = chunkX * CHUNK_SIZE;
         const worldMaxX = worldMinX + CHUNK_SIZE;
         const worldMinZ = chunkZ * CHUNK_SIZE;
         const worldMaxZ = worldMinZ + CHUNK_SIZE;
         
-        // Collect faces for opaque and transparent geometry separately
         const opaqueData = { positions: [], normals: [], uvs: [], colors: [], indices: [] };
         const waterData = { positions: [], normals: [], uvs: [], colors: [], indices: [] };
         
         let minY = Infinity, maxY = -Infinity;
         
-        // Scan all positions in chunk
-        // Include extra height for landmarks (temples can be 15+ blocks tall)
         const LANDMARK_MAX_HEIGHT = 20;
         
         for (let x = worldMinX; x < worldMaxX; x++) {
             for (let z = worldMinZ; z < worldMaxZ; z++) {
                 const terrainHeight = this.terrain.getHeight(x, z);
-                // Scan up to terrain + landmark height to catch structures above ground
                 const maxH = Math.max(terrainHeight, WATER_LEVEL) + LANDMARK_MAX_HEIGHT;
                 
                 for (let y = 0; y <= maxH; y++) {
@@ -199,7 +214,6 @@ export class ChunkedTerrain {
                     const isTransparent = isWater || blockType === 'ice';
                     const data = isTransparent ? waterData : opaqueData;
                     
-                    // Add visible faces
                     const facesAdded = this.addBlockFaces(x, y, z, blockType, data, isTransparent);
                     
                     if (facesAdded > 0) {
@@ -210,20 +224,16 @@ export class ChunkedTerrain {
             }
         }
         
-        // Handle empty chunks
         if (opaqueData.positions.length === 0 && waterData.positions.length === 0) {
             return 0;
         }
         
-        // Clamp Y bounds
         if (minY === Infinity) minY = 0;
         if (maxY === -Infinity) maxY = WATER_LEVEL;
         
-        // Create meshes
         const chunkData = { opaqueMesh: null, waterMesh: null };
         let faceCount = 0;
         
-        // Opaque mesh
         if (opaqueData.positions.length > 0) {
             const mesh = this.createMeshFromData(opaqueData, this.opaqueMaterial, false);
             mesh.position.set(worldMinX, 0, worldMinZ);
@@ -233,7 +243,6 @@ export class ChunkedTerrain {
             faceCount += opaqueData.indices.length / 6;
         }
         
-        // Water mesh (rendered after opaque)
         if (waterData.positions.length > 0) {
             const mesh = this.createMeshFromData(waterData, this.waterMaterial, true);
             mesh.position.set(worldMinX, 0, worldMinZ);
@@ -255,106 +264,65 @@ export class ChunkedTerrain {
         const uvs = getBlockUVs(blockType);
         let facesAdded = 0;
         
-        // Check each face
         for (const [faceName, face] of Object.entries(FACES)) {
             const [nx, ny, nz] = face.dir;
             const neighborX = worldX + nx;
             const neighborY = worldY + ny;
             const neighborZ = worldZ + nz;
             
-            // Check if face is visible
             const neighborType = this.terrain.getBlockType(neighborX, neighborY, neighborZ);
             
-            // Face is visible if neighbor is air, or if we're opaque and neighbor is transparent
             let visible = false;
             if (neighborType === null) {
                 visible = true;
             } else if (!isTransparent) {
-                // Opaque block: show face if neighbor is water/ice
                 const neighborTransparent = neighborType === 'water' || neighborType === 'water_full' || neighborType === 'ice';
                 visible = neighborTransparent;
             }
-            // Transparent blocks (water/ice): only show face if neighbor is air
-            // (already handled by neighborType === null check)
             
             if (!visible) continue;
             
-            // Special case: water surface is pushed down
             const isWaterSurface = blockType === 'water' && faceName === 'top';
             const yOffset = isWaterSurface ? -0.2 : 0;
             
-            // Add face vertices
-            // Position relative to chunk origin
             const localX = worldX - Math.floor(worldX / CHUNK_SIZE) * CHUNK_SIZE;
             const localZ = worldZ - Math.floor(worldZ / CHUNK_SIZE) * CHUNK_SIZE;
             
-            // Get AO neighbor offsets for this face
             const aoNeighbors = FACE_AO_NEIGHBORS[faceName];
-            
             const baseVertex = data.positions.length / 3;
             
             for (let i = 0; i < 4; i++) {
                 const [vx, vy, vz] = face.verts[i];
                 
-                // Position
                 data.positions.push(
                     localX + vx,
                     worldY + vy + (vy === 1 ? yOffset : 0),
                     localZ + vz
                 );
                 
-                // Normal
                 data.normals.push(nx, ny, nz);
                 
-                // UV (map [0,1] to block's atlas region)
-                const [uvX, uvY] = FACE_UVS[i];
+                const [uIdx, vIdx] = FACE_UVS[i];
                 data.uvs.push(
-                    uvs.uMin + uvX * (uvs.uMax - uvs.uMin),
-                    uvs.vMin + uvY * (uvs.vMax - uvs.vMin)
+                    uIdx === 0 ? uvs.uMin : uvs.uMax,
+                    vIdx === 0 ? uvs.vMin : uvs.vMax
                 );
                 
-                // Calculate AO for this vertex
-                // Count solid neighbors at the 3 corner positions
-                let solidCount = 0;
-                const vertexAO = aoNeighbors[i];
-                for (const [dx, dy, dz] of vertexAO) {
-                    const checkType = this.terrain.getBlockType(
-                        worldX + dx,
-                        worldY + dy,
-                        worldZ + dz
-                    );
-                    // Count as solid if not air/water/ice
-                    if (checkType !== null && 
-                        checkType !== 'water' && 
-                        checkType !== 'water_full' && 
-                        checkType !== 'ice') {
-                        solidCount++;
-                    }
+                // AO calculation
+                let aoLevel = 0;
+                if (!isTransparent && aoNeighbors) {
+                    const [n1, n2, n3] = aoNeighbors[i];
+                    const s1 = this.terrain.getBlockType(worldX + n1[0], worldY + n1[1], worldZ + n1[2]) !== null ? 1 : 0;
+                    const s2 = this.terrain.getBlockType(worldX + n2[0], worldY + n2[1], worldZ + n2[2]) !== null ? 1 : 0;
+                    const s3 = this.terrain.getBlockType(worldX + n3[0], worldY + n3[1], worldZ + n3[2]) !== null ? 1 : 0;
+                    aoLevel = s1 + s2 + s3;
+                    if (s1 && s3) aoLevel = 3;
                 }
                 
-                // Get AO intensity
-                const ao = AO_LEVELS[solidCount];
-                
-                // Apply water depth darkening with blue tint
-                if (isTransparent && (blockType === 'water' || blockType === 'water_full')) {
-                    // Calculate depth below water surface using BLOCK position, not vertex
-                    // This makes the entire block uniformly darker at depth
-                    const depth = WATER_LEVEL - worldY;
-                    // Very aggressive darkening: surface=bright, each block down = 50% darker
-                    const depthFactor = Math.max(0.1, Math.pow(0.5, depth));
-                    // Strong blue tint that increases with depth
-                    const blueness = Math.min(1.0, 0.3 + depth * 0.2); // More blue as depth increases
-                    const r = ao * depthFactor * (1.0 - blueness * 0.8);  // Red fades with depth
-                    const g = ao * depthFactor * (1.0 - blueness * 0.5);  // Green fades slower
-                    const b = ao * Math.max(0.4, depthFactor + blueness * 0.3);  // Blue stays strong
-                    data.colors.push(r, g, b);
-                } else {
-                    // Standard AO for opaque blocks
-                    data.colors.push(ao, ao, ao);
-                }
+                const ao = AO_LEVELS[aoLevel];
+                data.colors.push(ao, ao, ao);
             }
             
-            // Add two triangles (CCW winding)
             data.indices.push(
                 baseVertex, baseVertex + 1, baseVertex + 2,
                 baseVertex, baseVertex + 2, baseVertex + 3
@@ -366,10 +334,7 @@ export class ChunkedTerrain {
         return facesAdded;
     }
     
-    /**
-     * Create a mesh from collected geometry data
-     */
-    createMeshFromData(data, material, isTransparent) {
+    createMeshFromData(data, material, transparent) {
         const geometry = new THREE.BufferGeometry();
         
         geometry.setAttribute('position', new THREE.Float32BufferAttribute(data.positions, 3));
@@ -378,105 +343,60 @@ export class ChunkedTerrain {
         geometry.setAttribute('color', new THREE.Float32BufferAttribute(data.colors, 3));
         geometry.setIndex(data.indices);
         
-        // Compute bounding sphere for frustum culling
         geometry.computeBoundingSphere();
         
         const mesh = new THREE.Mesh(geometry, material);
+        if (transparent) {
+            mesh.renderOrder = 1;
+        }
+        
         return mesh;
     }
     
     /**
-     * Get chunk at world position
+     * Add meshes to the scene (for chunks loaded from worker)
      */
-    getChunkAt(worldX, worldZ) {
-        const chunkX = Math.floor(worldX / CHUNK_SIZE);
-        const chunkZ = Math.floor(worldZ / CHUNK_SIZE);
-        return this.chunks.get(`${chunkX},${chunkZ}`);
+    addChunkMeshes(chunkX, chunkZ, meshes) {
+        const key = `${chunkX},${chunkZ}`;
+        
+        if (meshes.surfaceMesh) {
+            this.scene.add(meshes.surfaceMesh);
+        }
+        if (meshes.opaqueMesh) {
+            this.scene.add(meshes.opaqueMesh);
+        }
+        if (meshes.waterMesh) {
+            this.scene.add(meshes.waterMesh);
+        }
+        
+        this.chunks.set(key, meshes);
     }
     
     /**
-     * Regenerate a chunk (after blocks have been modified)
+     * Remove chunk meshes from scene
      */
-    regenerateChunkAt(worldX, worldZ) {
-        const chunkX = Math.floor(worldX / CHUNK_SIZE);
-        const chunkZ = Math.floor(worldZ / CHUNK_SIZE);
+    removeChunk(chunkX, chunkZ) {
         const key = `${chunkX},${chunkZ}`;
+        const meshes = this.chunks.get(key);
         
-        // Remove old chunk meshes
-        const oldChunk = this.chunks.get(key);
-        if (oldChunk) {
-            if (oldChunk.opaqueMesh) {
-                oldChunk.opaqueMesh.geometry.dispose();
-                this.scene.remove(oldChunk.opaqueMesh);
+        if (meshes) {
+            if (meshes.surfaceMesh) {
+                this.scene.remove(meshes.surfaceMesh);
+                meshes.surfaceMesh.geometry.dispose();
             }
-            if (oldChunk.waterMesh) {
-                oldChunk.waterMesh.geometry.dispose();
-                this.scene.remove(oldChunk.waterMesh);
+            if (meshes.opaqueMesh) {
+                this.scene.remove(meshes.opaqueMesh);
+                meshes.opaqueMesh.geometry.dispose();
+            }
+            if (meshes.waterMesh) {
+                this.scene.remove(meshes.waterMesh);
+                meshes.waterMesh.geometry.dispose();
             }
             this.chunks.delete(key);
         }
-        
-        // Regenerate the chunk
-        this.generateChunk(chunkX, chunkZ);
     }
     
-    /**
-     * Regenerate all chunks that contain the given world positions
-     */
-    regenerateChunksInRadius(centerX, centerZ, radius) {
-        const affectedChunks = new Set();
-        
-        // Find all chunks that might be affected
-        for (let dx = -radius; dx <= radius; dx++) {
-            for (let dz = -radius; dz <= radius; dz++) {
-                const worldX = Math.floor(centerX + dx);
-                const worldZ = Math.floor(centerZ + dz);
-                const chunkX = Math.floor(worldX / CHUNK_SIZE);
-                const chunkZ = Math.floor(worldZ / CHUNK_SIZE);
-                affectedChunks.add(`${chunkX},${chunkZ}`);
-            }
-        }
-        
-        // Regenerate each affected chunk
-        affectedChunks.forEach(key => {
-            const [chunkX, chunkZ] = key.split(',').map(Number);
-            
-            // Remove old chunk
-            const oldChunk = this.chunks.get(key);
-            if (oldChunk) {
-                if (oldChunk.opaqueMesh) {
-                    oldChunk.opaqueMesh.geometry.dispose();
-                    this.scene.remove(oldChunk.opaqueMesh);
-                }
-                if (oldChunk.waterMesh) {
-                    oldChunk.waterMesh.geometry.dispose();
-                    this.scene.remove(oldChunk.waterMesh);
-                }
-                this.chunks.delete(key);
-            }
-            
-            // Generate new chunk
-            this.generateChunk(chunkX, chunkZ);
-        });
-    }
-    
-    /**
-     * Dispose all chunks
-     */
-    dispose() {
-        this.chunks.forEach((chunk) => {
-            if (chunk.opaqueMesh) {
-                chunk.opaqueMesh.geometry.dispose();
-                this.scene.remove(chunk.opaqueMesh);
-            }
-            if (chunk.waterMesh) {
-                chunk.waterMesh.geometry.dispose();
-                this.scene.remove(chunk.waterMesh);
-            }
-        });
-        this.chunks.clear();
-        
-        this.opaqueMaterial.dispose();
-        this.waterMaterial.dispose();
+    hasChunk(chunkX, chunkZ) {
+        return this.chunks.has(`${chunkX},${chunkZ}`);
     }
 }

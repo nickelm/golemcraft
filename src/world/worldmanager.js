@@ -26,6 +26,7 @@ import { ObjectGenerator } from './objects/objectgenerator.js';
 import { ChunkLoader } from './chunkloader.js';
 import { LandmarkSystem } from './landmarks/landmarksystem.js';
 import { TerrainDataProvider } from './terraindataprovider.js';
+import { initHeightfieldCollision } from '../collision.js';
 
 // Re-export WATER_LEVEL for API compatibility
 export { WATER_LEVEL };
@@ -92,6 +93,10 @@ export class WorldManager {
 
         // Create terrain data provider that routes to worker's block cache
         this.terrainDataProvider = new TerrainDataProvider(this.chunkLoader.workerManager);
+
+        // Initialize heightfield collision system with the block cache
+        // This enables smooth collision on heightfield terrain (voxelMask = 0)
+        initHeightfieldCollision(this.chunkLoader.workerManager.blockCache);
 
         // Request chunks around player position
         const chunksNeeded = this.chunkLoader.requestChunksAround(playerPosition);
