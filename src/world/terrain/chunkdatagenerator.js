@@ -42,6 +42,16 @@ const SURFACE_TILE_INDICES = {
     ice: 6         // [6,0]
 };
 
+// Texture splatting noise and height bias configuration
+const BLEND_NOISE_SCALE = 0.3;       // Spatial frequency of noise
+const BLEND_NOISE_AMPLITUDE = 0.15;  // How much noise affects weights (±15%)
+
+const HEIGHT_BIAS = {
+    snow:  { minHeight: 18, bonus: 0.3 },
+    stone: { minHeight: 22, bonus: 0.2 },
+    sand:  { maxHeight: 9,  bonus: 0.25 }  // WATER_LEVEL + 3
+};
+
 export const BLOCK_TYPES = {
     grass: { tile: [0, 0] },
     dirt: { tile: [3, 0] },
@@ -147,6 +157,38 @@ function getHeightmapIndex(localX, localZ) {
     return localZ * HEIGHTMAP_SIZE + localX;
 }
 
+/**
+ * Simple hash function for blend noise
+ * @returns {number} Value between 0 and 1
+ */
+function blendHash(x, z, seed = 12345) {
+    let h = seed + x * 374761393 + z * 668265263;
+    h = (h ^ (h >> 13)) * 1274126177;
+    return ((h ^ (h >> 16)) & 0xffffffff) / 0xffffffff;
+}
+
+/**
+ * Interpolated noise for smooth blend perturbation
+ * @returns {number} Value between -1 and 1
+ */
+function blendNoise(x, z, seed) {
+    const X = Math.floor(x);
+    const Z = Math.floor(z);
+    const fx = x - X;
+    const fz = z - Z;
+    // Smooth interpolation
+    const u = fx * fx * (3.0 - 2.0 * fx);
+    const v = fz * fz * (3.0 - 2.0 * fz);
+    // Sample corners
+    const a = blendHash(X, Z, seed);
+    const b = blendHash(X + 1, Z, seed);
+    const c = blendHash(X, Z + 1, seed);
+    const d = blendHash(X + 1, Z + 1, seed);
+    // Bilinear interpolation, remap to -1..1
+    const value = a * (1 - u) * (1 - v) + b * u * (1 - v) + c * (1 - u) * v + d * u * v;
+    return (value - 0.5) * 2;
+}
+
 // ============================================================================
 // BIOME BLEND WEIGHT COMPUTATION FOR TEXTURE SPLATTING
 // ============================================================================
@@ -154,16 +196,18 @@ function getHeightmapIndex(localX, localZ) {
 /**
  * Compute blend weights for texture splatting at a vertex position.
  * Samples biomes in a 5x5 area around the vertex and computes weights
- * based on the frequency of each surface type.
+ * based on the frequency of each surface type, with noise perturbation
+ * and height-based bias for more natural transitions.
  *
  * @param {number} worldX - World X coordinate of vertex
  * @param {number} worldZ - World Z coordinate of vertex
+ * @param {number} terrainHeight - Height at this vertex for height-based bias
  * @param {Object} terrainProvider - Provider with getBiome() and biome data access
  * @param {Object} biomes - BIOMES configuration object
  * @returns {Object} { tileIndices: [4], weights: [4] } - padded to 4 entries
  */
-function computeBlendWeights(worldX, worldZ, terrainProvider, biomes) {
-    const SAMPLE_RADIUS = 1;  // 5x5 sample area
+function computeBlendWeights(worldX, worldZ, terrainHeight, terrainProvider, biomes) {
+    const SAMPLE_RADIUS = 1;  // 3x3 sample area
     const surfaceVotes = new Map();  // surfaceType -> count
 
     // Sample biomes in a grid around the vertex
@@ -186,20 +230,65 @@ function computeBlendWeights(worldX, worldZ, terrainProvider, biomes) {
     // Calculate total for normalization
     const totalVotes = sorted.reduce((sum, [_, count]) => sum + count, 0);
 
-    // Build result arrays, padded to exactly 4 entries
+    // Build result arrays with base weights
     const tileIndices = [];
     const weights = [];
+    const surfaceTypes = [];  // Track surface types for height bias
 
     for (let i = 0; i < 4; i++) {
         if (i < sorted.length) {
             const [surfaceType, count] = sorted[i];
             tileIndices.push(SURFACE_TILE_INDICES[surfaceType] ?? 0);
             weights.push(count / totalVotes);
+            surfaceTypes.push(surfaceType);
         } else {
             // Pad with zeros (first tile, zero weight)
             tileIndices.push(tileIndices[0] ?? 0);
             weights.push(0);
+            surfaceTypes.push(null);
         }
+    }
+
+    // Apply noise perturbation to each weight
+    // Use different seed offsets per surface type so they don't all shift together
+    const noiseX = worldX * BLEND_NOISE_SCALE;
+    const noiseZ = worldZ * BLEND_NOISE_SCALE;
+    for (let i = 0; i < 4; i++) {
+        if (weights[i] > 0) {
+            const seedOffset = tileIndices[i] * 31337;  // Different seed per tile type
+            const noisePerturbation = blendNoise(noiseX, noiseZ, 12345 + seedOffset) * BLEND_NOISE_AMPLITUDE;
+            weights[i] += noisePerturbation;
+        }
+    }
+
+    // Apply height-based bias (only to surface types already present)
+    for (let i = 0; i < 4; i++) {
+        const surfaceType = surfaceTypes[i];
+        if (surfaceType && weights[i] > 0) {
+            const bias = HEIGHT_BIAS[surfaceType];
+            if (bias) {
+                if (bias.minHeight !== undefined && terrainHeight > bias.minHeight) {
+                    weights[i] += bias.bonus;
+                } else if (bias.maxHeight !== undefined && terrainHeight < bias.maxHeight) {
+                    weights[i] += bias.bonus;
+                }
+            }
+        }
+    }
+
+    // Clamp and renormalize
+    let total = 0;
+    for (let i = 0; i < 4; i++) {
+        weights[i] = Math.max(0, weights[i]);
+        total += weights[i];
+    }
+    if (total > 0.001) {
+        for (let i = 0; i < 4; i++) {
+            weights[i] /= total;
+        }
+    } else {
+        // Fallback: all weight to first tile
+        weights[0] = 1.0;
     }
 
     return { tileIndices, weights };
@@ -552,11 +641,11 @@ function generateSurfaceMesh(heightmap, voxelMask, surfaceTypes, terrainProvider
             const ao01 = computeHeightmapAO(heightmap, lx, lz + 1, terrainProvider, worldMinX, worldMinZ);
             const ao11 = computeHeightmapAO(heightmap, lx + 1, lz + 1, terrainProvider, worldMinX, worldMinZ);
 
-            // Compute blend weights at each vertex position
-            const blend00 = computeBlendWeights(worldMinX + lx, worldMinZ + lz, terrainProvider, BIOMES);
-            const blend10 = computeBlendWeights(worldMinX + lx + 1, worldMinZ + lz, terrainProvider, BIOMES);
-            const blend01 = computeBlendWeights(worldMinX + lx, worldMinZ + lz + 1, terrainProvider, BIOMES);
-            const blend11 = computeBlendWeights(worldMinX + lx + 1, worldMinZ + lz + 1, terrainProvider, BIOMES);
+            // Compute blend weights at each vertex position (pass height for height-based bias)
+            const blend00 = computeBlendWeights(worldMinX + lx, worldMinZ + lz, h00, terrainProvider, BIOMES);
+            const blend10 = computeBlendWeights(worldMinX + lx + 1, worldMinZ + lz, h10, terrainProvider, BIOMES);
+            const blend01 = computeBlendWeights(worldMinX + lx, worldMinZ + lz + 1, h01, terrainProvider, BIOMES);
+            const blend11 = computeBlendWeights(worldMinX + lx + 1, worldMinZ + lz + 1, h11, terrainProvider, BIOMES);
 
             // Compute tile indices from union of all 4 vertices (prevents weight loss at boundaries)
             const quadTileIndices = computeQuadTileIndices(blend00, blend10, blend01, blend11);
