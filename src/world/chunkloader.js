@@ -63,7 +63,8 @@ export class ChunkLoader {
             this.chunkedTerrain.scene,
             this.chunkedTerrain.opaqueMaterial,
             this.chunkedTerrain.waterMaterial,
-            (chunkX, chunkZ, meshes) => this.onChunkReady(chunkX, chunkZ, meshes)
+            (chunkX, chunkZ, meshes) => this.onChunkReady(chunkX, chunkZ, meshes),
+            this.chunkedTerrain.surfaceMaterial  // Splatting shader for smooth terrain
         );
 
         await this.workerManager.init(seed);

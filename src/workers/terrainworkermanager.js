@@ -25,10 +25,11 @@ import { ChunkBlockCache } from '../world/chunkblockcache.js';
 const DEBUG_CANCELLATION = false;
 
 export class TerrainWorkerManager {
-    constructor(scene, opaqueMaterial, waterMaterial, onChunkReady) {
+    constructor(scene, opaqueMaterial, waterMaterial, onChunkReady, surfaceMaterial = null) {
         this.scene = scene;
         this.opaqueMaterial = opaqueMaterial;
         this.waterMaterial = waterMaterial;
+        this.surfaceMaterial = surfaceMaterial || opaqueMaterial;  // Fallback to opaque if not provided
         this.onChunkReady = onChunkReady;
 
         // Worker state
@@ -143,7 +144,7 @@ export class TerrainWorkerManager {
     /**
      * Create Three.js meshes from worker-generated geometry data
      * Creates both surface mesh (smooth terrain) and voxel mesh (caves/structures)
-     * 
+     *
      * RENDER ORDER:
      * - Voxels render FIRST (renderOrder=0) to write Z-buffer
      * - Surface renders SECOND (renderOrder=1) and gets Z-rejected under voxels
@@ -151,7 +152,7 @@ export class TerrainWorkerManager {
      */
     createMeshesFromData(chunkData) {
         const result = {
-            surfaceMesh: null,   // Smooth terrain
+            surfaceMesh: null,   // Smooth terrain with splatting
             opaqueMesh: null,    // Voxel geometry (caves, structures)
             waterMesh: null,     // Water
             worldX: chunkData.worldX,
@@ -166,9 +167,9 @@ export class TerrainWorkerManager {
             result.opaqueMesh.renderOrder = 0;  // Render first
         }
 
-        // Create surface mesh (smooth terrain) - renders second
+        // Create surface mesh (smooth terrain with splatting) - renders second
         if (!chunkData.surface.isEmpty) {
-            result.surfaceMesh = this.createMesh(chunkData.surface, this.opaqueMaterial);
+            result.surfaceMesh = this.createSurfaceMesh(chunkData.surface, this.surfaceMaterial);
             result.surfaceMesh.position.set(chunkData.worldX, 0, chunkData.worldZ);
             result.surfaceMesh.receiveShadow = true;
             result.surfaceMesh.renderOrder = 1;  // Render after voxels (Z-rejected where voxels exist)
@@ -184,6 +185,9 @@ export class TerrainWorkerManager {
         return result;
     }
 
+    /**
+     * Create a standard mesh (for voxels and water)
+     */
     createMesh(data, material) {
         const geometry = new THREE.BufferGeometry();
 
@@ -193,6 +197,31 @@ export class TerrainWorkerManager {
         geometry.setAttribute('color', new THREE.BufferAttribute(data.colors, 3));
         geometry.setIndex(new THREE.BufferAttribute(data.indices, 1));
 
+        geometry.computeBoundingSphere();
+
+        return new THREE.Mesh(geometry, material);
+    }
+
+    /**
+     * Create a surface mesh with splatting attributes
+     * Includes additional vertex attributes for texture blending
+     */
+    createSurfaceMesh(data, material) {
+        const geometry = new THREE.BufferGeometry();
+
+        // Standard attributes
+        geometry.setAttribute('position', new THREE.BufferAttribute(data.positions, 3));
+        geometry.setAttribute('normal', new THREE.BufferAttribute(data.normals, 3));
+        geometry.setAttribute('uv', new THREE.BufferAttribute(data.uvs, 2));
+        geometry.setAttribute('color', new THREE.BufferAttribute(data.colors, 3));
+
+        // Splatting attributes for texture blending
+        if (data.tileIndices && data.blendWeights) {
+            geometry.setAttribute('aTileIndices', new THREE.BufferAttribute(data.tileIndices, 4));
+            geometry.setAttribute('aBlendWeights', new THREE.BufferAttribute(data.blendWeights, 4));
+        }
+
+        geometry.setIndex(new THREE.BufferAttribute(data.indices, 1));
         geometry.computeBoundingSphere();
 
         return new THREE.Mesh(geometry, material);

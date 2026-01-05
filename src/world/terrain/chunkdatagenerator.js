@@ -1,17 +1,20 @@
 /**
  * ChunkDataGenerator - IMPROVED VERSION
- * 
+ *
  * Strategy:
  * - Heightfield renders EVERYWHERE (no holes for voxel regions)
  * - Voxels render ON TOP of heightfield where shouldUseVoxels() is true
  * - Render order: voxels first (write Z), heightfield second (gets Z-rejected under voxels)
- * 
+ *
  * IMPROVEMENTS in this version:
  * 1. Fixed normal computation (was using arbitrary ny=2.0)
  * 2. Added heightmap smoothing to eliminate single-block peaks
  * 3. Improved water transparency with better depth colors
  * 4. Edge pixels NOT smoothed to preserve chunk boundary continuity
+ * 5. Texture splatting for smooth biome transitions
  */
+
+import { BIOMES } from './biomesystem.js';
 
 // ============================================================================
 // CONSTANTS
@@ -28,6 +31,16 @@ const ATLAS_SIZE = 720;
 const CELL_SIZE = 72;
 const TILE_SIZE = 64;
 const GUTTER = 4;
+
+// Mapping from surface block types to atlas tile indices for splatting shader
+const SURFACE_TILE_INDICES = {
+    grass: 0,      // [0,0] in atlas
+    stone: 1,      // [1,0]
+    snow: 2,       // [2,0]
+    dirt: 3,       // [3,0]
+    sand: 5,       // [5,0]
+    ice: 6         // [6,0]
+};
 
 export const BLOCK_TYPES = {
     grass: { tile: [0, 0] },
@@ -132,6 +145,105 @@ function isBlockTransparent(blockType) {
 
 function getHeightmapIndex(localX, localZ) {
     return localZ * HEIGHTMAP_SIZE + localX;
+}
+
+// ============================================================================
+// BIOME BLEND WEIGHT COMPUTATION FOR TEXTURE SPLATTING
+// ============================================================================
+
+/**
+ * Compute blend weights for texture splatting at a vertex position.
+ * Samples biomes in a 5x5 area around the vertex and computes weights
+ * based on the frequency of each surface type.
+ *
+ * @param {number} worldX - World X coordinate of vertex
+ * @param {number} worldZ - World Z coordinate of vertex
+ * @param {Object} terrainProvider - Provider with getBiome() and biome data access
+ * @param {Object} biomes - BIOMES configuration object
+ * @returns {Object} { tileIndices: [4], weights: [4] } - padded to 4 entries
+ */
+function computeBlendWeights(worldX, worldZ, terrainProvider, biomes) {
+    const SAMPLE_RADIUS = 2;  // 5x5 sample area
+    const surfaceVotes = new Map();  // surfaceType -> count
+
+    // Sample biomes in a grid around the vertex
+    for (let dx = -SAMPLE_RADIUS; dx <= SAMPLE_RADIUS; dx++) {
+        for (let dz = -SAMPLE_RADIUS; dz <= SAMPLE_RADIUS; dz++) {
+            const biome = terrainProvider.getBiome(worldX + dx, worldZ + dz);
+            const biomeData = biomes[biome];
+            if (biomeData) {
+                const surfaceType = biomeData.surface;
+                surfaceVotes.set(surfaceType, (surfaceVotes.get(surfaceType) || 0) + 1);
+            }
+        }
+    }
+
+    // Sort by vote count (descending), take top 4
+    const sorted = [...surfaceVotes.entries()]
+        .sort((a, b) => b[1] - a[1])
+        .slice(0, 4);
+
+    // Calculate total for normalization
+    const totalVotes = sorted.reduce((sum, [_, count]) => sum + count, 0);
+
+    // Build result arrays, padded to exactly 4 entries
+    const tileIndices = [];
+    const weights = [];
+
+    for (let i = 0; i < 4; i++) {
+        if (i < sorted.length) {
+            const [surfaceType, count] = sorted[i];
+            tileIndices.push(SURFACE_TILE_INDICES[surfaceType] ?? 0);
+            weights.push(count / totalVotes);
+        } else {
+            // Pad with zeros (first tile, zero weight)
+            tileIndices.push(tileIndices[0] ?? 0);
+            weights.push(0);
+        }
+    }
+
+    return { tileIndices, weights };
+}
+
+/**
+ * Remap a vertex's blend weights to match a fixed tile index order.
+ *
+ * The quad uses a fixed set of tile indices (from center sample).
+ * Each vertex may have different surface types in its blend result.
+ * This function maps the vertex's weights to the quad's tile order.
+ *
+ * @param {Object} vertexBlend - { tileIndices: [4], weights: [4] } from vertex
+ * @param {Array} quadTileIndices - [4] fixed tile indices for the quad
+ * @returns {Array} [4] weights remapped to quad's tile order
+ */
+function remapWeightsToTileOrder(vertexBlend, quadTileIndices) {
+    const remappedWeights = [0, 0, 0, 0];
+
+    // For each tile in the vertex's blend, find where it goes in quad order
+    for (let i = 0; i < 4; i++) {
+        const tileIndex = vertexBlend.tileIndices[i];
+        const weight = vertexBlend.weights[i];
+
+        // Find this tile in the quad's tile list
+        const quadSlot = quadTileIndices.indexOf(tileIndex);
+        if (quadSlot !== -1) {
+            remappedWeights[quadSlot] += weight;
+        }
+        // If tile not in quad's list, its weight is lost (distributed to others via normalization)
+    }
+
+    // Normalize weights to sum to 1.0
+    const total = remappedWeights.reduce((a, b) => a + b, 0);
+    if (total > 0.001) {
+        for (let i = 0; i < 4; i++) {
+            remappedWeights[i] /= total;
+        }
+    } else {
+        // Fallback: all weight to first tile
+        remappedWeights[0] = 1.0;
+    }
+
+    return remappedWeights;
 }
 
 // ============================================================================
@@ -377,68 +489,101 @@ function computeHeightmapAO(heightmap, lx, lz, terrainProvider, worldMinX, world
 function generateSurfaceMesh(heightmap, voxelMask, surfaceTypes, terrainProvider, chunkX, chunkZ) {
     const worldMinX = chunkX * CHUNK_SIZE;
     const worldMinZ = chunkZ * CHUNK_SIZE;
-    
+
     const positions = [];
     const normals = [];
     const uvs = [];
     const colors = [];
     const indices = [];
-    
+    // New splatting attributes
+    const tileIndices = [];   // vec4: 4 tile indices per vertex
+    const blendWeights = [];  // vec4: 4 blend weights per vertex
+
     for (let lz = 0; lz < CHUNK_SIZE; lz++) {
         for (let lx = 0; lx < CHUNK_SIZE; lx++) {
             const h00 = heightmap[getHeightmapIndex(lx, lz)];
             const h10 = heightmap[getHeightmapIndex(lx + 1, lz)];
             const h01 = heightmap[getHeightmapIndex(lx, lz + 1)];
             const h11 = heightmap[getHeightmapIndex(lx + 1, lz + 1)];
-            
+
             const n00 = computeHeightmapNormal(heightmap, lx, lz, terrainProvider, worldMinX, worldMinZ);
             const n10 = computeHeightmapNormal(heightmap, lx + 1, lz, terrainProvider, worldMinX, worldMinZ);
             const n01 = computeHeightmapNormal(heightmap, lx, lz + 1, terrainProvider, worldMinX, worldMinZ);
             const n11 = computeHeightmapNormal(heightmap, lx + 1, lz + 1, terrainProvider, worldMinX, worldMinZ);
-            
+
             // Compute AO for each vertex
             const ao00 = computeHeightmapAO(heightmap, lx, lz, terrainProvider, worldMinX, worldMinZ);
             const ao10 = computeHeightmapAO(heightmap, lx + 1, lz, terrainProvider, worldMinX, worldMinZ);
             const ao01 = computeHeightmapAO(heightmap, lx, lz + 1, terrainProvider, worldMinX, worldMinZ);
             const ao11 = computeHeightmapAO(heightmap, lx + 1, lz + 1, terrainProvider, worldMinX, worldMinZ);
-            
-            const surfaceType = surfaceTypes[lz * CHUNK_SIZE + lx];
-            const blockTypeName = Object.keys(BLOCK_TYPE_IDS).find(k => BLOCK_TYPE_IDS[k] === surfaceType) || 'grass';
-            const blockUvs = getBlockUVs(blockTypeName);
-            
+
+            // Compute blend weights at each vertex position
+            const blend00 = computeBlendWeights(worldMinX + lx, worldMinZ + lz, terrainProvider, BIOMES);
+            const blend10 = computeBlendWeights(worldMinX + lx + 1, worldMinZ + lz, terrainProvider, BIOMES);
+            const blend01 = computeBlendWeights(worldMinX + lx, worldMinZ + lz + 1, terrainProvider, BIOMES);
+            const blend11 = computeBlendWeights(worldMinX + lx + 1, worldMinZ + lz + 1, terrainProvider, BIOMES);
+
+            // Use tile indices from cell center (same for all 4 vertices to prevent interpolation)
+            // But weights vary per vertex for smooth transitions
+            const cellCenterX = worldMinX + lx + 0.5;
+            const cellCenterZ = worldMinZ + lz + 0.5;
+            const centerBlend = computeBlendWeights(cellCenterX, cellCenterZ, terrainProvider, BIOMES);
+            const quadTileIndices = centerBlend.tileIndices;
+
+            // Remap each vertex's weights to match the quad's tile index order
+            const weights00 = remapWeightsToTileOrder(blend00, quadTileIndices);
+            const weights10 = remapWeightsToTileOrder(blend10, quadTileIndices);
+            const weights01 = remapWeightsToTileOrder(blend01, quadTileIndices);
+            const weights11 = remapWeightsToTileOrder(blend11, quadTileIndices);
+
+            // Pass LOCAL tile UVs (0-1) for splatting shader to use
             const baseVertex = positions.length / 3;
-            
+
+            // Vertex 0: (lx, lz) -> local UV (0, 0)
             positions.push(lx, h00, lz);
             normals.push(...n00);
-            uvs.push(blockUvs.uMin, blockUvs.vMin);
+            uvs.push(0, 0);
             colors.push(ao00, ao00, ao00);
-            
+            tileIndices.push(...quadTileIndices);
+            blendWeights.push(...weights00);
+
+            // Vertex 1: (lx+1, lz) -> local UV (1, 0)
             positions.push(lx + 1, h10, lz);
             normals.push(...n10);
-            uvs.push(blockUvs.uMax, blockUvs.vMin);
+            uvs.push(1, 0);
             colors.push(ao10, ao10, ao10);
-            
+            tileIndices.push(...quadTileIndices);
+            blendWeights.push(...weights10);
+
+            // Vertex 2: (lx+1, lz+1) -> local UV (1, 1)
             positions.push(lx + 1, h11, lz + 1);
             normals.push(...n11);
-            uvs.push(blockUvs.uMax, blockUvs.vMax);
+            uvs.push(1, 1);
             colors.push(ao11, ao11, ao11);
-            
+            tileIndices.push(...quadTileIndices);
+            blendWeights.push(...weights11);
+
+            // Vertex 3: (lx, lz+1) -> local UV (0, 1)
             positions.push(lx, h01, lz + 1);
             normals.push(...n01);
-            uvs.push(blockUvs.uMin, blockUvs.vMax);
+            uvs.push(0, 1);
             colors.push(ao01, ao01, ao01);
-            
+            tileIndices.push(...quadTileIndices);
+            blendWeights.push(...weights01);
+
             indices.push(baseVertex, baseVertex + 2, baseVertex + 1);
             indices.push(baseVertex, baseVertex + 3, baseVertex + 2);
         }
     }
-    
+
     return {
         positions: new Float32Array(positions),
         normals: new Float32Array(normals),
         uvs: new Float32Array(uvs),
         colors: new Float32Array(colors),
         indices: new Uint32Array(indices),
+        tileIndices: new Float32Array(tileIndices),
+        blendWeights: new Float32Array(blendWeights),
         isEmpty: positions.length === 0
     };
 }
@@ -639,6 +784,8 @@ export function getTransferables(chunkData) {
         chunkData.surface.uvs.buffer,
         chunkData.surface.colors.buffer,
         chunkData.surface.indices.buffer,
+        chunkData.surface.tileIndices.buffer,    // Splatting: tile indices
+        chunkData.surface.blendWeights.buffer,   // Splatting: blend weights
         chunkData.opaque.positions.buffer,
         chunkData.opaque.normals.buffer,
         chunkData.opaque.uvs.buffer,

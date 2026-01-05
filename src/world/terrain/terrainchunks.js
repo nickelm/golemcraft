@@ -1,16 +1,22 @@
 import * as THREE from 'three';
 import { BLOCK_TYPES, WATER_LEVEL } from './terraingenerator.js';
+import {
+    terrainSplatVertexShader,
+    terrainSplatFragmentShader,
+    terrainSplatFragmentShaderMobile
+} from '../../shaders/terrainsplat.js';
 
 /**
  * ChunkedTerrain - Optimized terrain with merged geometry per chunk
- * 
+ *
  * Each chunk is a SINGLE mesh with all block faces merged into one geometry.
  * This minimizes draw calls (1 per chunk) while enabling frustum culling.
- * 
+ *
  * IMPROVEMENTS in this version:
  * - PBR materials (MeshStandardMaterial) for better lighting response
  * - More transparent water (opacity 0.65)
  * - Optional mobile fallback to Lambert materials
+ * - Texture splatting for smooth biome transitions
  */
 
 export const CHUNK_SIZE = 16;
@@ -102,11 +108,14 @@ export class ChunkedTerrain {
         this.terrain = terrain;
         this.terrainTexture = terrainTexture;
         this.chunks = new Map();
-        
+
         // Detect platform for material selection
-        const usePBR = !isMobileDevice();
-        
-        if (usePBR) {
+        const isMobile = isMobileDevice();
+
+        // Create splatting material for surface mesh (smooth terrain with biome blending)
+        this.surfaceMaterial = this.createSplatMaterial(terrainTexture, isMobile);
+
+        if (!isMobile) {
             // PBR materials for desktop - better lighting response
             this.opaqueMaterial = new THREE.MeshStandardMaterial({
                 map: terrainTexture,
@@ -116,7 +125,7 @@ export class ChunkedTerrain {
                 metalness: 0.0,       // Non-metallic
                 flatShading: false    // Use smooth normals
             });
-            
+
             this.waterMaterial = new THREE.MeshStandardMaterial({
                 map: terrainTexture,
                 transparent: true,
@@ -127,8 +136,8 @@ export class ChunkedTerrain {
                 metalness: 0.0,
                 depthWrite: false     // Prevents transparency sorting issues
             });
-            
-            console.log('Using PBR materials (MeshStandardMaterial)');
+
+            console.log('Using PBR materials + splatting shader (desktop)');
         } else {
             // Lambert materials for mobile - better performance
             this.opaqueMaterial = new THREE.MeshLambertMaterial({
@@ -136,7 +145,7 @@ export class ChunkedTerrain {
                 side: THREE.FrontSide,
                 vertexColors: true
             });
-            
+
             this.waterMaterial = new THREE.MeshLambertMaterial({
                 map: terrainTexture,
                 transparent: true,
@@ -145,13 +154,43 @@ export class ChunkedTerrain {
                 vertexColors: true,
                 depthWrite: false
             });
-            
-            console.log('Using Lambert materials (mobile fallback)');
+
+            console.log('Using Lambert materials + mobile splatting (2-texture)');
         }
-        
+
         // Stats
         this.totalChunks = 0;
         this.totalFaces = 0;
+    }
+
+    /**
+     * Create the texture splatting ShaderMaterial for smooth terrain
+     * @param {THREE.Texture} terrainTexture - The terrain atlas texture
+     * @param {boolean} isMobile - Use simplified 2-texture blend on mobile
+     * @returns {THREE.ShaderMaterial}
+     */
+    createSplatMaterial(terrainTexture, isMobile) {
+        const fragmentShader = isMobile
+            ? terrainSplatFragmentShaderMobile
+            : terrainSplatFragmentShader;
+
+        return new THREE.ShaderMaterial({
+            uniforms: THREE.UniformsUtils.merge([
+                THREE.UniformsLib.common,
+                THREE.UniformsLib.lights,
+                THREE.UniformsLib.fog,
+                THREE.UniformsLib.shadowmap,
+                {
+                    uAtlas: { value: terrainTexture }
+                }
+            ]),
+            vertexShader: terrainSplatVertexShader,
+            fragmentShader: fragmentShader,
+            lights: true,
+            fog: true,
+            vertexColors: true,
+            side: THREE.FrontSide
+        });
     }
     
     /**
