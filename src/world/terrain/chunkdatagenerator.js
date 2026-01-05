@@ -297,11 +297,20 @@ function generateBlockData(terrainProvider, chunkX, chunkZ) {
  * Compute heightmap normal using proper gradient calculation
  * FIXED: Original used arbitrary ny=2.0 constant
  */
-function computeHeightmapNormal(heightmap, lx, lz) {
+/**
+ * Compute normal at heightmap vertex
+ * Uses terrainProvider for boundary samples to ensure continuous normals across chunks
+ */
+function computeHeightmapNormal(heightmap, lx, lz, terrainProvider, worldMinX, worldMinZ) {
+    // Get height, using terrainProvider for out-of-bounds samples
     const getH = (x, z) => {
-        const cx = Math.max(0, Math.min(HEIGHTMAP_SIZE - 1, x));
-        const cz = Math.max(0, Math.min(HEIGHTMAP_SIZE - 1, z));
-        return heightmap[cz * HEIGHTMAP_SIZE + cx];
+        if (x >= 0 && x < HEIGHTMAP_SIZE && z >= 0 && z < HEIGHTMAP_SIZE) {
+            return heightmap[z * HEIGHTMAP_SIZE + x];
+        }
+        // Out of bounds - query actual terrain for continuous normals across chunks
+        const worldX = worldMinX + x;
+        const worldZ = worldMinZ + z;
+        return terrainProvider.getContinuousHeight(worldX, worldZ);
     };
     
     const hL = getH(lx - 1, lz);
@@ -320,7 +329,55 @@ function computeHeightmapNormal(heightmap, lx, lz) {
     return [nx / len, ny / len, nz / len];
 }
 
-function generateSurfaceMesh(heightmap, voxelMask, surfaceTypes) {
+/**
+ * Compute ambient occlusion at heightmap vertex using concavity
+ * Samples neighbors in a radius - if vertex is lower than average, it's occluded
+ * 
+ * @returns {number} AO value 0.0 (fully occluded) to 1.0 (no occlusion)
+ */
+function computeHeightmapAO(heightmap, lx, lz, terrainProvider, worldMinX, worldMinZ) {
+    const getH = (x, z) => {
+        if (x >= 0 && x < HEIGHTMAP_SIZE && z >= 0 && z < HEIGHTMAP_SIZE) {
+            return heightmap[z * HEIGHTMAP_SIZE + x];
+        }
+        const worldX = worldMinX + x;
+        const worldZ = worldMinZ + z;
+        return terrainProvider.getContinuousHeight(worldX, worldZ);
+    };
+    
+    const centerH = getH(lx, lz);
+    
+    // Sample 8 neighbors at radius 2 for broader AO effect
+    const radius = 2;
+    const neighbors = [
+        [-radius, 0], [radius, 0], [0, -radius], [0, radius],  // Cardinals
+        [-radius, -radius], [radius, -radius], [-radius, radius], [radius, radius]  // Diagonals
+    ];
+    
+    let totalDiff = 0;
+    for (const [dx, dz] of neighbors) {
+        const neighborH = getH(lx + dx, lz + dz);
+        // Positive diff means neighbor is higher (we're in a valley)
+        totalDiff += Math.max(0, neighborH - centerH);
+    }
+    
+    // Average height difference
+    const avgDiff = totalDiff / neighbors.length;
+    
+    // Convert to AO: more difference = more occlusion
+    // Scale factor controls sensitivity (higher = more contrast)
+    const aoScale = 0.15;
+    const occlusion = Math.min(1.0, avgDiff * aoScale);
+    
+    // Return AO value (1 = bright, lower = darker)
+    // Clamp minimum to 0.5 to avoid completely black areas
+    return Math.max(0.5, 1.0 - occlusion);
+}
+
+function generateSurfaceMesh(heightmap, voxelMask, surfaceTypes, terrainProvider, chunkX, chunkZ) {
+    const worldMinX = chunkX * CHUNK_SIZE;
+    const worldMinZ = chunkZ * CHUNK_SIZE;
+    
     const positions = [];
     const normals = [];
     const uvs = [];
@@ -334,37 +391,42 @@ function generateSurfaceMesh(heightmap, voxelMask, surfaceTypes) {
             const h01 = heightmap[getHeightmapIndex(lx, lz + 1)];
             const h11 = heightmap[getHeightmapIndex(lx + 1, lz + 1)];
             
-            const n00 = computeHeightmapNormal(heightmap, lx, lz);
-            const n10 = computeHeightmapNormal(heightmap, lx + 1, lz);
-            const n01 = computeHeightmapNormal(heightmap, lx, lz + 1);
-            const n11 = computeHeightmapNormal(heightmap, lx + 1, lz + 1);
+            const n00 = computeHeightmapNormal(heightmap, lx, lz, terrainProvider, worldMinX, worldMinZ);
+            const n10 = computeHeightmapNormal(heightmap, lx + 1, lz, terrainProvider, worldMinX, worldMinZ);
+            const n01 = computeHeightmapNormal(heightmap, lx, lz + 1, terrainProvider, worldMinX, worldMinZ);
+            const n11 = computeHeightmapNormal(heightmap, lx + 1, lz + 1, terrainProvider, worldMinX, worldMinZ);
+            
+            // Compute AO for each vertex
+            const ao00 = computeHeightmapAO(heightmap, lx, lz, terrainProvider, worldMinX, worldMinZ);
+            const ao10 = computeHeightmapAO(heightmap, lx + 1, lz, terrainProvider, worldMinX, worldMinZ);
+            const ao01 = computeHeightmapAO(heightmap, lx, lz + 1, terrainProvider, worldMinX, worldMinZ);
+            const ao11 = computeHeightmapAO(heightmap, lx + 1, lz + 1, terrainProvider, worldMinX, worldMinZ);
             
             const surfaceType = surfaceTypes[lz * CHUNK_SIZE + lx];
             const blockTypeName = Object.keys(BLOCK_TYPE_IDS).find(k => BLOCK_TYPE_IDS[k] === surfaceType) || 'grass';
             const blockUvs = getBlockUVs(blockTypeName);
             
-            const ao = 0.9;
             const baseVertex = positions.length / 3;
             
             positions.push(lx, h00, lz);
             normals.push(...n00);
             uvs.push(blockUvs.uMin, blockUvs.vMin);
-            colors.push(ao, ao, ao);
+            colors.push(ao00, ao00, ao00);
             
             positions.push(lx + 1, h10, lz);
             normals.push(...n10);
             uvs.push(blockUvs.uMax, blockUvs.vMin);
-            colors.push(ao, ao, ao);
+            colors.push(ao10, ao10, ao10);
             
             positions.push(lx + 1, h11, lz + 1);
             normals.push(...n11);
             uvs.push(blockUvs.uMax, blockUvs.vMax);
-            colors.push(ao, ao, ao);
+            colors.push(ao11, ao11, ao11);
             
             positions.push(lx, h01, lz + 1);
             normals.push(...n01);
             uvs.push(blockUvs.uMin, blockUvs.vMax);
-            colors.push(ao, ao, ao);
+            colors.push(ao01, ao01, ao01);
             
             indices.push(baseVertex, baseVertex + 2, baseVertex + 1);
             indices.push(baseVertex, baseVertex + 3, baseVertex + 2);
@@ -550,7 +612,7 @@ export function generateChunkData(terrainProvider, chunkX, chunkZ) {
     const surfaceTypes = generateSurfaceTypes(terrainProvider, chunkX, chunkZ);
     const blockData = generateBlockData(terrainProvider, chunkX, chunkZ);
     
-    const surface = generateSurfaceMesh(heightmap, voxelMask, surfaceTypes);
+    const surface = generateSurfaceMesh(heightmap, voxelMask, surfaceTypes, terrainProvider, chunkX, chunkZ);
     const { opaque: voxelOpaque } = generateVoxelMesh(terrainProvider, voxelMask, chunkX, chunkZ);
     const water = generateWaterMesh(heightmap);
     

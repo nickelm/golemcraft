@@ -377,13 +377,16 @@ export class Mob {
         const startPos = this.position.clone();
         startPos.y += 1.2;
         
+        const aimPos = targetPosition.clone();
+        aimPos.y += 0.5;
+
         // Random damage between 5-10
         const damage = 5 + Math.floor(Math.random() * 6);
         
         // Queue arrow to be created by game (we don't have scene access for Arrow)
         this.pendingArrows.push({
             start: startPos,
-            target: targetPosition.clone(),
+            target: aimPos,
             damage: damage
         });
     }
@@ -1280,7 +1283,7 @@ export class MobSpawner {
         this.mobs = [];
         
         // Spawn settings
-        this.maxMobs = 0; //25;          // Reduced from 40
+        this.maxMobs = 25;          // Reduced from 40
         this.spawnRadius = 45;      // Spawn within 45 blocks of player
         this.minSpawnDistance = 20; // Don't spawn too close
         this.despawnDistance = 50;  // Remove mobs more than 50 units away

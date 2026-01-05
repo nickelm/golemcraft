@@ -59,10 +59,10 @@ export class ObjectGenerator {
         this.collisionMap = new Map();
         
         // Object rendering distance (configurable)
-        this.objectRenderDistance = 128; // Only render objects within 128 blocks
+        this.objectRenderDistance = 128;
         
         // Track generated objects by chunk for distance culling
-        this.objectsByChunk = new Map(); // key: "chunkX,chunkZ" -> array of meshes
+        this.objectsByChunk = new Map();
     }
 
     hash(x, z, salt = 0) {
@@ -106,6 +106,19 @@ export class ObjectGenerator {
     hasCollision(x, z) {
         return this.collisionMap.has(`${x},${z}`);
     }
+    
+    /**
+     * Get ground height for object placement
+     * Uses interpolated height for smooth terrain placement
+     */
+    getObjectPlacementHeight(x, z) {
+        // Use interpolated height if available (for smooth terrain)
+        if (this.terrain.getInterpolatedHeight) {
+            return this.terrain.getInterpolatedHeight(x, z);
+        }
+        // Fall back to integer height + 1 for voxel terrain
+        return this.terrain.getHeight(x, z) + 1;
+    }
 
     generate(scene, width, depth, waterLevel) {
         const objects = {
@@ -125,7 +138,11 @@ export class ObjectGenerator {
                 if (height < waterLevel) continue;
 
                 const biome = this.terrain.getBiome(x, z);
-                const y = height + 1;
+                
+                // Get interpolated height for smooth placement
+                const placeX = x + 0.5;
+                const placeZ = z + 0.5;
+                const y = this.getObjectPlacementHeight(placeX, placeZ);
 
                 let placed = false;
                 for (const [type, config] of Object.entries(OBJECT_TYPES)) {
@@ -142,7 +159,7 @@ export class ObjectGenerator {
                     
                     if (this.shouldPlaceObject(x, z, effectiveDensity, salt)) {
                         const variation = this.getVariation(x, z, salt + 1);
-                        objects[type].push({ x: x + 0.5, y: y + 0.5, z: z + 0.5, variation });
+                        objects[type].push({ x: placeX, y: y, z: placeZ, variation });
                         
                         if (config.hasCollision) {
                             this.collisionMap.set(`${x},${z}`, type);
@@ -168,17 +185,11 @@ export class ObjectGenerator {
     
     /**
      * Generate objects for a specific chunk (for infinite terrain)
-     * @param {THREE.Scene} scene - Scene to add objects to
-     * @param {number} chunkX - Chunk X coordinate
-     * @param {number} chunkZ - Chunk Z coordinate
-     * @param {number} waterLevel - Water level to skip underwater positions
-     * @param {Set} loadedChunks - Set of loaded chunk keys (optional, for validation)
      */
     generateForChunk(scene, chunkX, chunkZ, waterLevel, loadedChunks = null) {
-        const CHUNK_SIZE = 16; // Must match CHUNK_SIZE from terrainchunks.js
+        const CHUNK_SIZE = 16;
         const chunkKey = `${chunkX},${chunkZ}`;
         
-        // Only generate objects for loaded chunks (Solution B)
         if (loadedChunks && !loadedChunks.has(chunkKey)) {
             console.warn(`Skipping object generation for unloaded chunk ${chunkKey}`);
             return;
@@ -208,7 +219,11 @@ export class ObjectGenerator {
                 }
                 
                 const biome = this.terrain.getBiome(x, z);
-                const y = height + 1;
+                
+                // Get interpolated height for smooth placement
+                const placeX = x + 0.5;
+                const placeZ = z + 0.5;
+                const y = this.getObjectPlacementHeight(placeX, placeZ);
                 
                 let placed = false;
                 for (const [type, config] of Object.entries(OBJECT_TYPES)) {
@@ -225,9 +240,7 @@ export class ObjectGenerator {
                     
                     if (this.shouldPlaceObject(x, z, effectiveDensity, salt)) {
                         const variation = this.getVariation(x, z, salt + 1);
-                        objects[type].push({ 
-                            x: x + 0.5, y: y + 0.5, z: z + 0.5, variation 
-                        });
+                        objects[type].push({ x: placeX, y: y, z: placeZ, variation });
                         
                         if (config.hasCollision) {
                             this.collisionMap.set(`${x},${z}`, type);
@@ -255,8 +268,7 @@ export class ObjectGenerator {
     }
     
     /**
-     * Update object visibility based on distance from player (Solution C)
-     * @param {THREE.Vector3} playerPosition - Current player position
+     * Update object visibility based on distance from player
      */
     updateObjectVisibility(playerPosition) {
         const distanceSquared = this.objectRenderDistance * this.objectRenderDistance;
@@ -265,18 +277,15 @@ export class ObjectGenerator {
             const [chunkX, chunkZ] = chunkKey.split(',').map(Number);
             const CHUNK_SIZE = 16;
             
-            // Calculate chunk center position
             const chunkCenterX = (chunkX * CHUNK_SIZE) + (CHUNK_SIZE / 2);
             const chunkCenterZ = (chunkZ * CHUNK_SIZE) + (CHUNK_SIZE / 2);
             
-            // Check distance from player to chunk center
             const dx = chunkCenterX - playerPosition.x;
             const dz = chunkCenterZ - playerPosition.z;
             const distSq = dx * dx + dz * dz;
             
             const shouldBeVisible = distSq <= distanceSquared;
             
-            // Update visibility for all meshes in this chunk
             meshes.forEach(mesh => {
                 if (mesh && mesh.visible !== shouldBeVisible) {
                     mesh.visible = shouldBeVisible;
@@ -287,15 +296,12 @@ export class ObjectGenerator {
     
     /**
      * Remove objects for an unloaded chunk
-     * @param {number} chunkX - Chunk X coordinate
-     * @param {number} chunkZ - Chunk Z coordinate
      */
     unloadChunk(chunkX, chunkZ) {
         const chunkKey = `${chunkX},${chunkZ}`;
         const meshes = this.objectsByChunk.get(chunkKey);
         
         if (meshes) {
-            // Remove meshes from scene and dispose
             meshes.forEach(mesh => {
                 if (mesh && mesh.parent) {
                     mesh.parent.remove(mesh);
@@ -320,25 +326,26 @@ export class ObjectGenerator {
         const trunkColor = 0x8B4513;
         const foliageColor = isSnowy ? 0x228B22 : 0x2E8B2E;
 
-        const trunkGeometry = new THREE.CylinderGeometry(0.15, 0.2, 1.2, 6);
-        const trunkMaterial = new THREE.MeshLambertMaterial({ color: trunkColor });
-        const trunkMesh = new THREE.InstancedMesh(trunkGeometry, trunkMaterial, positions.length);
+        // Trunk geometry
+        const trunkGeo = new THREE.CylinderGeometry(0.15, 0.2, 1.2, 6);
+        const trunkMat = new THREE.MeshLambertMaterial({ color: trunkColor });
+        const trunkMesh = new THREE.InstancedMesh(trunkGeo, trunkMat, positions.length);
         trunkMesh.castShadow = true;
         trunkMesh.receiveShadow = true;
 
-        let foliageGeometry;
+        // Foliage - cone for snowy (fir trees), sphere for regular
+        let foliageGeo;
         if (isSnowy) {
-            foliageGeometry = new THREE.ConeGeometry(0.7, 1.8, 6);
+            foliageGeo = new THREE.ConeGeometry(0.7, 1.8, 6);
         } else {
-            foliageGeometry = new THREE.SphereGeometry(0.8, 6, 4);
+            foliageGeo = new THREE.SphereGeometry(0.8, 6, 4);
         }
-        const foliageMaterial = new THREE.MeshLambertMaterial({ color: foliageColor });
-        const foliageMesh = new THREE.InstancedMesh(foliageGeometry, foliageMaterial, positions.length);
+        const foliageMat = new THREE.MeshLambertMaterial({ color: foliageColor });
+        const foliageMesh = new THREE.InstancedMesh(foliageGeo, foliageMat, positions.length);
         foliageMesh.castShadow = true;
         foliageMesh.receiveShadow = true;
 
         const matrix = new THREE.Matrix4();
-        const rotation = new THREE.Euler();
         const quaternion = new THREE.Quaternion();
         const scale = new THREE.Vector3();
 
@@ -346,7 +353,7 @@ export class ObjectGenerator {
             const sizeVar = 0.8 + pos.variation * 0.4;
             
             scale.set(sizeVar, sizeVar, sizeVar);
-            const trunkY = pos.y + 0.6 * sizeVar - 1;
+            const trunkY = pos.y + 0.6 * sizeVar;
             matrix.compose(
                 new THREE.Vector3(pos.x, trunkY, pos.z),
                 quaternion,
@@ -372,6 +379,7 @@ export class ObjectGenerator {
 
         const meshes = [trunkMesh, foliageMesh];
 
+        // Snow caps for fir trees
         if (isSnowy && positions.length > 0) {
             const snowGeometry = new THREE.ConeGeometry(0.6, 1.4, 6);
             const snowMaterial = new THREE.MeshLambertMaterial({ color: 0xFFFFFF });
@@ -381,7 +389,7 @@ export class ObjectGenerator {
 
             positions.forEach((pos, i) => {
                 const sizeVar = 0.8 + pos.variation * 0.4;
-                const trunkY = pos.y + 0.6 * sizeVar - 1;
+                const trunkY = pos.y + 0.6 * sizeVar;
                 const trunkTop = trunkY + 0.6 * sizeVar;
                 const foliageY = trunkTop + 0.9 * sizeVar;
                 const snowY = foliageY + 0.2 * sizeVar;
@@ -401,44 +409,33 @@ export class ObjectGenerator {
         return meshes;
     }
 
-    /**
-     * Create jungle trees - taller with thicker trunks and larger canopy
-     */
     createJungleTrees(scene, positions) {
         if (positions.length === 0) return [];
 
-        const trunkColor = 0x5D4037;  // Darker brown
-        const foliageColor = 0x1B5E20;  // Dark green
-        const vineColor = 0x33691E;  // Slightly lighter green
+        const trunkColor = 0x5D4037;
+        const foliageColor = 0x1B5E20;
 
-        // Taller, thicker trunks
-        const trunkGeometry = new THREE.CylinderGeometry(0.25, 0.35, 2.5, 6);
-        const trunkMaterial = new THREE.MeshLambertMaterial({ color: trunkColor });
-        const trunkMesh = new THREE.InstancedMesh(trunkGeometry, trunkMaterial, positions.length);
+        // Tall trunk
+        const trunkGeo = new THREE.CylinderGeometry(0.25, 0.35, 5, 8);
+        const trunkMat = new THREE.MeshLambertMaterial({ color: trunkColor });
+        const trunkMesh = new THREE.InstancedMesh(trunkGeo, trunkMat, positions.length);
         trunkMesh.castShadow = true;
-        trunkMesh.receiveShadow = true;
 
-        // Large spherical canopy
-        const foliageGeometry = new THREE.SphereGeometry(1.5, 8, 6);
-        const foliageMaterial = new THREE.MeshLambertMaterial({ color: foliageColor });
-        const foliageMesh = new THREE.InstancedMesh(foliageGeometry, foliageMaterial, positions.length);
+        // Large canopy
+        const foliageGeo = new THREE.SphereGeometry(2.0, 10, 8);
+        const foliageMat = new THREE.MeshLambertMaterial({ color: foliageColor });
+        const foliageMesh = new THREE.InstancedMesh(foliageGeo, foliageMat, positions.length);
         foliageMesh.castShadow = true;
         foliageMesh.receiveShadow = true;
-
-        // Secondary canopy layer for fullness
-        const foliage2Geometry = new THREE.SphereGeometry(1.2, 6, 4);
-        const foliage2Material = new THREE.MeshLambertMaterial({ color: vineColor });
-        const foliage2Mesh = new THREE.InstancedMesh(foliage2Geometry, foliage2Material, positions.length);
-        foliage2Mesh.castShadow = true;
 
         const matrix = new THREE.Matrix4();
         const quaternion = new THREE.Quaternion();
 
         positions.forEach((pos, i) => {
-            const sizeVar = 0.9 + pos.variation * 0.4;  // More size variation
+            const sizeVar = 0.8 + pos.variation * 0.4;
             
-            // Trunk
-            const trunkY = pos.y + 1.25 * sizeVar - 1;
+            // Trunk - base at ground level
+            const trunkY = pos.y + 2.5 * sizeVar;
             matrix.compose(
                 new THREE.Vector3(pos.x, trunkY, pos.z),
                 quaternion,
@@ -446,36 +443,23 @@ export class ObjectGenerator {
             );
             trunkMesh.setMatrixAt(i, matrix);
 
-            // Main canopy
-            const trunkTop = trunkY + 1.25 * sizeVar;
-            const foliageY = trunkTop + 0.8 * sizeVar;
+            // Canopy
+            const foliageY = trunkY + 3.0 * sizeVar;
             matrix.compose(
                 new THREE.Vector3(pos.x, foliageY, pos.z),
                 quaternion,
-                new THREE.Vector3(sizeVar, sizeVar * 0.8, sizeVar)  // Slightly flattened
+                new THREE.Vector3(sizeVar, sizeVar * 0.7, sizeVar)
             );
             foliageMesh.setMatrixAt(i, matrix);
-
-            // Secondary canopy (offset slightly)
-            const offset2X = (pos.variation - 0.5) * 0.5;
-            const offset2Z = (this.hash(pos.x, pos.z, 888) - 0.5) * 0.5;
-            matrix.compose(
-                new THREE.Vector3(pos.x + offset2X, foliageY - 0.3 * sizeVar, pos.z + offset2Z),
-                quaternion,
-                new THREE.Vector3(sizeVar * 0.9, sizeVar * 0.7, sizeVar * 0.9)
-            );
-            foliage2Mesh.setMatrixAt(i, matrix);
         });
 
         trunkMesh.instanceMatrix.needsUpdate = true;
         foliageMesh.instanceMatrix.needsUpdate = true;
-        foliage2Mesh.instanceMatrix.needsUpdate = true;
 
         scene.add(trunkMesh);
         scene.add(foliageMesh);
-        scene.add(foliage2Mesh);
 
-        return [trunkMesh, foliageMesh, foliage2Mesh];
+        return [trunkMesh, foliageMesh];
     }
 
     createRocks(scene, positions, isLarge) {
@@ -505,9 +489,10 @@ export class ObjectGenerator {
             );
             quaternion.setFromEuler(euler);
 
-            const yOffset = isLarge ? 0.4 * sizeVar : 0.2 * sizeVar;
+            // Rock sits on ground - slight embed
+            const yOffset = isLarge ? 0.3 * sizeVar : 0.15 * sizeVar;
             matrix.compose(
-                new THREE.Vector3(pos.x, pos.y + yOffset - 0.5, pos.z),
+                new THREE.Vector3(pos.x, pos.y + yOffset, pos.z),
                 quaternion,
                 new THREE.Vector3(sizeVar, sizeVar * 0.7, sizeVar)
             );
@@ -540,7 +525,7 @@ export class ObjectGenerator {
 
                 quaternion.setFromEuler(new THREE.Euler(0, rotY, 0));
                 matrix.compose(
-                    new THREE.Vector3(pos.x + offsetX, pos.y + 0.15 * sizeVar - 0.5, pos.z + offsetZ),
+                    new THREE.Vector3(pos.x + offsetX, pos.y + 0.15 * sizeVar, pos.z + offsetZ),
                     quaternion,
                     new THREE.Vector3(sizeVar, sizeVar, sizeVar)
                 );
@@ -575,45 +560,46 @@ export class ObjectGenerator {
         positions.forEach((pos, i) => {
             const sizeVar = 0.8 + pos.variation * 0.4;
             
+            // Body - base at ground level
             matrix.compose(
-                new THREE.Vector3(pos.x, pos.y + 0.75 * sizeVar - 0.5, pos.z),
+                new THREE.Vector3(pos.x, pos.y + 0.75 * sizeVar, pos.z),
                 quaternion,
                 new THREE.Vector3(sizeVar, sizeVar, sizeVar)
             );
             bodyMesh.setMatrixAt(i, matrix);
         });
 
-        const armQuaternion = new THREE.Quaternion();
-        armsWithArms.forEach((pos, i) => {
+        // Arms for some cacti
+        let armIndex = 0;
+        armsWithArms.forEach((pos) => {
             const sizeVar = 0.8 + pos.variation * 0.4;
+            const armY = pos.y + 0.8 * sizeVar;
             
-            armQuaternion.setFromEuler(new THREE.Euler(0, 0, Math.PI / 2));
+            // Left arm
+            const leftQ = new THREE.Quaternion().setFromEuler(new THREE.Euler(0, 0, Math.PI / 3));
             matrix.compose(
-                new THREE.Vector3(pos.x - 0.35 * sizeVar, pos.y + 0.8 * sizeVar - 0.5, pos.z),
-                armQuaternion,
+                new THREE.Vector3(pos.x - 0.3 * sizeVar, armY, pos.z),
+                leftQ,
                 new THREE.Vector3(sizeVar, sizeVar, sizeVar)
             );
-            armMesh.setMatrixAt(i * 2, matrix);
+            armMesh.setMatrixAt(armIndex++, matrix);
 
+            // Right arm
+            const rightQ = new THREE.Quaternion().setFromEuler(new THREE.Euler(0, 0, -Math.PI / 3));
             matrix.compose(
-                new THREE.Vector3(pos.x + 0.35 * sizeVar, pos.y + 1.0 * sizeVar - 0.5, pos.z),
-                armQuaternion,
+                new THREE.Vector3(pos.x + 0.3 * sizeVar, armY, pos.z),
+                rightQ,
                 new THREE.Vector3(sizeVar, sizeVar, sizeVar)
             );
-            armMesh.setMatrixAt(i * 2 + 1, matrix);
+            armMesh.setMatrixAt(armIndex++, matrix);
         });
 
         bodyMesh.instanceMatrix.needsUpdate = true;
         armMesh.instanceMatrix.needsUpdate = true;
 
         scene.add(bodyMesh);
-        const meshes = [bodyMesh];
-        
-        if (armsWithArms.length > 0) {
-            scene.add(armMesh);
-            meshes.push(armMesh);
-        }
-        
-        return meshes;
+        scene.add(armMesh);
+
+        return [bodyMesh, armMesh];
     }
 }

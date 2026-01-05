@@ -180,8 +180,8 @@ export class Arrow {
         }
         
         // Check terrain collision - stick in terrain!
-        // Check slightly ahead of arrow position to stick at surface
-        const checkDistance = 0.4;  // Check 0.4 units ahead
+        // Check slightly ahead of arrow position for voxel collision
+        const checkDistance = 0.4;
         const checkPos = this.position.clone().add(
             this.direction.clone().multiplyScalar(checkDistance)
         );
@@ -190,9 +190,21 @@ export class Arrow {
         const blockY = Math.floor(checkPos.y);
         const blockZ = Math.floor(checkPos.z);
         
-        if (terrain.getBlockType(blockX, blockY, blockZ)) {
-            // Hit terrain - pull arrow back to surface
-            this.position.sub(this.direction.clone().multiplyScalar(checkDistance));
+        // Check voxel collision first (check ahead)
+        let hitTerrain = terrain.getBlockType(blockX, blockY, blockZ) !== null;
+        
+        // Check heightfield collision at ACTUAL position (not ahead)
+        // This prevents false hits on steep terrain where "ahead" is over higher ground
+        if (!hitTerrain && terrain.getInterpolatedHeight) {
+            const groundY = terrain.getInterpolatedHeight(this.position.x, this.position.z);
+            if (groundY !== null && this.position.y <= groundY + 0.2) {
+                hitTerrain = true;
+                // Snap arrow to ground surface
+                this.position.y = groundY + 0.15;
+            }
+        }
+        
+        if (hitTerrain) {
             this.mesh.position.copy(this.position);
             
             this.stuck = true;

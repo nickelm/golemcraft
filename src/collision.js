@@ -41,9 +41,9 @@ class HeightfieldCollisionProvider {
     }
     
     /**
-     * Check if position should use heightfield collision (vs voxel)
+     * Check if a single point is on heightfield terrain (vs voxel)
      */
-    shouldUseHeightfield(worldX, worldZ) {
+    isHeightfieldAt(worldX, worldZ) {
         const { chunkX, chunkZ, localX, localZ } = this.getChunkCoords(worldX, worldZ);
         const key = `${chunkX},${chunkZ}`;
         
@@ -59,6 +59,27 @@ class HeightfieldCollisionProvider {
         const clampedZ = Math.max(0, Math.min(CHUNK_SIZE - 1, iz));
         
         return chunkData.voxelMask[clampedZ * CHUNK_SIZE + clampedX] === 0;
+    }
+    
+    /**
+     * Check if entity should use heightfield collision
+     * Checks all four AABB corners - if ANY corner is on voxel terrain,
+     * use voxel collision for the whole entity to prevent penetration.
+     */
+    shouldUseHeightfield(worldX, worldZ, aabb = null) {
+        // If no AABB provided, just check the center point
+        if (!aabb) {
+            return this.isHeightfieldAt(worldX, worldZ);
+        }
+        
+        const hw = aabb.halfWidth;
+        const hd = aabb.halfDepth;
+        
+        // All four corners must be on heightfield terrain
+        return this.isHeightfieldAt(worldX - hw, worldZ - hd) &&
+               this.isHeightfieldAt(worldX + hw, worldZ - hd) &&
+               this.isHeightfieldAt(worldX - hw, worldZ + hd) &&
+               this.isHeightfieldAt(worldX + hw, worldZ + hd);
     }
     
     /**
@@ -98,6 +119,45 @@ class HeightfieldCollisionProvider {
         const h1 = h01 * (1 - fx) + h11 * fx;
         
         return h0 * (1 - fz) + h1 * fz;
+    }
+    
+    /**
+     * Calculate terrain slope at a position
+     * Returns the steepness (rise/run) in the direction of movement
+     * @param {number} worldX - Current X position
+     * @param {number} worldZ - Current Z position
+     * @param {number} dirX - Movement direction X (normalized or unnormalized)
+     * @param {number} dirZ - Movement direction Z
+     * @returns {number} Slope value (positive = uphill, negative = downhill)
+     */
+    getSlopeInDirection(worldX, worldZ, dirX, dirZ) {
+        // Normalize direction
+        const len = Math.sqrt(dirX * dirX + dirZ * dirZ);
+        if (len < 0.001) return 0;
+        
+        const dx = dirX / len;
+        const dz = dirZ / len;
+        
+        // Sample height at current position and slightly ahead
+        const sampleDist = 0.5;  // Half a block ahead
+        const h0 = this.getInterpolatedHeight(worldX, worldZ);
+        const h1 = this.getInterpolatedHeight(worldX + dx * sampleDist, worldZ + dz * sampleDist);
+        
+        if (h0 === null || h1 === null) return 0;
+        
+        // Return slope (rise over run)
+        return (h1 - h0) / sampleDist;
+    }
+    
+    /**
+     * Check if slope is too steep to walk up
+     * @param {number} slope - Slope value from getSlopeInDirection
+     * @returns {boolean} True if slope blocks walking
+     */
+    isSlopeTooSteep(slope) {
+        // Threshold: slope > 1.5 means more than 1.5 blocks rise per 1 block horizontal
+        // This is roughly a 56 degree angle
+        return slope > 1.5;
     }
 }
 
@@ -207,8 +267,9 @@ export function resolveEntityCollision(entity, terrain, deltaTime) {
     
     // =========================================================================
     // TRY HEIGHTFIELD COLLISION FIRST
+    // Check all AABB corners - if any is on voxel terrain, use voxel collision
     // =========================================================================
-    if (heightfieldProvider && heightfieldProvider.shouldUseHeightfield(entity.position.x, entity.position.z)) {
+    if (heightfieldProvider && heightfieldProvider.shouldUseHeightfield(entity.position.x, entity.position.z, aabb)) {
         return resolveHeightfieldCollision(entity, terrain, deltaTime);
     }
     
@@ -311,6 +372,7 @@ function resolveVoxelCollision(entity, terrain, deltaTime) {
 
 /**
  * Resolve collision against smooth heightfield terrain
+ * Includes slope blocking - steep slopes block walking but allow jumping
  */
 function resolveHeightfieldCollision(entity, terrain, deltaTime) {
     const aabb = entity.aabb;
@@ -320,15 +382,39 @@ function resolveHeightfieldCollision(entity, terrain, deltaTime) {
         entity.velocity.y += entity.gravity * deltaTime;
     }
     
-    // Apply horizontal velocity
-    entity.position.x += entity.velocity.x * deltaTime;
-    entity.position.z += entity.velocity.z * deltaTime;
+    // Calculate intended horizontal movement
+    const moveX = entity.velocity.x * deltaTime;
+    const moveZ = entity.velocity.z * deltaTime;
     
-    // Check if we moved into voxel region
-    if (!heightfieldProvider.shouldUseHeightfield(entity.position.x, entity.position.z)) {
+    // Check slope in movement direction BEFORE moving
+    let blockedBySlope = false;
+    if (entity.onGround && (Math.abs(moveX) > 0.001 || Math.abs(moveZ) > 0.001)) {
+        const slope = heightfieldProvider.getSlopeInDirection(
+            entity.position.x, entity.position.z,
+            entity.velocity.x, entity.velocity.z
+        );
+        
+        // Block uphill movement on steep slopes (but allow downhill)
+        if (heightfieldProvider.isSlopeTooSteep(slope)) {
+            blockedBySlope = true;
+        }
+    }
+    
+    // Apply horizontal velocity (unless blocked by slope)
+    if (!blockedBySlope) {
+        entity.position.x += moveX;
+        entity.position.z += moveZ;
+    } else {
+        // Blocked by slope - zero horizontal velocity
+        entity.velocity.x = 0;
+        entity.velocity.z = 0;
+    }
+    
+    // Check if we moved into voxel region (check all AABB corners)
+    if (!heightfieldProvider.shouldUseHeightfield(entity.position.x, entity.position.z, aabb)) {
         // Moved into voxel region - revert horizontal movement
-        entity.position.x -= entity.velocity.x * deltaTime;
-        entity.position.z -= entity.velocity.z * deltaTime;
+        entity.position.x -= moveX;
+        entity.position.z -= moveZ;
         // Use voxel collision directly (no recursion)
         return resolveVoxelCollision(entity, terrain, deltaTime);
     }
@@ -348,7 +434,7 @@ function resolveHeightfieldCollision(entity, terrain, deltaTime) {
             entity.mesh.position.copy(entity.position);
             entity.mesh.position.y += aabb.groundOffset || 0;
         }
-        return { collisions: { x: false, y: false, z: false }, grounded: false };
+        return { collisions: { x: blockedBySlope, y: false, z: blockedBySlope }, grounded: false };
     }
     
     // Ground collision
@@ -377,7 +463,7 @@ function resolveHeightfieldCollision(entity, terrain, deltaTime) {
     }
     
     return { 
-        collisions: { x: false, y: grounded, z: false }, 
+        collisions: { x: blockedBySlope, y: grounded, z: blockedBySlope }, 
         grounded 
     };
 }

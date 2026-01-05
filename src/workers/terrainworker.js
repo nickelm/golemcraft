@@ -235,34 +235,20 @@ class WorkerTerrainProvider {
         return lakeNoise > 0.65;
     }
 
+    /**
+     * Determine if a cell should use voxel rendering/collision
+     * Returns true ONLY for landmark areas (temples, structures, etc.)
+     * 
+     * Steep slopes are now handled by slope collision in the heightfield,
+     * not by voxel rendering. This dramatically reduces triangle count.
+     * 
+     * @param {number} x - World X coordinate
+     * @param {number} z - World Z coordinate
+     * @returns {boolean} True if cell should use voxels
+     */
     shouldUseVoxels(x, z) {
-        if (this.landmarkSystem.isInsideLandmark(x, z)) {
-            return true;
-        }
-        
-        const height = this.getContinuousHeight(x, z);
-        const heightN = this.getContinuousHeight(x, z - 1);
-        const heightS = this.getContinuousHeight(x, z + 1);
-        const heightE = this.getContinuousHeight(x + 1, z);
-        const heightW = this.getContinuousHeight(x - 1, z);
-        
-        const maxSlope = Math.max(
-            Math.abs(height - heightN),
-            Math.abs(height - heightS),
-            Math.abs(height - heightE),
-            Math.abs(height - heightW)
-        );
-        
-        if (maxSlope > 2.0) {
-            return true;
-        }
-        
-        const biome = this.getBiome(x, z);
-        if (biome === 'mountains' && height > 25) {
-            return true;
-        }
-        
-        return false;
+        // Only use voxels for landmarks
+        return this.landmarkSystem.isInsideLandmark(x, z);
     }
 
     getBlockType(x, y, z) {

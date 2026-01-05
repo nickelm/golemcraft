@@ -374,7 +374,16 @@ export class ItemSpawner {
             // Only spawn on elevated terrain (mountains/hills for platforming)
             if (height >= this.minHeight) {
                 const type = this.getRandomResourceType();
-                const position = new THREE.Vector3(x + 0.5, height + 2.0, z + 0.5);
+                
+                // Use interpolated height for smooth terrain, with hover offset
+                const placeX = x + 0.5;
+                const placeZ = z + 0.5;
+                let groundY = height + 1;
+                if (this.terrain.getInterpolatedHeight) {
+                    groundY = this.terrain.getInterpolatedHeight(placeX, placeZ);
+                }
+                
+                const position = new THREE.Vector3(placeX, groundY + 1.5, placeZ);
                 const item = new Item(this.scene, position, type);
                 this.items.push(item);
                 return item;
