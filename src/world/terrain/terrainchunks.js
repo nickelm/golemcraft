@@ -7,6 +7,10 @@ import {
     terrainSplatVertexShaderLowPower,
     terrainSplatFragmentShaderLowPower
 } from '../../shaders/terrainsplat.js';
+import {
+    voxelLambertVertexShader,
+    voxelLambertFragmentShader
+} from '../../shaders/voxellambert.js';
 
 /**
  * ChunkedTerrain - Optimized terrain with merged geometry per chunk
@@ -114,54 +118,26 @@ export class ChunkedTerrain {
         // Create splatting material for surface mesh (smooth terrain with biome blending)
         this.surfaceMaterial = this.createSplatMaterial(terrainTexture, textureBlending);
 
-        // Material selection based on tier
-        const useSimpleMaterials = (textureBlending === 'low' || textureBlending === 'medium');
+        // Custom voxel shader material - matches terrain splatting shader lighting exactly
+        // This ensures consistent brightness/saturation between heightfield and voxel terrain
+        this.opaqueMaterial = this.createVoxelMaterial(terrainTexture);
 
-        if (!useSimpleMaterials) {
-            // PBR materials for desktop/high tier - better lighting response
-            this.opaqueMaterial = new THREE.MeshStandardMaterial({
-                map: terrainTexture,
-                side: THREE.FrontSide,
-                vertexColors: true,
-                roughness: 0.85,      // Matte terrain surface
-                metalness: 0.0,       // Non-metallic
-                flatShading: false    // Use smooth normals
-            });
+        // Water still uses standard material for transparency/reflections
+        this.waterMaterial = new THREE.MeshLambertMaterial({
+            map: terrainTexture,
+            transparent: true,
+            opacity: 0.65,
+            side: THREE.DoubleSide,
+            vertexColors: true,
+            depthWrite: false
+        });
 
-            this.waterMaterial = new THREE.MeshStandardMaterial({
-                map: terrainTexture,
-                transparent: true,
-                opacity: 0.65,        // More transparent water
-                side: THREE.DoubleSide,
-                vertexColors: true,
-                roughness: 0.15,      // Slightly reflective
-                metalness: 0.0,
-                depthWrite: false     // Prevents transparency sorting issues
-            });
-
-            console.log('Using PBR materials + 4-texture splatting (high)');
+        if (textureBlending === 'low') {
+            console.log('Using custom Lambert shaders + dithered tiles (low)');
+        } else if (textureBlending === 'medium') {
+            console.log('Using custom Lambert shaders + 2-texture splatting (medium)');
         } else {
-            // Lambert materials for mobile/low tier - better performance
-            this.opaqueMaterial = new THREE.MeshLambertMaterial({
-                map: terrainTexture,
-                side: THREE.FrontSide,
-                vertexColors: true
-            });
-
-            this.waterMaterial = new THREE.MeshLambertMaterial({
-                map: terrainTexture,
-                transparent: true,
-                opacity: 0.65,        // More transparent water
-                side: THREE.DoubleSide,
-                vertexColors: true,
-                depthWrite: false
-            });
-
-            if (textureBlending === 'low') {
-                console.log('Using Lambert materials + dithered tiles (low)');
-            } else {
-                console.log('Using Lambert materials + 2-texture splatting (medium)');
-            }
+            console.log('Using custom Lambert shaders + 4-texture splatting (high)');
         }
 
         // Stats
@@ -215,7 +191,33 @@ export class ChunkedTerrain {
             side: THREE.FrontSide
         });
     }
-    
+
+    /**
+     * Create the custom voxel Lambert ShaderMaterial
+     * Uses identical lighting calculations as the terrain splatting shader
+     * @param {THREE.Texture} terrainTexture - The terrain atlas texture
+     * @returns {THREE.ShaderMaterial}
+     */
+    createVoxelMaterial(terrainTexture) {
+        return new THREE.ShaderMaterial({
+            uniforms: THREE.UniformsUtils.merge([
+                THREE.UniformsLib.common,
+                THREE.UniformsLib.lights,
+                THREE.UniformsLib.fog,
+                THREE.UniformsLib.shadowmap,
+                {
+                    map: { value: terrainTexture }
+                }
+            ]),
+            vertexShader: voxelLambertVertexShader,
+            fragmentShader: voxelLambertFragmentShader,
+            lights: true,
+            fog: true,
+            vertexColors: true,
+            side: THREE.FrontSide
+        });
+    }
+
     /**
      * Generate all chunks for the world
      */
