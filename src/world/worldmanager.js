@@ -82,7 +82,8 @@ export class WorldManager {
             worldId,
             this.chunkedTerrain,
             this.objectGenerator,
-            null
+            null,
+            this.drawDistance  // Pass from constructor options
         );
 
         // Terrain data provider will be created after worker is initialized

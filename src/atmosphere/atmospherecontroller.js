@@ -42,7 +42,13 @@ export class AtmosphereController {
         // Systems
         this.timeOfDay = new TimeOfDay(scene);
         this.weather = new Weather(scene);
-        
+
+        // Adaptive fog for chunk loading
+        this.baseFogNear = null;   // Set during init
+        this.baseFogFar = null;    // Set during init
+        this.currentFogFar = null;
+        this.chunkLoader = null;   // Will be set by Game
+
         // UI element for torch toggle
         this.torchButton = null;
         this.createTorchToggle();
@@ -72,13 +78,10 @@ export class AtmosphereController {
         
         // Update weather (stub for now)
         this.weather.update(deltaTime, biomeData);
-        
-        // Move directional light to follow hero
-        this.directionalLight.position.set(
-            heroPosition.x + 30,
-            heroPosition.y + 80,
-            heroPosition.z + 30
-        );
+
+        // Position directional light at celestial body to create realistic shadow direction
+        const celestialPos = this.timeOfDay.getCelestialPosition();
+        this.directionalLight.position.copy(celestialPos);
         this.directionalLight.target.position.copy(heroPosition);
         this.directionalLight.target.updateMatrixWorld();
         
@@ -88,10 +91,46 @@ export class AtmosphereController {
             heroPosition.y + 3,
             heroPosition.z + Math.cos(heroRotation) * 0.5
         );
-        
+
+        // Update adaptive fog based on chunk loading state
+        if (this.chunkLoader) {
+            const recommendedFogFar = this.chunkLoader.getRecommendedFogDistance(heroPosition);
+
+            // Clamp to reasonable range (never below base near, never above base far)
+            const minFogFar = Math.max(this.baseFogNear + 20, this.baseFogFar * 0.3);
+            const maxFogFar = this.baseFogFar;
+            const targetFogFar = Math.max(minFogFar, Math.min(maxFogFar, recommendedFogFar));
+
+            // Smooth interpolation (very fast contract when loading, slow expand when ready)
+            const lerpSpeed = targetFogFar < this.currentFogFar ? 0.3 : 0.03;
+            this.currentFogFar += (targetFogFar - this.currentFogFar) * lerpSpeed;
+
+            // Apply to scene fog - scale near proportionally with far
+            // Keep the same near/far ratio as the base fog settings
+            const fogRatio = this.baseFogNear / this.baseFogFar;
+            this.scene.fog.near = this.currentFogFar * fogRatio;
+            this.scene.fog.far = this.currentFogFar;
+        }
+
         return { phase, phaseProgress, timeOfDay };
     }
-    
+
+    /**
+     * Initialize fog adaptation system
+     * @param {number} fogNear - Base fog near distance
+     * @param {number} fogFar - Base fog far distance
+     * @param {ChunkLoader} chunkLoader - Reference to chunk loader
+     */
+    initFogAdaptation(fogNear, fogFar, chunkLoader) {
+        this.baseFogNear = fogNear;
+        this.baseFogFar = fogFar;
+        this.chunkLoader = chunkLoader;
+
+        // Start at minimum fog distance - will expand as chunks load
+        this.currentFogFar = fogNear + 20;
+        this.scene.fog.far = this.currentFogFar;
+    }
+
     /**
      * Toggle torch on/off
      */

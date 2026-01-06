@@ -17,7 +17,7 @@ export class TimeOfDay {
         this.dayLength = 300;    // 5 minutes
         this.nightLength = 300;  // 5 minutes
         this.cycleLength = this.dayLength + this.nightLength; // 10 minutes total
-        this.timeOfDay = 0;      // 0-600 seconds (0 = midnight)
+        this.timeOfDay = 0;      // 0-600 seconds (0 = dawn)
         
         // Celestial bodies
         this.sun = this.createSun();
@@ -33,64 +33,113 @@ export class TimeOfDay {
     
     createSun() {
         const sunGroup = new THREE.Group();
-        
-        // Sun sprite - square facing camera
-        const sunSize = 40;
-        const canvas = document.createElement('canvas');
-        canvas.width = 128;
-        canvas.height = 128;
-        const ctx = canvas.getContext('2d');
-        
-        // Draw square sun
-        ctx.fillStyle = '#FFFF00';
-        ctx.fillRect(16, 16, 96, 96);
-        ctx.fillStyle = '#FFDD00';
-        ctx.fillRect(32, 32, 64, 64);
-        
-        const texture = new THREE.CanvasTexture(canvas);
-        const material = new THREE.SpriteMaterial({ 
-            map: texture,
-            transparent: true
-        });
-        
-        const sprite = new THREE.Sprite(material);
-        sprite.scale.set(sunSize, sunSize, 1);
-        sunGroup.add(sprite);
-        
-        // Store references for updates
-        sunGroup.userData.sprite = sprite;
-        sunGroup.userData.canvas = canvas;
-        sunGroup.userData.ctx = ctx;
-        
+
+        // Sun sphere - 3D geometry with unlit material
+        // fog: false ensures sun stays visible against sky at any distance
+        const geometry = new THREE.SphereGeometry(20, 16, 16);
+        const material = new THREE.MeshBasicMaterial({ color: 0xFFDD44, fog: false });
+        const sunMesh = new THREE.Mesh(geometry, material);
+        sunGroup.add(sunMesh);
+
+        // Glow sprite - additive blending for halo effect
+        // Renders behind sun using renderOrder (no Z offset needed)
+        const glowSprite = this.createGlowSprite(0xFFDD44, 120, true);
+        glowSprite.renderOrder = -1;
+        sunGroup.add(glowSprite);
+
+        // Store references for color updates
+        sunGroup.userData.mesh = sunMesh;
+        sunGroup.userData.geometry = geometry;
+        sunGroup.userData.material = material;
+        sunGroup.userData.glowSprite = glowSprite;
+
         return sunGroup;
     }
     
-    createMoon() {
-        const moonGroup = new THREE.Group();
-        
-        // Moon sprite - square with shadow for crescent
-        const moonSize = 35;
+    /**
+     * Create a glow sprite with radial gradient for halo effect
+     * @param {number} color - Hex color for the glow
+     * @param {number} size - Size of the sprite
+     * @param {boolean} hollowCenter - If true, center is transparent (for sun)
+     * @returns {THREE.Sprite} Glow sprite with additive blending
+     */
+    createGlowSprite(color, size, hollowCenter = false) {
         const canvas = document.createElement('canvas');
         canvas.width = 128;
         canvas.height = 128;
         const ctx = canvas.getContext('2d');
-        
+
+        // Create radial gradient
+        const gradient = ctx.createRadialGradient(64, 64, 0, 64, 64, 64);
+        const c = new THREE.Color(color);
+        const rgb = `${Math.floor(c.r * 255)}, ${Math.floor(c.g * 255)}, ${Math.floor(c.b * 255)}`;
+
+        if (hollowCenter) {
+            // Hollow center for sun - glow only on outer ring
+            gradient.addColorStop(0, 'rgba(0, 0, 0, 0)');
+            gradient.addColorStop(0.15, 'rgba(0, 0, 0, 0)');
+            gradient.addColorStop(0.3, `rgba(${rgb}, 0.5)`);
+            gradient.addColorStop(0.5, `rgba(${rgb}, 0.3)`);
+            gradient.addColorStop(1, 'rgba(0, 0, 0, 0)');
+        } else {
+            // Solid center for moon
+            gradient.addColorStop(0, `rgba(${rgb}, 0.6)`);
+            gradient.addColorStop(0.3, `rgba(${rgb}, 0.3)`);
+            gradient.addColorStop(1, 'rgba(0, 0, 0, 0)');
+        }
+
+        ctx.fillStyle = gradient;
+        ctx.fillRect(0, 0, 128, 128);
+
         const texture = new THREE.CanvasTexture(canvas);
-        const material = new THREE.SpriteMaterial({ 
+        const material = new THREE.SpriteMaterial({
             map: texture,
-            transparent: true
+            transparent: true,
+            blending: THREE.AdditiveBlending,
+            depthWrite: false,
+            fog: false
         });
-        
+
         const sprite = new THREE.Sprite(material);
-        sprite.scale.set(moonSize, moonSize, 1);
-        moonGroup.add(sprite);
-        
-        // Store references for moon phase updates
-        moonGroup.userData.sprite = sprite;
-        moonGroup.userData.canvas = canvas;
-        moonGroup.userData.ctx = ctx;
-        moonGroup.userData.texture = texture;
-        
+        sprite.scale.set(size, size, 1);
+
+        // Store for disposal
+        sprite.userData.texture = texture;
+        sprite.userData.canvas = canvas;
+
+        return sprite;
+    }
+
+    createMoon() {
+        const moonGroup = new THREE.Group();
+
+        // Glow sprite - additive blending for moonlight halo
+        // Larger and brighter than before for visible cold glow
+        const glowSprite = this.createGlowSprite(0xCCCCDD, 100);
+        moonGroup.add(glowSprite);
+
+        // Main moon sphere - pale white/grey
+        // fog: false ensures moon stays visible against night sky
+        const moonGeometry = new THREE.SphereGeometry(18, 16, 16);
+        const moonMaterial = new THREE.MeshBasicMaterial({ color: 0xDDDDDD, fog: false });
+        const moonMesh = new THREE.Mesh(moonGeometry, moonMaterial);
+        moonGroup.add(moonMesh);
+
+        // Shadow sphere for crescent effect - dark, slightly larger
+        const shadowGeometry = new THREE.SphereGeometry(19, 16, 16);
+        const shadowMaterial = new THREE.MeshBasicMaterial({ color: 0x0A0A1E, fog: false });
+        const shadowMesh = new THREE.Mesh(shadowGeometry, shadowMaterial);
+        moonGroup.add(shadowMesh);
+
+        // Store references for phase updates
+        moonGroup.userData.moonMesh = moonMesh;
+        moonGroup.userData.moonGeometry = moonGeometry;
+        moonGroup.userData.moonMaterial = moonMaterial;
+        moonGroup.userData.shadowMesh = shadowMesh;
+        moonGroup.userData.shadowGeometry = shadowGeometry;
+        moonGroup.userData.shadowMaterial = shadowMaterial;
+        moonGroup.userData.glowSprite = glowSprite;
+
         return moonGroup;
     }
     
@@ -178,62 +227,96 @@ export class TimeOfDay {
     }
     
     /**
+     * Get the current active celestial body position (sun during day, moon at night)
+     * @returns {THREE.Vector3} Position of the active celestial body
+     */
+    getCelestialPosition() {
+        const { phase } = this.getCurrentPhase();
+        if (phase === 'day') {
+            return this.sun.position.clone();
+        } else {
+            return this.moon.position.clone();
+        }
+    }
+
+    /**
      * Update sun color based on angle (sunrise/noon/sunset)
      */
     updateSunColor(sunAngleDegrees) {
-        const canvas = this.sun.userData.canvas;
-        const ctx = this.sun.userData.ctx;
-        
-        ctx.clearRect(0, 0, 128, 128);
-        
-        let color1, color2;
-        
+        const material = this.sun.userData.material;
+        const glowSprite = this.sun.userData.glowSprite;
+
         if (sunAngleDegrees < 30 || sunAngleDegrees > 150) {
             // Sunrise/sunset - orange/red
-            const blend = sunAngleDegrees < 30 
-                ? sunAngleDegrees / 30 
+            const blend = sunAngleDegrees < 30
+                ? sunAngleDegrees / 30
                 : (180 - sunAngleDegrees) / 30;
-            color1 = `rgb(255, ${Math.floor(100 + blend * 155)}, 0)`;
-            color2 = `rgb(255, ${Math.floor(50 + blend * 150)}, 0)`;
+            const r = 1.0;
+            const g = (100 + blend * 155) / 255;
+            const b = 0;
+            material.color.setRGB(r, g, b);
+            // Update glow to match
+            if (glowSprite) {
+                glowSprite.material.color.setRGB(r, g, b);
+            }
         } else {
-            // Daytime - yellow
-            color1 = '#FFFF00';
-            color2 = '#FFDD00';
+            // Daytime - bright yellow
+            material.color.setHex(0xFFDD44);
+            if (glowSprite) {
+                glowSprite.material.color.setHex(0xFFDD44);
+            }
         }
-        
-        // Draw square sun
-        ctx.fillStyle = color1;
-        ctx.fillRect(16, 16, 96, 96);
-        ctx.fillStyle = color2;
-        ctx.fillRect(32, 32, 64, 64);
-        
-        this.sun.userData.sprite.material.map.needsUpdate = true;
     }
     
     /**
      * Update moon phase (crescent to full and back)
      */
     updateMoonPhase(nightProgress) {
-        const canvas = this.moon.userData.canvas;
-        const ctx = this.moon.userData.ctx;
-        
-        ctx.clearRect(0, 0, 128, 128);
-        
+        const shadowMesh = this.moon.userData.shadowMesh;
+        const shadowMaterial = this.moon.userData.shadowMaterial;
+        const moonMaterial = this.moon.userData.moonMaterial;
+        const glowSprite = this.moon.userData.glowSprite;
+
         // Full moon at midnight (0.5), crescent at dusk/dawn (0, 1)
         const phaseOffset = Math.abs(nightProgress - 0.5) * 2;
-        
-        // Draw full moon square
-        ctx.fillStyle = '#EEEEEE';
-        ctx.fillRect(16, 16, 96, 96);
-        ctx.fillStyle = '#CCCCCC';
-        ctx.fillRect(32, 32, 64, 64);
-        
-        // Add shadow for crescent effect
-        const shadowWidth = 96 * phaseOffset * 0.7;
-        ctx.fillStyle = 'rgba(10, 10, 30, 0.9)';
-        ctx.fillRect(16, 16, shadowWidth, 96);
-        
-        this.moon.userData.texture.needsUpdate = true;
+
+        // Offset shadow sphere to create crescent effect
+        // At full moon (phaseOffset = 0): shadow behind moon (not visible)
+        // At crescent (phaseOffset = 1): shadow offset to side, occluding moon
+        const maxOffset = 25; // Maximum X offset for shadow sphere
+        shadowMesh.position.x = -maxOffset * phaseOffset;
+        shadowMesh.position.z = phaseOffset < 0.1 ? -5 : 0; // Push behind at full moon
+
+        // Color transition: match lighting presets (10% dusk, 80% night, 10% dawn)
+        // colorBlend: 0 = dusk/dawn colors, 1 = night colors
+        let colorBlend;
+        if (nightProgress < 0.1) {
+            // Dusk transition (first 10% of night)
+            colorBlend = nightProgress / 0.1;
+        } else if (nightProgress > 0.9) {
+            // Dawn transition (last 10% of night)
+            colorBlend = (1 - nightProgress) / 0.1;
+        } else {
+            // Full night
+            colorBlend = 1;
+        }
+
+        // Blend moon color from warm tint (dusk/dawn) to pale white (night)
+        const duskMoon = new THREE.Color(0xDDAAAA); // Warm pinkish
+        const nightMoon = new THREE.Color(0xEEEEEE); // Pale white
+        moonMaterial.color.copy(duskMoon).lerp(nightMoon, colorBlend);
+
+        // Blend shadow color from reddish-orange (dusk/dawn) to dark blue (night)
+        const duskShadow = new THREE.Color(0x8B3A1A); // Dark orange-red
+        const nightShadow = new THREE.Color(0x0A0A1E); // Dark blue
+        shadowMaterial.color.copy(duskShadow).lerp(nightShadow, colorBlend);
+
+        // Blend glow color from warm (dusk/dawn) to cool white (night)
+        if (glowSprite) {
+            const duskGlow = new THREE.Color(0xAA8866); // Warm glow
+            const nightGlow = new THREE.Color(0xCCCCDD); // Cool white glow
+            glowSprite.material.color.copy(duskGlow).lerp(nightGlow, colorBlend);
+        }
     }
     
     /**
@@ -251,22 +334,48 @@ export class TimeOfDay {
     }
     
     /**
+     * Dispose a glow sprite and its resources
+     */
+    disposeGlowSprite(sprite) {
+        if (sprite) {
+            if (sprite.userData.texture) {
+                sprite.userData.texture.dispose();
+            }
+            if (sprite.material) {
+                sprite.material.dispose();
+            }
+        }
+    }
+
+    /**
      * Clean up resources
      */
     dispose() {
         this.scene.remove(this.sun);
         this.scene.remove(this.moon);
-        
+
         // Dispose sun resources
-        if (this.sun.userData.sprite) {
-            this.sun.userData.sprite.material.map.dispose();
-            this.sun.userData.sprite.material.dispose();
+        if (this.sun.userData.geometry) {
+            this.sun.userData.geometry.dispose();
         }
-        
+        if (this.sun.userData.material) {
+            this.sun.userData.material.dispose();
+        }
+        this.disposeGlowSprite(this.sun.userData.glowSprite);
+
         // Dispose moon resources
-        if (this.moon.userData.sprite) {
-            this.moon.userData.sprite.material.map.dispose();
-            this.moon.userData.sprite.material.dispose();
+        if (this.moon.userData.moonGeometry) {
+            this.moon.userData.moonGeometry.dispose();
+        }
+        if (this.moon.userData.moonMaterial) {
+            this.moon.userData.moonMaterial.dispose();
+        }
+        this.disposeGlowSprite(this.moon.userData.glowSprite);
+        if (this.moon.userData.shadowGeometry) {
+            this.moon.userData.shadowGeometry.dispose();
+        }
+        if (this.moon.userData.shadowMaterial) {
+            this.moon.userData.shadowMaterial.dispose();
         }
     }
 }

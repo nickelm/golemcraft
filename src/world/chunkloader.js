@@ -1,6 +1,15 @@
 import { CHUNK_SIZE } from './terrain/terrainchunks.js';
 import { TerrainWorkerManager } from '../workers/terrainworkermanager.js';
 
+// Chunk loading radii for different draw distances
+// Calculated to provide terrain coverage near fog distance while maintaining performance
+// unload = load + 2 for hysteresis to prevent thrashing
+const DRAW_DISTANCE_RADII = {
+    far: { load: 14, unload: 16 },      // ~224 units (fog.far = 300)
+    medium: { load: 9, unload: 11 },    // ~144 units (fog.far = 150)
+    near: { load: 7, unload: 9 }        // ~112 units (fog.far = 100)
+};
+
 /**
  * ChunkLoader - Manages dynamic chunk loading via web worker
  * 
@@ -20,20 +29,24 @@ import { TerrainWorkerManager } from '../workers/terrainworkermanager.js';
  * - Block modification persistence
  */
 export class ChunkLoader {
-    constructor(worldId, chunkedTerrain, objectGenerator, mobSpawner) {
+    constructor(worldId, chunkedTerrain, objectGenerator, mobSpawner, drawDistance = 'medium') {
         this.worldId = worldId;
         this.chunkedTerrain = chunkedTerrain;
         this.objectGenerator = objectGenerator;
         this.mobSpawner = mobSpawner;
+        this.drawDistance = drawDistance;
 
         // Chunk tracking
         this.loadedChunks = new Set();      // Chunks queued or loaded
         this.chunksWithMeshes = new Set();  // Chunks that have meshes
         this.modifiedChunks = new Map();    // Modified block positions
 
-        // Load radius (in chunks)
-        this.loadRadius = 8;
-        this.unloadRadius = 10;
+        // Load radius based on draw distance setting
+        const radii = DRAW_DISTANCE_RADII[drawDistance] || DRAW_DISTANCE_RADII.medium;
+        this.loadRadius = radii.load;
+        this.unloadRadius = radii.unload;
+
+        console.log(`ChunkLoader: drawDistance=${drawDistance}, loadRadius=${this.loadRadius}, unloadRadius=${this.unloadRadius}`);
         
         // Loading state detection with hysteresis
         this.minSafeDistance = 2;      // Pause if missing chunks within this radius (5x5 = 25)
@@ -232,6 +245,63 @@ export class ChunkLoader {
             }
         }
         return true;
+    }
+
+    /**
+     * Calculate recommended fog distance based on nearest unloaded chunk
+     * Returns the distance to the closest chunk edge that doesn't have a mesh yet
+     * @param {Object} playerPosition - Player position {x, y, z}
+     * @returns {number} Recommended fog far distance in world units
+     */
+    getRecommendedFogDistance(playerPosition) {
+        if (!playerPosition) {
+            return (this.loadRadius - 2) * CHUNK_SIZE;
+        }
+
+        const playerChunkX = Math.floor(playerPosition.x / CHUNK_SIZE);
+        const playerChunkZ = Math.floor(playerPosition.z / CHUNK_SIZE);
+
+        // Find the nearest unloaded chunk within load radius
+        let minDistance = Infinity;
+
+        for (let dx = -this.loadRadius; dx <= this.loadRadius; dx++) {
+            for (let dz = -this.loadRadius; dz <= this.loadRadius; dz++) {
+                const chunkX = playerChunkX + dx;
+                const chunkZ = playerChunkZ + dz;
+                const key = `${chunkX},${chunkZ}`;
+
+                // Skip chunks that already have meshes
+                if (this.chunksWithMeshes.has(key)) {
+                    continue;
+                }
+
+                // Calculate distance from player to the nearest edge of this chunk
+                const chunkWorldX = chunkX * CHUNK_SIZE;
+                const chunkWorldZ = chunkZ * CHUNK_SIZE;
+
+                // Find closest point on chunk to player
+                const closestX = Math.max(chunkWorldX, Math.min(playerPosition.x, chunkWorldX + CHUNK_SIZE));
+                const closestZ = Math.max(chunkWorldZ, Math.min(playerPosition.z, chunkWorldZ + CHUNK_SIZE));
+
+                const distX = playerPosition.x - closestX;
+                const distZ = playerPosition.z - closestZ;
+                const distance = Math.sqrt(distX * distX + distZ * distZ);
+
+                if (distance < minDistance) {
+                    minDistance = distance;
+                }
+            }
+        }
+
+        // If all chunks are loaded, use a comfortable distance
+        if (minDistance === Infinity) {
+            minDistance = (this.loadRadius - 1) * CHUNK_SIZE;
+        }
+
+        // Subtract a small buffer so fog hides the chunk edge
+        const fogDistance = Math.max(16, minDistance - 8);
+
+        return fogDistance;
     }
 
     /**

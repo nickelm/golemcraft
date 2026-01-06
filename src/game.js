@@ -202,6 +202,13 @@ export class Game {
         // Hide loading overlay
         this.loadingOverlay.hide();
 
+        // Initialize adaptive fog system
+        this.atmosphere.initFogAdaptation(
+            this.scene.fog.near,
+            this.scene.fog.far,
+            this.world.chunkLoader
+        );
+
         // Set up loading state callback for runtime loading
         this.world.setLoadingCallback((isLoading) => {
             this.isPaused = isLoading;

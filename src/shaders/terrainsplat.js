@@ -36,6 +36,7 @@ varying vec4 vBlendWeights;
 varying vec3 vVertexColor;
 varying vec2 vLocalUV;
 varying vec3 vNormal;
+varying vec3 vViewPosition;
 
 void main() {
     // Pass tile indices and weights (constant per quad, no interpolation issues)
@@ -57,6 +58,7 @@ void main() {
 
     // Model-view transform
     vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
+    vViewPosition = mvPosition.xyz;
 
     // World position (required for shadows)
     vec4 worldPosition = modelMatrix * vec4(position, 1.0);
@@ -74,7 +76,7 @@ void main() {
  * Samples 4 tiles from the atlas and blends based on weights.
  * Tile indices are CONSTANT per quad (no interpolation) - set by CPU.
  * Includes Lambert lighting for consistency with existing materials.
- * 
+ *
  * LIGHTING FIX: Clamps total irradiance to prevent overbright surfaces.
  * Without clamping, ambient (0.6) + directional (0.8) = 1.4, which
  * causes blown-out highlights, especially on bright textures like snow.
@@ -95,6 +97,7 @@ varying vec4 vBlendWeights;
 varying vec3 vVertexColor;
 varying vec2 vLocalUV;
 varying vec3 vNormal;
+varying vec3 vViewPosition;
 
 // Atlas configuration
 #define SPLAT_ATLAS_SIZE 720.0
@@ -168,6 +171,26 @@ void main() {
         }
     #endif
 
+    // Point lights (in view space)
+    #if NUM_POINT_LIGHTS > 0
+        for (int i = 0; i < NUM_POINT_LIGHTS; i++) {
+            vec3 lightVec = pointLights[i].position - vViewPosition;
+            float distance = length(lightVec);
+            vec3 lightDir = normalize(lightVec);
+
+            float NdotL = max(dot(normal, lightDir), 0.0);
+
+            // Distance attenuation
+            float decay = pointLights[i].decay;
+            float distanceFalloff = 1.0;
+            if (pointLights[i].distance > 0.0) {
+                distanceFalloff = pow(saturate(-distance / pointLights[i].distance + 1.0), decay);
+            }
+
+            irradiance += pointLights[i].color * NdotL * distanceFalloff;
+        }
+    #endif
+
     // Clamp irradiance to prevent overbright surfaces
     // Without this, ambient + directional can exceed 1.0 and blow out highlights
     irradiance = min(irradiance, vec3(1.0));
@@ -198,6 +221,7 @@ varying float vSelectedTile;
 varying vec3 vVertexColor;
 varying vec2 vLocalUV;
 varying vec3 vNormal;
+varying vec3 vViewPosition;
 
 void main() {
     // Pass single tile index (constant per quad)
@@ -214,6 +238,8 @@ void main() {
 
     // Model-view transform
     vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
+    vViewPosition = mvPosition.xyz;
+
     gl_Position = projectionMatrix * mvPosition;
 
     #include <fog_vertex>
@@ -240,6 +266,7 @@ varying float vSelectedTile;
 varying vec3 vVertexColor;
 varying vec2 vLocalUV;
 varying vec3 vNormal;
+varying vec3 vViewPosition;
 
 // Atlas configuration
 #define SPLAT_ATLAS_SIZE 720.0
@@ -295,6 +322,26 @@ void main() {
         }
     #endif
 
+    // Point lights (in view space)
+    #if NUM_POINT_LIGHTS > 0
+        for (int i = 0; i < NUM_POINT_LIGHTS; i++) {
+            vec3 lightVec = pointLights[i].position - vViewPosition;
+            float distance = length(lightVec);
+            vec3 lightDir = normalize(lightVec);
+
+            float NdotL = max(dot(normal, lightDir), 0.0);
+
+            // Distance attenuation
+            float decay = pointLights[i].decay;
+            float distanceFalloff = 1.0;
+            if (pointLights[i].distance > 0.0) {
+                distanceFalloff = pow(saturate(-distance / pointLights[i].distance + 1.0), decay);
+            }
+
+            irradiance += pointLights[i].color * NdotL * distanceFalloff;
+        }
+    #endif
+
     // Clamp irradiance to prevent overbright surfaces
     irradiance = min(irradiance, vec3(1.0));
 
@@ -329,6 +376,7 @@ varying vec4 vBlendWeights;
 varying vec3 vVertexColor;
 varying vec2 vLocalUV;
 varying vec3 vNormal;
+varying vec3 vViewPosition;
 
 // Atlas configuration
 #define SPLAT_ATLAS_SIZE 720.0
@@ -391,6 +439,26 @@ void main() {
             float dotNL = dot(normal, hemisphereLights[i].direction);
             float hemiWeight = 0.5 * dotNL + 0.5;
             irradiance += mix(hemisphereLights[i].groundColor, hemisphereLights[i].skyColor, hemiWeight);
+        }
+    #endif
+
+    // Point lights (in view space)
+    #if NUM_POINT_LIGHTS > 0
+        for (int i = 0; i < NUM_POINT_LIGHTS; i++) {
+            vec3 lightVec = pointLights[i].position - vViewPosition;
+            float distance = length(lightVec);
+            vec3 lightDir = normalize(lightVec);
+
+            float NdotL = max(dot(normal, lightDir), 0.0);
+
+            // Distance attenuation
+            float decay = pointLights[i].decay;
+            float distanceFalloff = 1.0;
+            if (pointLights[i].distance > 0.0) {
+                distanceFalloff = pow(saturate(-distance / pointLights[i].distance + 1.0), decay);
+            }
+
+            irradiance += pointLights[i].color * NdotL * distanceFalloff;
         }
     #endif
 
