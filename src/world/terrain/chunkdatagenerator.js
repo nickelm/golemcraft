@@ -46,6 +46,11 @@ const SURFACE_TILE_INDICES = {
 const BLEND_NOISE_SCALE = 0.2;       // Spatial frequency of noise (lower = smoother)
 const BLEND_NOISE_AMPLITUDE = 0.08;  // How much noise affects weights (±8%) - reduced for less spotty dithering
 
+// Interior darkness configuration
+const INTERIOR_SCAN_HEIGHT = 16;        // Max blocks to scan upward for enclosure
+const INTERIOR_ENCLOSURE_THRESHOLD = 6; // Solid blocks above needed for full darkness (more = gradual transition)
+const INTERIOR_DARKNESS_MIN = 0.20;     // Minimum brightness for deep interiors (0.15-0.25 range)
+
 const HEIGHT_BIAS = {
     snow:  { minHeight: 18, bonus: 0.3 },
     stone: { minHeight: 22, bonus: 0.2 },
@@ -705,11 +710,29 @@ function generateSurfaceMesh(heightmap, voxelMask, surfaceTypes, terrainProvider
             const n01 = computeHeightmapNormal(heightmap, lx, lz + 1, terrainProvider, worldMinX, worldMinZ);
             const n11 = computeHeightmapNormal(heightmap, lx + 1, lz + 1, terrainProvider, worldMinX, worldMinZ);
 
-            // Compute AO for each vertex
-            const ao00 = computeHeightmapAO(heightmap, lx, lz, terrainProvider, worldMinX, worldMinZ);
-            const ao10 = computeHeightmapAO(heightmap, lx + 1, lz, terrainProvider, worldMinX, worldMinZ);
-            const ao01 = computeHeightmapAO(heightmap, lx, lz + 1, terrainProvider, worldMinX, worldMinZ);
-            const ao11 = computeHeightmapAO(heightmap, lx + 1, lz + 1, terrainProvider, worldMinX, worldMinZ);
+            // Compute AO for each vertex (concavity-based)
+            let ao00 = computeHeightmapAO(heightmap, lx, lz, terrainProvider, worldMinX, worldMinZ);
+            let ao10 = computeHeightmapAO(heightmap, lx + 1, lz, terrainProvider, worldMinX, worldMinZ);
+            let ao01 = computeHeightmapAO(heightmap, lx, lz + 1, terrainProvider, worldMinX, worldMinZ);
+            let ao11 = computeHeightmapAO(heightmap, lx + 1, lz + 1, terrainProvider, worldMinX, worldMinZ);
+
+            // Apply interior darkness if under enclosed structures (landmarks)
+            // Check 1 block above each vertex position for enclosure
+            const enc00 = computeEnclosureFactor(terrainProvider, worldMinX + lx, Math.ceil(h00) + 1, worldMinZ + lz);
+            const enc10 = computeEnclosureFactor(terrainProvider, worldMinX + lx + 1, Math.ceil(h10) + 1, worldMinZ + lz);
+            const enc01 = computeEnclosureFactor(terrainProvider, worldMinX + lx, Math.ceil(h01) + 1, worldMinZ + lz + 1);
+            const enc11 = computeEnclosureFactor(terrainProvider, worldMinX + lx + 1, Math.ceil(h11) + 1, worldMinZ + lz + 1);
+
+            // Apply interior darkness multiplier to AO
+            const mult00 = 1.0 - (enc00 * (1.0 - INTERIOR_DARKNESS_MIN));
+            const mult10 = 1.0 - (enc10 * (1.0 - INTERIOR_DARKNESS_MIN));
+            const mult01 = 1.0 - (enc01 * (1.0 - INTERIOR_DARKNESS_MIN));
+            const mult11 = 1.0 - (enc11 * (1.0 - INTERIOR_DARKNESS_MIN));
+
+            ao00 *= mult00;
+            ao10 *= mult10;
+            ao01 *= mult01;
+            ao11 *= mult11;
 
             // Pass LOCAL tile UVs (0-1) for splatting shader to use
             const baseVertex = positions.length / 3;
@@ -894,6 +917,32 @@ function generateWaterMesh(heightmap) {
 // VOXEL MESH
 // ============================================================================
 
+/**
+ * Check how enclosed an air space is by counting solid blocks above.
+ * Used to darken faces inside structures (chambers, tunnels).
+ *
+ * @param {Object} terrainProvider - Provider with getBlockType()
+ * @param {number} airX - X coordinate of the air space
+ * @param {number} airY - Y coordinate of the air space
+ * @param {number} airZ - Z coordinate of the air space
+ * @returns {number} Enclosure factor 0.0 (sky exposed) to 1.0 (enclosed)
+ */
+function computeEnclosureFactor(terrainProvider, airX, airY, airZ) {
+    let solidBlocksAbove = 0;
+
+    for (let dy = 1; dy <= INTERIOR_SCAN_HEIGHT; dy++) {
+        const blockAbove = terrainProvider.getBlockType(airX, airY + dy, airZ);
+        if (blockAbove !== null) {
+            solidBlocksAbove++;
+            if (solidBlocksAbove >= INTERIOR_ENCLOSURE_THRESHOLD) {
+                return 1.0;  // Fully enclosed
+            }
+        }
+    }
+
+    return solidBlocksAbove / INTERIOR_ENCLOSURE_THRESHOLD;
+}
+
 function generateVoxelMesh(terrainProvider, voxelMask, chunkX, chunkZ) {
     const worldMinX = chunkX * CHUNK_SIZE;
     const worldMinZ = chunkZ * CHUNK_SIZE;
@@ -937,28 +986,34 @@ function generateVoxelMesh(terrainProvider, voxelMask, chunkX, chunkZ) {
                     }
                     
                     if (!visible) continue;
-                    
+
+                    // Compute interior darkness for this face
+                    // The air space adjacent to this face is at (neighborX, neighborY, neighborZ)
+                    const enclosure = computeEnclosureFactor(terrainProvider, neighborX, neighborY, neighborZ);
+                    const interiorMultiplier = 1.0 - (enclosure * (1.0 - INTERIOR_DARKNESS_MIN));
+
                     const aoNeighbors = FACE_AO_NEIGHBORS[faceName];
                     const baseVertex = opaqueData.positions.length / 3;
-                    
+
                     for (let i = 0; i < 4; i++) {
                         const [vx, vy, vz] = face.verts[i];
-                        
+
                         opaqueData.positions.push(lx + vx, y + vy, lz + vz);
                         opaqueData.normals.push(nx, ny, nz);
-                        
+
                         const u = (i === 0 || i === 3) ? blockUvs.uMin : blockUvs.uMax;
                         const v = (i === 0 || i === 1) ? blockUvs.vMin : blockUvs.vMax;
                         opaqueData.uvs.push(u, v);
-                        
+
                         const [side1Offset, cornerOffset, side2Offset] = aoNeighbors[i];
                         const side1 = terrainProvider.getBlockType(x + side1Offset[0], y + side1Offset[1], z + side1Offset[2]) !== null ? 1 : 0;
                         const corner = terrainProvider.getBlockType(x + cornerOffset[0], y + cornerOffset[1], z + cornerOffset[2]) !== null ? 1 : 0;
                         const side2 = terrainProvider.getBlockType(x + side2Offset[0], y + side2Offset[1], z + side2Offset[2]) !== null ? 1 : 0;
-                        
+
                         const ao = (side1 && side2) ? 0 : 3 - (side1 + side2 + corner);
                         const aoValue = 0.5 + ao * 0.125;
-                        opaqueData.colors.push(aoValue, aoValue, aoValue);
+                        const finalBrightness = aoValue * interiorMultiplier;
+                        opaqueData.colors.push(finalBrightness, finalBrightness, finalBrightness);
                     }
                     
                     opaqueData.indices.push(baseVertex, baseVertex + 1, baseVertex + 2);

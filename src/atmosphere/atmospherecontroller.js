@@ -34,10 +34,14 @@ export class AtmosphereController {
         this.scene.add(this.directionalLight);
         
         // Torch (point light following hero)
-        this.torchLight = new THREE.PointLight(0xffd478, 0, 50, 1);
+        // Start with small non-zero intensity to ensure shaders are compiled with point light support
+        // The actual intensity will be set by lighting presets
+        // Parameters: color, intensity, distance (falloff range), decay (falloff curve)
+        // Distance 10 = ~10m effective range, decay 2 = quadratic falloff (realistic)
+        this.torchLight = new THREE.PointLight(0xffd478, 0.001, 10, 2);
         this.torchLight.castShadow = false;
         this.scene.add(this.torchLight);
-        this.torchEnabled = true;
+        this.torchEnabled = false;  // Default to off
         
         // Systems
         this.timeOfDay = new TimeOfDay(scene);

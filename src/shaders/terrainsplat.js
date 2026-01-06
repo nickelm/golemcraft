@@ -137,16 +137,17 @@ void main() {
         c2 * vBlendWeights.z +
         c3 * vBlendWeights.w;
 
-    // Apply ambient occlusion from vertex colors
-    blendedColor.rgb *= vVertexColor;
-
     // Lambert lighting
     vec3 normal = normalize(vNormal);
 
-    // Ambient light
-    vec3 irradiance = ambientLightColor;
+    // Vertex color represents AO and interior darkness (0.0-1.0)
+    // This affects ambient/environmental light, but NOT point lights (torches)
+    float aoFactor = vVertexColor.r;
 
-    // Directional lights
+    // Ambient light (affected by AO/interior darkness)
+    vec3 ambientIrradiance = ambientLightColor * aoFactor;
+
+    // Directional lights (affected by AO/interior darkness - they represent sky light)
     #if NUM_DIR_LIGHTS > 0
         for (int i = 0; i < NUM_DIR_LIGHTS; i++) {
             vec3 lightDir = directionalLights[i].direction;
@@ -158,20 +159,21 @@ void main() {
                 NdotL *= shadow;
             #endif
 
-            irradiance += directionalLights[i].color * NdotL;
+            ambientIrradiance += directionalLights[i].color * NdotL * aoFactor;
         }
     #endif
 
-    // Hemisphere light
+    // Hemisphere light (affected by AO/interior darkness - represents sky)
     #if NUM_HEMI_LIGHTS > 0
         for (int i = 0; i < NUM_HEMI_LIGHTS; i++) {
             float dotNL = dot(normal, hemisphereLights[i].direction);
             float hemiWeight = 0.5 * dotNL + 0.5;
-            irradiance += mix(hemisphereLights[i].groundColor, hemisphereLights[i].skyColor, hemiWeight);
+            ambientIrradiance += mix(hemisphereLights[i].groundColor, hemisphereLights[i].skyColor, hemiWeight) * aoFactor;
         }
     #endif
 
-    // Point lights (in view space)
+    // Point lights (NOT affected by AO - torches illuminate dark spaces)
+    vec3 pointIrradiance = vec3(0.0);
     #if NUM_POINT_LIGHTS > 0
         for (int i = 0; i < NUM_POINT_LIGHTS; i++) {
             vec3 lightVec = pointLights[i].position - vViewPosition;
@@ -187,12 +189,18 @@ void main() {
                 distanceFalloff = pow(saturate(-distance / pointLights[i].distance + 1.0), decay);
             }
 
-            irradiance += pointLights[i].color * NdotL * distanceFalloff;
+            // Add ambient fill light (25% of point light reaches all surfaces regardless of normal)
+            // This simulates light bouncing in enclosed spaces
+            float ambientFill = 0.25;
+            float directional = NdotL * (1.0 - ambientFill);
+            pointIrradiance += pointLights[i].color * (directional + ambientFill) * distanceFalloff;
         }
     #endif
 
+    // Combine: ambient (darkened by AO) + point lights (full brightness)
+    vec3 irradiance = ambientIrradiance + pointIrradiance;
+
     // Clamp irradiance to prevent overbright surfaces
-    // Without this, ambient + directional can exceed 1.0 and blow out highlights
     irradiance = min(irradiance, vec3(1.0));
 
     blendedColor.rgb *= irradiance;
@@ -295,34 +303,36 @@ void main() {
     // SINGLE texture lookup - maximum performance
     vec4 color = sampleTile(vSelectedTile, vLocalUV);
 
-    // Apply ambient occlusion from vertex colors
-    color.rgb *= vVertexColor;
-
-    // Lambert lighting (same as mobile version but simpler)
+    // Lambert lighting
     vec3 normal = normalize(vNormal);
 
-    // Ambient light
-    vec3 irradiance = ambientLightColor;
+    // Vertex color represents AO and interior darkness (0.0-1.0)
+    // This affects ambient/environmental light, but NOT point lights (torches)
+    float aoFactor = vVertexColor.r;
 
-    // Directional lights
+    // Ambient light (affected by AO/interior darkness)
+    vec3 ambientIrradiance = ambientLightColor * aoFactor;
+
+    // Directional lights (affected by AO/interior darkness)
     #if NUM_DIR_LIGHTS > 0
         for (int i = 0; i < NUM_DIR_LIGHTS; i++) {
             vec3 lightDir = directionalLights[i].direction;
             float NdotL = max(dot(normal, lightDir), 0.0);
-            irradiance += directionalLights[i].color * NdotL;
+            ambientIrradiance += directionalLights[i].color * NdotL * aoFactor;
         }
     #endif
 
-    // Hemisphere light
+    // Hemisphere light (affected by AO/interior darkness)
     #if NUM_HEMI_LIGHTS > 0
         for (int i = 0; i < NUM_HEMI_LIGHTS; i++) {
             float dotNL = dot(normal, hemisphereLights[i].direction);
             float hemiWeight = 0.5 * dotNL + 0.5;
-            irradiance += mix(hemisphereLights[i].groundColor, hemisphereLights[i].skyColor, hemiWeight);
+            ambientIrradiance += mix(hemisphereLights[i].groundColor, hemisphereLights[i].skyColor, hemiWeight) * aoFactor;
         }
     #endif
 
-    // Point lights (in view space)
+    // Point lights (NOT affected by AO - torches illuminate dark spaces)
+    vec3 pointIrradiance = vec3(0.0);
     #if NUM_POINT_LIGHTS > 0
         for (int i = 0; i < NUM_POINT_LIGHTS; i++) {
             vec3 lightVec = pointLights[i].position - vViewPosition;
@@ -338,9 +348,16 @@ void main() {
                 distanceFalloff = pow(saturate(-distance / pointLights[i].distance + 1.0), decay);
             }
 
-            irradiance += pointLights[i].color * NdotL * distanceFalloff;
+            // Add ambient fill light (25% of point light reaches all surfaces regardless of normal)
+            // This simulates light bouncing in enclosed spaces
+            float ambientFill = 0.25;
+            float directional = NdotL * (1.0 - ambientFill);
+            pointIrradiance += pointLights[i].color * (directional + ambientFill) * distanceFalloff;
         }
     #endif
+
+    // Combine: ambient (darkened by AO) + point lights (full brightness)
+    vec3 irradiance = ambientIrradiance + pointIrradiance;
 
     // Clamp irradiance to prevent overbright surfaces
     irradiance = min(irradiance, vec3(1.0));
@@ -413,12 +430,15 @@ void main() {
 
     vec4 blendedColor = c0 * w0 + c1 * w1;
 
-    // Apply ambient occlusion
-    blendedColor.rgb *= vVertexColor;
-
     // Lambert lighting
     vec3 normal = normalize(vNormal);
-    vec3 irradiance = ambientLightColor;
+
+    // Vertex color represents AO and interior darkness (0.0-1.0)
+    // This affects ambient/environmental light, but NOT point lights (torches)
+    float aoFactor = vVertexColor.r;
+
+    // Ambient light (affected by AO/interior darkness)
+    vec3 ambientIrradiance = ambientLightColor * aoFactor;
 
     #if NUM_DIR_LIGHTS > 0
         for (int i = 0; i < NUM_DIR_LIGHTS; i++) {
@@ -430,7 +450,7 @@ void main() {
                 NdotL *= shadow;
             #endif
 
-            irradiance += directionalLights[i].color * NdotL;
+            ambientIrradiance += directionalLights[i].color * NdotL * aoFactor;
         }
     #endif
 
@@ -438,11 +458,12 @@ void main() {
         for (int i = 0; i < NUM_HEMI_LIGHTS; i++) {
             float dotNL = dot(normal, hemisphereLights[i].direction);
             float hemiWeight = 0.5 * dotNL + 0.5;
-            irradiance += mix(hemisphereLights[i].groundColor, hemisphereLights[i].skyColor, hemiWeight);
+            ambientIrradiance += mix(hemisphereLights[i].groundColor, hemisphereLights[i].skyColor, hemiWeight) * aoFactor;
         }
     #endif
 
-    // Point lights (in view space)
+    // Point lights (NOT affected by AO - torches illuminate dark spaces)
+    vec3 pointIrradiance = vec3(0.0);
     #if NUM_POINT_LIGHTS > 0
         for (int i = 0; i < NUM_POINT_LIGHTS; i++) {
             vec3 lightVec = pointLights[i].position - vViewPosition;
@@ -458,9 +479,16 @@ void main() {
                 distanceFalloff = pow(saturate(-distance / pointLights[i].distance + 1.0), decay);
             }
 
-            irradiance += pointLights[i].color * NdotL * distanceFalloff;
+            // Add ambient fill light (25% of point light reaches all surfaces regardless of normal)
+            // This simulates light bouncing in enclosed spaces
+            float ambientFill = 0.25;
+            float directional = NdotL * (1.0 - ambientFill);
+            pointIrradiance += pointLights[i].color * (directional + ambientFill) * distanceFalloff;
         }
     #endif
+
+    // Combine: ambient (darkened by AO) + point lights (full brightness)
+    vec3 irradiance = ambientIrradiance + pointIrradiance;
 
     // Clamp irradiance to prevent overbright surfaces
     irradiance = min(irradiance, vec3(1.0));

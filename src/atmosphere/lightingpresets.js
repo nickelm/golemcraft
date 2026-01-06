@@ -35,7 +35,7 @@ export const PRESETS = {
         directional: { color: 0xffffff, intensity: 0.5 },
         sky: 0x87ceeb,
         fog: 0x87ceeb,
-        torch: 0
+        torch: 1.5  // Keep torch active for dark interiors (caves, temples)
     },
     sunset: {
         ambient: { color: 0xffa366, intensity: 0.35 },
