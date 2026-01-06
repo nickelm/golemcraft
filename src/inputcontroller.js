@@ -17,6 +17,7 @@ export class InputController {
         
         // Keyboard state
         this.keys = {};
+        this.keysJustPressed = {};  // Keys pressed this frame (cleared each frame)
         
         // Mouse state
         this.mouse = new THREE.Vector2();
@@ -41,7 +42,11 @@ export class InputController {
     setupEventListeners() {
         // Keyboard
         window.addEventListener('keydown', (e) => {
-            this.keys[e.key.toLowerCase()] = true;
+            const key = e.key.toLowerCase();
+            if (!this.keys[key]) {
+                this.keysJustPressed[key] = true;  // Only set if wasn't already pressed
+            }
+            this.keys[key] = true;
         });
         
         window.addEventListener('keyup', (e) => {
@@ -114,10 +119,25 @@ export class InputController {
     }
     
     /**
-     * Check if a key is pressed
+     * Check if a key is currently held down
      */
     isKeyPressed(key) {
         return this.keys[key.toLowerCase()] || false;
+    }
+
+    /**
+     * Check if a key was just pressed this frame (single trigger)
+     * Call clearJustPressed() at the end of each frame
+     */
+    isKeyJustPressed(key) {
+        return this.keysJustPressed[key.toLowerCase()] || false;
+    }
+
+    /**
+     * Clear the "just pressed" state - call at end of update
+     */
+    clearJustPressed() {
+        this.keysJustPressed = {};
     }
     
     /**

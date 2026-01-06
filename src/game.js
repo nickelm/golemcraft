@@ -10,6 +10,7 @@ import { Arrow } from './combat.js';
 import { MobSpawner, Explosion } from './mobs.js';
 import { AtmosphereController } from './atmosphere/atmospherecontroller.js';
 import { InputController } from './inputcontroller.js';
+import { DroppedTorch } from './droppedtorch.js';
 import { PerformanceMonitor } from './utils/ui/performance-monitor.js';
 import { LoadingOverlay } from './utils/ui/loading-overlay.js';
 import { TerrainLoadingIndicator } from './utils/ui/terrain-loading-indicator.js';
@@ -73,6 +74,7 @@ export class Game {
         this.playerEntities = [];
         this.arrows = [];
         this.explosions = [];
+        this.torches = [];
         
         this.mobSpawner = null;
         this.itemSpawner = null;
@@ -320,7 +322,19 @@ export class Game {
         if (this.cameraController) {
             this.cameraController.handleLook(deltaX, deltaY);
         }
-    } 
+    }
+
+    dropTorch() {
+        // Remove oldest torch if at limit
+        if (this.torches.length >= 8) {
+            const oldest = this.torches.shift();
+            oldest.destroy();
+        }
+
+        // Spawn torch at hero position
+        const torch = new DroppedTorch(this.scene, this.hero.position.clone());
+        this.torches.push(torch);
+    }
 
     handleInput(deltaTime) {
         if (this.input.isKeyPressed('a')) {
@@ -346,6 +360,10 @@ export class Game {
             console.log(`Player at Y=${this.hero.position.y.toFixed(2)}`);
             this.world.debugBlockColumn(px, pz);
             setTimeout(() => this._debugCooldown = false, 500);
+        }
+        // Drop torch with G key (single press)
+        if (this.input.isKeyJustPressed('g')) {
+            this.dropTorch();
         }
     }
 
@@ -537,12 +555,15 @@ export class Game {
         // Update item spawner
         if (this.itemSpawner) {
             this.itemSpawner.update(deltaTime, this.hero.position);
-            
+
             const collected = this.itemSpawner.checkCollection(this.hero);
             collected.forEach(item => {
                 this.collectItem(item);
             });
         }
+
+        // Update dropped torches
+        this.torches.forEach(torch => torch.update(deltaTime));
 
         // Update camera
         this.cameraController.update(deltaTime);
@@ -560,6 +581,9 @@ export class Game {
         }
         // this.controls.update();
         this.updateUI();
+
+        // Clear single-press key state at end of frame
+        this.input.clearJustPressed();
     }
 
     updateUI() {
