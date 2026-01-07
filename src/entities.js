@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { HeroMount, HeroOnFoot } from './hero.js';
 import { resolveEntityCollision, createEntityAABB, createHeroAABB, createHeroOnFootAABB } from './collision.js';
-import { Bow } from './combat.js';
+import { Bow, Sword } from './combat.js';
 
 /**
  * Base Entity class
@@ -106,13 +106,25 @@ export class Hero extends Entity {
         this.mesh = this.heroMount.mesh;
         this.activeVisual = this.heroMount; // Reference to current visual
 
-        // Add bow weapon
+        // Add weapons
         this.bow = new Bow(this.scene, this.mesh);
+        this.sword = new Sword(this.scene, this.mesh, true);
+        this.sword.hide(); // Start with bow visible
 
-        // Shooting mechanics
+        // Active weapon state
+        this.activeWeapon = 'bow'; // 'bow' or 'sword'
+
+        // Shooting mechanics (bow)
         this.attackCooldown = 0.25;  // 0.25 seconds between shots (fast!)
         this.timeSinceLastShot = 0;
         this.arrowDamage = 15;
+
+        // Melee mechanics (sword)
+        this.meleeRange = 2.5;      // 2.5 blocks
+        this.meleeDamage = 25;      // Higher damage than bow
+        this.meleeArc = Math.PI / 2; // 90° frontal cone
+        this.swingCooldown = 0.4;   // 0.4 seconds between swings
+        this.timeSinceLastSwing = 0;
 
         // Custom AABB for mounted hero - matches mesh dimensions
         this.aabb = createHeroAABB();
@@ -131,8 +143,9 @@ export class Hero extends Entity {
         const oldPos = this.position.clone();
         const oldRot = this.oldRotation;
 
-        // Update attack cooldown
+        // Update attack cooldowns
         this.timeSinceLastShot += deltaTime;
+        this.timeSinceLastSwing += deltaTime;
 
         // Handle mounting progress
         if (this.isMounting) {
@@ -162,9 +175,12 @@ export class Hero extends Entity {
         this.activeVisual.mesh.position.y += this.activeVisual.bobOffset + (this.aabb?.groundOffset || 0);
         this.activeVisual.setRotation(this.rotation);
 
-        // Update bow animation
+        // Update weapon animations
         if (this.bow) {
             this.bow.update(deltaTime);
+        }
+        if (this.sword) {
+            this.sword.update(deltaTime);
         }
 
         // Update debug AABB visualization
@@ -222,7 +238,84 @@ export class Hero extends Entity {
     canShoot() {
         return this.timeSinceLastShot >= this.attackCooldown;
     }
-    
+
+    /**
+     * Switch between bow and sword
+     */
+    switchWeapon() {
+        if (this.activeWeapon === 'bow') {
+            this.activeWeapon = 'sword';
+            if (this.bow) this.bow.mesh.visible = false;
+            if (this.sword) this.sword.show();
+        } else {
+            this.activeWeapon = 'bow';
+            if (this.sword) this.sword.hide();
+            if (this.bow) this.bow.mesh.visible = true;
+        }
+    }
+
+    /**
+     * Check if can perform melee attack (not on cooldown)
+     */
+    canMeleeAttack() {
+        return this.timeSinceLastSwing >= this.swingCooldown;
+    }
+
+    /**
+     * Perform melee attack on mobs within range and arc
+     * @param {Array} mobs - Array of mob entities to check
+     * @returns {Array} Array of mobs that were hit
+     */
+    meleeAttack(mobs) {
+        if (!this.canMeleeAttack()) {
+            return [];
+        }
+
+        // Reset cooldown
+        this.timeSinceLastSwing = 0;
+
+        // Trigger sword swing animation
+        if (this.sword) {
+            this.sword.swing();
+        }
+
+        // Calculate hero forward direction
+        const heroForward = new THREE.Vector3(
+            Math.sin(this.rotation),
+            0,
+            Math.cos(this.rotation)
+        ).normalize();
+
+        const hitMobs = [];
+
+        for (const mob of mobs) {
+            if (mob.dead || mob.health <= 0) continue;
+
+            // Vector from hero to mob
+            const toMob = new THREE.Vector3()
+                .subVectors(mob.position, this.position);
+            toMob.y = 0; // Only consider horizontal distance
+            const distance = toMob.length();
+
+            // Check if within melee range
+            if (distance > this.meleeRange) continue;
+
+            // Check if within frontal arc
+            toMob.normalize();
+            const dot = heroForward.dot(toMob);
+            const angle = Math.acos(Math.max(-1, Math.min(1, dot)));
+
+            // meleeArc is full arc width, so half-angle comparison
+            if (angle <= this.meleeArc / 2) {
+                // Hit! Apply damage
+                mob.takeDamage(this.meleeDamage);
+                hitMobs.push(mob);
+            }
+        }
+
+        return hitMobs;
+    }
+
     /**
      * Create a wireframe box showing the collision AABB
      */
@@ -329,9 +422,12 @@ export class Hero extends Entity {
         this.activeVisual = this.heroOnFoot;
         this.mesh = this.heroOnFoot.mesh;
 
-        // Re-attach bow to on-foot mesh
+        // Re-attach weapons to on-foot mesh
         if (this.bow) {
             this.bow.attachTo(this.heroOnFoot.mesh, false);
+        }
+        if (this.sword) {
+            this.sword.attachTo(this.heroOnFoot.mesh, false);
         }
 
         // Switch AABB to taller, narrower on-foot version
@@ -380,9 +476,12 @@ export class Hero extends Entity {
         this.activeVisual = this.heroMount;
         this.mesh = this.heroMount.mesh;
 
-        // Re-attach bow to mount mesh
+        // Re-attach weapons to mount mesh
         if (this.bow) {
             this.bow.attachTo(this.heroMount.mesh, true);
+        }
+        if (this.sword) {
+            this.sword.attachTo(this.heroMount.mesh, true);
         }
 
         // Switch AABB to mounted version
@@ -517,6 +616,7 @@ export class Hero extends Entity {
         this.heroMount.destroy();
         if (this.heroOnFoot) this.heroOnFoot.destroy();
         if (this.bow) this.bow.destroy();
+        if (this.sword) this.sword.destroy();
     }
 }
 

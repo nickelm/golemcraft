@@ -385,3 +385,153 @@ export class Bow {
         });
     }
 }
+
+/**
+ * Sword - Melee weapon for hero
+ */
+export class Sword {
+    // Position offsets for different mount states
+    static MOUNTED_POSITION = { x: 0.5, y: 1.8, z: 0.3 };
+    static ON_FOOT_POSITION = { x: 0.35, y: 1.0, z: 0.2 };
+
+    constructor(scene, heroMesh, mounted = true) {
+        this.scene = scene;
+        this.heroMesh = heroMesh;
+        this.mesh = this.createMesh();
+
+        // Swing animation state
+        this.isSwinging = false;
+        this.swingProgress = 0;
+        this.swingDuration = 0.2; // 200ms swing animation
+        this.baseRotationZ = -Math.PI / 4; // Resting angle (45° to the right, like bow)
+
+        // Attach sword to hero (as child so it follows)
+        this.heroMesh.add(this.mesh);
+
+        // Set initial position
+        const pos = mounted ? Sword.MOUNTED_POSITION : Sword.ON_FOOT_POSITION;
+        this.mesh.position.set(pos.x, pos.y, pos.z);
+    }
+
+    createMesh() {
+        const group = new THREE.Group();
+
+        // Blade - iron gray voxel-style
+        const bladeGeo = new THREE.BoxGeometry(0.08, 1.2, 0.15);
+        const bladeMat = new THREE.MeshLambertMaterial({ color: 0x808080 }); // Iron gray
+        const blade = new THREE.Mesh(bladeGeo, bladeMat);
+        blade.position.set(0, 0.6, 0); // Blade extends upward from guard
+        group.add(blade);
+
+        // Blade tip - tapered end
+        const tipGeo = new THREE.BoxGeometry(0.06, 0.15, 0.12);
+        const tip = new THREE.Mesh(tipGeo, bladeMat);
+        tip.position.set(0, 1.25, 0);
+        group.add(tip);
+
+        // Cross-guard - horizontal bar
+        const guardGeo = new THREE.BoxGeometry(0.4, 0.1, 0.1);
+        const guardMat = new THREE.MeshLambertMaterial({ color: 0x606060 }); // Darker gray
+        const guard = new THREE.Mesh(guardGeo, guardMat);
+        guard.position.set(0, 0, 0);
+        group.add(guard);
+
+        // Handle - brown wood
+        const handleGeo = new THREE.BoxGeometry(0.1, 0.35, 0.1);
+        const handleMat = new THREE.MeshLambertMaterial({ color: 0x654321 }); // Dark brown
+        const handle = new THREE.Mesh(handleGeo, handleMat);
+        handle.position.set(0, -0.22, 0);
+        group.add(handle);
+
+        // Pommel - small sphere at bottom
+        const pommelGeo = new THREE.BoxGeometry(0.12, 0.1, 0.12);
+        const pommel = new THREE.Mesh(pommelGeo, guardMat);
+        pommel.position.set(0, -0.42, 0);
+        group.add(pommel);
+
+        // Default rotation - angled like bow
+        group.rotation.z = this.baseRotationZ || -Math.PI / 4;
+
+        group.castShadow = true;
+
+        return group;
+    }
+
+    /**
+     * Attach sword to a new mesh, used when switching between mounted/dismounted states
+     * @param {THREE.Object3D} newMesh - The mesh to attach to
+     * @param {boolean} mounted - Whether the hero is mounted (affects position)
+     */
+    attachTo(newMesh, mounted = true) {
+        // Remove from current parent
+        if (this.mesh.parent) {
+            this.mesh.parent.remove(this.mesh);
+        }
+
+        // Add to new parent
+        newMesh.add(this.mesh);
+        this.heroMesh = newMesh;
+
+        // Set position based on mount state
+        const pos = mounted ? Sword.MOUNTED_POSITION : Sword.ON_FOOT_POSITION;
+        this.mesh.position.set(pos.x, pos.y, pos.z);
+    }
+
+    /**
+     * Trigger swing animation
+     * @returns {boolean} True if swing started, false if already swinging
+     */
+    swing() {
+        if (this.isSwinging) return false;
+
+        this.isSwinging = true;
+        this.swingProgress = 0;
+        return true;
+    }
+
+    /**
+     * Update sword animation
+     */
+    update(deltaTime) {
+        if (!this.isSwinging) return;
+
+        this.swingProgress += deltaTime / this.swingDuration;
+
+        if (this.swingProgress >= 1) {
+            // Swing complete
+            this.isSwinging = false;
+            this.swingProgress = 0;
+            this.mesh.rotation.z = this.baseRotationZ;
+            return;
+        }
+
+        // Swing arc: start at resting position, swing through 90° arc, return
+        // Use sine wave for smooth acceleration/deceleration
+        const swingAngle = Math.sin(this.swingProgress * Math.PI) * (Math.PI / 2);
+        this.mesh.rotation.z = this.baseRotationZ - swingAngle;
+    }
+
+    /**
+     * Show the sword (make visible)
+     */
+    show() {
+        this.mesh.visible = true;
+    }
+
+    /**
+     * Hide the sword (make invisible)
+     */
+    hide() {
+        this.mesh.visible = false;
+    }
+
+    destroy() {
+        if (this.mesh.parent) {
+            this.mesh.parent.remove(this.mesh);
+        }
+        this.mesh.traverse((child) => {
+            if (child.geometry) child.geometry.dispose();
+            if (child.material) child.material.dispose();
+        });
+    }
+}

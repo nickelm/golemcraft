@@ -281,11 +281,20 @@ export class Game {
     }
 
     handleClick() {
+        // Route based on active weapon
+        if (this.hero.activeWeapon === 'sword') {
+            this.handleMeleeAttack();
+        } else {
+            this.handleRangedAttack();
+        }
+    }
+
+    handleRangedAttack() {
         const intersects = this.input.raycast(this.scene, true);
-        
+
         if (intersects.length > 0) {
             const point = intersects[0].point;
-            
+
             const arrowData = this.hero.shootArrow(point);
             if (arrowData) {
                 const arrow = new Arrow(
@@ -296,6 +305,25 @@ export class Game {
                 );
                 this.arrows.push(arrow);
             }
+        }
+    }
+
+    handleMeleeAttack() {
+        // Get all hostile mobs for melee targeting
+        const hostileMobs = this.mobSpawner ? this.mobSpawner.getHostileMobs() : [];
+
+        // Perform melee attack and get hit mobs
+        const hitMobs = this.hero.meleeAttack(hostileMobs);
+
+        // Show floating damage numbers for each hit
+        if (this.itemSpawner) {
+            hitMobs.forEach(mob => {
+                this.itemSpawner.showFloatingNumber(
+                    mob.position.clone(),
+                    this.hero.meleeDamage,
+                    'damage'
+                );
+            });
         }
     }
     
@@ -358,6 +386,10 @@ export class Game {
         // Mount/dismount toggle with M key
         if (this.input.isKeyJustPressed('m')) {
             this.hero.toggleMount();
+        }
+        // Weapon switch with Q or Tab key
+        if (this.input.isKeyJustPressed('q') || this.input.isKeyJustPressed('Tab')) {
+            this.hero.switchWeapon();
         }
         // Debug: Press 'b' to dump block column at player position
         if (this.input.isKeyPressed('b') && !this._debugCooldown) {

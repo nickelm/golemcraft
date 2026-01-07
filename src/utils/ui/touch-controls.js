@@ -172,6 +172,20 @@ export class TouchControls {
         });
         container.appendChild(mountBtn);
         this.buttons.mount = mountBtn;
+
+        // Weapon swap button (right side, between jump and attack)
+        const weaponBtn = this.createButton('BOW', 'right: 120px; bottom: 85px;');
+        weaponBtn.style.width = '60px';
+        weaponBtn.style.height = '60px';
+        weaponBtn.style.fontSize = '12px';
+        weaponBtn.addEventListener('touchstart', (e) => {
+            e.preventDefault();
+            if (this.game.hero) {
+                this.game.hero.switchWeapon();
+            }
+        });
+        container.appendChild(weaponBtn);
+        this.buttons.weapon = weaponBtn;
     }
 
     createButton(label, position) {
@@ -243,22 +257,28 @@ export class TouchControls {
     }
     
     /**
-     * Handle tap-to-shoot
+     * Handle tap-to-attack (routes to ranged or melee based on active weapon)
      */
     handleTapShoot(screenX, screenY) {
-        // Convert screen coordinates to normalized device coordinates
+        // For melee attacks, just trigger the attack (no target needed)
+        if (this.game.hero && this.game.hero.activeWeapon === 'sword') {
+            this.game.handleMeleeAttack();
+            return;
+        }
+
+        // For ranged attacks, convert screen coordinates to world target
         const mouse = {
             x: (screenX / window.innerWidth) * 2 - 1,
             y: -(screenY / window.innerHeight) * 2 + 1
         };
-        
+
         // Use game's raycaster to find world position
         this.game.raycaster.setFromCamera(mouse, this.game.camera);
         const intersects = this.game.raycaster.intersectObjects(this.game.scene.children);
-        
+
         if (intersects.length > 0) {
             const point = intersects[0].point;
-            
+
             // Import Arrow class
             const arrowData = this.game.hero.shootArrow(point);
             if (arrowData) {
@@ -280,8 +300,9 @@ export class TouchControls {
     update(deltaTime) {
         if (!this.active) return;
 
-        // Update mount button label based on hero state
+        // Update button labels based on hero state
         this.updateMountButton();
+        this.updateWeaponButton();
 
         if (!this.joystick.active) return;
 
@@ -316,6 +337,17 @@ export class TouchControls {
         } else {
             this.buttons.mount.textContent = 'MOUNT';
         }
+    }
+
+    /**
+     * Update the weapon button label based on active weapon
+     */
+    updateWeaponButton() {
+        if (!this.buttons.weapon || !this.game.hero) return;
+
+        const hero = this.game.hero;
+        // Show the name of the CURRENT weapon
+        this.buttons.weapon.textContent = hero.activeWeapon === 'bow' ? 'BOW' : 'SWORD';
     }
 
     destroy() {
