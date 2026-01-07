@@ -157,6 +157,21 @@ export class TouchControls {
         });
         container.appendChild(attackBtn);
         this.buttons.attack = attackBtn;
+
+        // Mount/Dismount button (left side, above joystick)
+        const mountBtn = this.createButton('DISMOUNT', 'left: 30px; bottom: 170px;');
+        mountBtn.style.width = '70px';
+        mountBtn.style.height = '50px';
+        mountBtn.style.borderRadius = '25px';
+        mountBtn.style.fontSize = '11px';
+        mountBtn.addEventListener('touchstart', (e) => {
+            e.preventDefault();
+            if (this.game.hero) {
+                this.game.hero.toggleMount();
+            }
+        });
+        container.appendChild(mountBtn);
+        this.buttons.mount = mountBtn;
     }
 
     createButton(label, position) {
@@ -263,22 +278,43 @@ export class TouchControls {
 
     // Call this in game update loop to apply joystick input
     update(deltaTime) {
-        if (!this.active || !this.joystick.active) return;
+        if (!this.active) return;
+
+        // Update mount button label based on hero state
+        this.updateMountButton();
+
+        if (!this.joystick.active) return;
 
         const { currentX, currentY } = this.joystick;
-        
+
         // Forward/backward based on Y axis
         if (currentY < -0.2) {
             this.game.hero.moveForward(8 * deltaTime * Math.abs(currentY));
         } else if (currentY > 0.2) {
             this.game.hero.moveBackward(6 * deltaTime * Math.abs(currentY));
         }
-        
+
         // Turn based on X axis
         if (currentX < -0.2) {
             this.game.hero.turn(1, deltaTime * Math.abs(currentX));
         } else if (currentX > 0.2) {
             this.game.hero.turn(-1, deltaTime * Math.abs(currentX));
+        }
+    }
+
+    /**
+     * Update the mount button label based on hero state
+     */
+    updateMountButton() {
+        if (!this.buttons.mount || !this.game.hero) return;
+
+        const hero = this.game.hero;
+        if (hero.isMounting) {
+            this.buttons.mount.textContent = 'CANCEL';
+        } else if (hero.mounted) {
+            this.buttons.mount.textContent = 'DISMOUNT';
+        } else {
+            this.buttons.mount.textContent = 'MOUNT';
         }
     }
 
