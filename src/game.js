@@ -8,6 +8,7 @@ import { CameraController } from './camera.js';
 import { ItemSpawner } from './items.js';
 import { Arrow } from './combat.js';
 import { MobSpawner, Explosion } from './mobs.js';
+import { SpawnPointManager } from './world/spawnpointmanager.js';
 import { AtmosphereController } from './atmosphere/atmospherecontroller.js';
 import { InputController } from './inputcontroller.js';
 import { DroppedTorch } from './droppedtorch.js';
@@ -244,11 +245,15 @@ export class Game {
             }
         });
 
+        // Initialize spawn point manager and connect to worker
+        this.spawnPointManager = new SpawnPointManager();
+        this.world.chunkLoader.workerManager.setSpawnPointManager(this.spawnPointManager);
+
         // Initialize spawners
         // Pass WorldManager (this.world) instead of TerrainGenerator (this.world.terrain)
         // so they use block cache heights for correct placement
         this.itemSpawner = new ItemSpawner(this.scene, this.world, this.camera);
-        this.mobSpawner = new MobSpawner(this.scene, this.world);
+        this.mobSpawner = new MobSpawner(this.scene, this.world, this.spawnPointManager);
 
         // Determine spawn position
         let spawnPos;
@@ -460,11 +465,11 @@ export class Game {
         this.landmarkDebug.drawCoordinateFrame(px, height, pz, 2);
 
         // Draw nearby landmarks
-        const landmarkSystem = this.world.landmarkSystem;
-        const landmarks = this.landmarkDebug.drawLandmarks(landmarkSystem, px, pz, 5);
+        const landmarkRegistry = this.world.chunkLoader?.workerManager?.landmarkRegistry;
+        const landmarks = this.landmarkDebug.drawLandmarks(landmarkRegistry, px, pz, 5);
 
         // Check if player is inside a landmark
-        const insideLandmark = landmarkSystem ? landmarkSystem.isInsideLandmark(px, pz) : false;
+        const insideLandmark = landmarkRegistry ? landmarkRegistry.isInsideLandmark(px, pz) : false;
 
         // Update info overlay
         const gradient = probe.sampleGradient(px, pz);
@@ -577,7 +582,7 @@ export class Game {
         
         this.arrows = this.arrows.filter(arrow => {
             if (arrow.isEnemyArrow) {
-                const result = arrow.update(deltaTime, this.world.terrain, []);
+                const result = arrow.update(deltaTime, this.world, []);
                 
                 if (!arrow.hit && !arrow.stuck) {
                     const distToPlayer = arrow.position.distanceTo(this.hero.position);
@@ -598,10 +603,15 @@ export class Game {
                 }
                 return result;
             } else {
-                return arrow.update(deltaTime, this.world.terrain, allEnemyTargets);
+                return arrow.update(deltaTime, this.world, allEnemyTargets);
             }
         });
         
+        // Update spawn point manager cooldowns
+        if (this.spawnPointManager) {
+            this.spawnPointManager.update(deltaTime);
+        }
+
         // Update mob spawner
         if (this.mobSpawner) {
             this.mobSpawner.update(deltaTime, this.hero.position, WATER_LEVEL, this.itemSpawner);

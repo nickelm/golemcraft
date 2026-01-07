@@ -117,4 +117,14 @@ export class TerrainDataProvider {
         const chunkZ = Math.floor(z / CHUNK_SIZE);
         return this.workerManager.hasBlockData(chunkX, chunkZ);
     }
+
+    /**
+     * Get biome at world coordinates
+     * @param {number} x - World X coordinate
+     * @param {number} z - World Z coordinate
+     * @returns {string|null} Biome name or null if chunk not loaded
+     */
+    getBiome(x, z) {
+        return this.workerManager.blockCache.getBiome(x, z);
+    }
 }

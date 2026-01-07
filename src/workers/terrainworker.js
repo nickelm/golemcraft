@@ -11,6 +11,8 @@
 import { generateChunkData, getTransferables, CHUNK_SIZE, WATER_LEVEL } from '../world/terrain/chunkdatagenerator.js';
 import { BIOMES } from '../world/terrain/biomesystem.js';
 import { WorkerLandmarkSystem } from '../world/landmarks/workerlandmarksystem.js';
+import { generateSpawnPoints } from './spawnpointgenerator.js';
+import { generateObjectInstances } from './objectspawner.js';
 
 const DEBUG_CHUNK_DELAY_MS = 0;
 
@@ -349,6 +351,40 @@ function doGenerateChunk(data) {
 
     const startTime = performance.now();
     const chunkData = generateChunkData(terrainProvider, data.chunkX, data.chunkZ, useDithering);
+
+    // Generate spawn points for this chunk
+    // Create a hash wrapper that returns integers for the spawn point generator
+    const hashFn = (x, z, seed) => {
+        let h = (seed || 12345) + x * 374761393 + z * 668265263;
+        h = (h ^ (h >> 13)) * 1274126177;
+        return (h ^ (h >> 16)) & 0x7fffffff;  // Return positive integer
+    };
+
+    chunkData.spawnPoints = generateSpawnPoints(
+        terrainProvider,
+        data.chunkX,
+        data.chunkZ,
+        terrainProvider.landmarkSystem,
+        hashFn
+    );
+
+    // Generate static object instances (trees, rocks, cacti, etc.)
+    // Pass the smoothed heightmap so objects sit on the actual rendered terrain
+    chunkData.staticObjects = generateObjectInstances(
+        terrainProvider,
+        data.chunkX,
+        data.chunkZ,
+        terrainProvider.seed,
+        WATER_LEVEL,
+        chunkData.heightmap
+    );
+
+    // Get landmark metadata for this chunk (for main thread registry)
+    chunkData.landmarkMetadata = terrainProvider.landmarkSystem.getLandmarkMetadataForChunk(
+        data.chunkX,
+        data.chunkZ
+    );
+
     const genTime = performance.now() - startTime;
 
     const transferables = getTransferables(chunkData);

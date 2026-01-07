@@ -516,6 +516,31 @@ export class WorkerLandmarkSystem {
     }
 
     /**
+     * Check if position is inside any landmark's clearing zone
+     * Used to suppress object spawning (trees, rocks, etc.) near landmarks
+     * @param {number} x - World X
+     * @param {number} z - World Z
+     * @returns {boolean} True if objects should not spawn here
+     */
+    isInClearing(x, z) {
+        const chunkX = Math.floor(x / CHUNK_SIZE);
+        const chunkZ = Math.floor(z / CHUNK_SIZE);
+        const landmarks = this.getLandmarksForChunk(chunkX, chunkZ);
+
+        for (const landmark of landmarks) {
+            // Use clearingBounds if available, else use regular bounds with padding
+            const bounds = landmark.clearingBounds || landmark.bounds;
+            const padding = landmark.clearingPadding ?? 2;
+
+            if (x >= bounds.minX - padding && x <= bounds.maxX + padding &&
+                z >= bounds.minZ - padding && z <= bounds.maxZ + padding) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
      * Find cliff face direction at a position
      * Returns direction vector pointing downslope, or null if not steep enough
      * @param {number} x - World X
@@ -605,6 +630,56 @@ export class WorkerLandmarkSystem {
         }
 
         return modifications;
+    }
+
+    /**
+     * Get serializable landmark metadata for transfer to main thread
+     * Returns plain objects (no Maps) suitable for postMessage transfer
+     * @param {number} chunkX - Chunk X index
+     * @param {number} chunkZ - Chunk Z index
+     * @returns {Array} Array of landmark metadata objects
+     */
+    getLandmarkMetadataForChunk(chunkX, chunkZ) {
+        const landmarks = this.getLandmarksForChunk(chunkX, chunkZ);
+
+        return landmarks.map(landmark => ({
+            type: landmark.type,
+            // Unique ID for deduplication on main thread
+            id: `${landmark.bounds.minX},${landmark.bounds.minZ}`,
+            bounds: {
+                minX: landmark.bounds.minX,
+                maxX: landmark.bounds.maxX,
+                minY: landmark.bounds.minY,
+                maxY: landmark.bounds.maxY,
+                minZ: landmark.bounds.minZ,
+                maxZ: landmark.bounds.maxZ
+            },
+            voxelBounds: landmark.voxelBounds ? {
+                minX: landmark.voxelBounds.minX,
+                maxX: landmark.voxelBounds.maxX,
+                minY: landmark.voxelBounds.minY,
+                maxY: landmark.voxelBounds.maxY,
+                minZ: landmark.voxelBounds.minZ,
+                maxZ: landmark.voxelBounds.maxZ
+            } : null,
+            clearingBounds: landmark.clearingBounds ? {
+                minX: landmark.clearingBounds.minX,
+                maxX: landmark.clearingBounds.maxX,
+                minY: landmark.clearingBounds.minY,
+                maxY: landmark.clearingBounds.maxY,
+                minZ: landmark.clearingBounds.minZ,
+                maxZ: landmark.clearingBounds.maxZ
+            } : null,
+            chambers: landmark.chambers ? landmark.chambers.map(c => ({
+                minX: c.minX,
+                maxX: c.maxX,
+                minY: c.minY,
+                maxY: c.maxY,
+                minZ: c.minZ,
+                maxZ: c.maxZ
+            })) : null,
+            clearingPadding: landmark.clearingPadding ?? 2
+        }));
     }
 
     /**

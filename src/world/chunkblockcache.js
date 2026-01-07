@@ -38,6 +38,26 @@ export const BLOCK_TYPE_NAMES = Object.fromEntries(
     Object.entries(BLOCK_TYPE_IDS).map(([name, id]) => [id, name])
 );
 
+// Biome ID encoding (matches chunkdatagenerator.js)
+export const BIOME_IDS = {
+    ocean: 0,
+    plains: 1,
+    desert: 2,
+    jungle: 3,
+    snow: 4,
+    mountains: 5
+};
+
+// Reverse lookup: ID -> biome name
+export const BIOME_NAMES = {
+    0: 'ocean',
+    1: 'plains',
+    2: 'desert',
+    3: 'jungle',
+    4: 'snow',
+    5: 'mountains'
+};
+
 /**
  * Get block type ID from name
  */
@@ -77,12 +97,15 @@ export class ChunkBlockData {
         this.chunkZ = chunkZ;
         this.worldMinX = chunkX * CHUNK_SIZE;
         this.worldMinZ = chunkZ * CHUNK_SIZE;
-        
+
         // Smooth terrain data
         this.heightmap = data.heightmap;       // Float32Array - continuous heights
         this.voxelMask = data.voxelMask;       // Uint8Array - 0=smooth, 1=voxel
         this.surfaceTypes = data.surfaceTypes; // Uint8Array - surface block types
-        
+
+        // Biome data
+        this.biomeData = data.biomeData;       // Uint8Array - biome IDs per cell
+
         // Voxel data
         this.blockData = data.blockData;       // Uint8Array - 3D block types
     }
@@ -200,13 +223,41 @@ export class ChunkBlockData {
     findVoxelGroundHeight(localX, localZ) {
         for (let y = MAX_HEIGHT - 1; y >= 0; y--) {
             const blockType = this.getBlockTypeLocal(localX, y, localZ);
-            if (blockType !== null && 
-                blockType !== 'water' && 
+            if (blockType !== null &&
+                blockType !== 'water' &&
                 blockType !== 'water_full') {
                 return y + 1; // Stand ON the block
             }
         }
         return 0;
+    }
+
+    /**
+     * Get biome at local coordinates
+     * @param {number} localX - 0 to CHUNK_SIZE-1
+     * @param {number} localZ - 0 to CHUNK_SIZE-1
+     * @returns {string|null} Biome name or null if out of bounds or no data
+     */
+    getBiomeLocal(localX, localZ) {
+        if (!this.biomeData) return null;
+        if (localX < 0 || localX >= CHUNK_SIZE || localZ < 0 || localZ >= CHUNK_SIZE) {
+            return null;
+        }
+        const index = localZ * CHUNK_SIZE + localX;
+        const biomeId = this.biomeData[index];
+        return BIOME_NAMES[biomeId] ?? null;
+    }
+
+    /**
+     * Get biome at world coordinates
+     * @param {number} worldX - World X coordinate
+     * @param {number} worldZ - World Z coordinate
+     * @returns {string|null} Biome name or null if out of bounds or no data
+     */
+    getBiome(worldX, worldZ) {
+        const localX = worldX - this.worldMinX;
+        const localZ = worldZ - this.worldMinZ;
+        return this.getBiomeLocal(localX, localZ);
     }
 }
 
@@ -311,14 +362,28 @@ export class ChunkBlockCache {
     hasChunk(chunkX, chunkZ) {
         return this.chunks.has(`${chunkX},${chunkZ}`);
     }
-    
+
+    /**
+     * Get biome at world coordinates
+     * @param {number} x - World X coordinate
+     * @param {number} z - World Z coordinate
+     * @returns {string|null} Biome name or null if chunk not loaded
+     */
+    getBiome(x, z) {
+        const chunk = this.getChunkAt(x, z);
+        if (!chunk) {
+            return null;
+        }
+        return chunk.getBiome(x, z);
+    }
+
     /**
      * Get number of loaded chunks
      */
     get size() {
         return this.chunks.size;
     }
-    
+
     /**
      * Clear all cached data
      */

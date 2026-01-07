@@ -20,6 +20,7 @@
 
 import * as THREE from 'three';
 import { ChunkBlockCache } from '../world/chunkblockcache.js';
+import { LandmarkRegistry } from '../world/landmarks/landmarkregistry.js';
 
 // DEBUG: Set to true to see cancellation logging
 const DEBUG_CANCELLATION = false;
@@ -44,6 +45,12 @@ export class TerrainWorkerManager {
 
         // Terrain data cache - THE source of truth for collision
         this.blockCache = new ChunkBlockCache();
+
+        // Landmark registry - stores landmark metadata from worker
+        this.landmarkRegistry = new LandmarkRegistry();
+
+        // Spawn point manager (set externally via setSpawnPointManager)
+        this.spawnPointManager = null;
 
         // Stats
         this.stats = {
@@ -122,20 +129,31 @@ export class TerrainWorkerManager {
         this.stats.avgGenTime = this.stats.genTimes.reduce((a, b) => a + b, 0) / this.stats.genTimes.length;
         this.stats.totalGenerated++;
 
-        // Store terrain data in cache (heightmap, voxelMask, blockData)
+        // Store terrain data in cache (heightmap, voxelMask, biomeData, blockData)
         this.blockCache.setChunkData(chunkX, chunkZ, {
             heightmap: chunkData.heightmap,
             voxelMask: chunkData.voxelMask,
             surfaceTypes: chunkData.surfaceTypes,
+            biomeData: chunkData.biomeData,
             blockData: chunkData.blockData
         });
+
+        // Store landmark metadata in registry
+        if (chunkData.landmarkMetadata && chunkData.landmarkMetadata.length > 0) {
+            this.landmarkRegistry.addChunkLandmarks(chunkX, chunkZ, chunkData.landmarkMetadata);
+        }
+
+        // Store spawn points if manager is available
+        if (chunkData.spawnPoints && this.spawnPointManager) {
+            this.spawnPointManager.addChunkSpawnPoints(chunkX, chunkZ, chunkData.spawnPoints);
+        }
 
         // Create Three.js meshes
         const meshes = this.createMeshesFromData(chunkData);
 
-        // Notify callback
+        // Notify callback with meshes and static object data
         if (this.onChunkReady) {
-            this.onChunkReady(chunkX, chunkZ, meshes);
+            this.onChunkReady(chunkX, chunkZ, meshes, chunkData.staticObjects);
         }
 
         this.processQueue();
@@ -244,6 +262,14 @@ export class TerrainWorkerManager {
                 data: { seed, textureBlending }
             });
         });
+    }
+
+    /**
+     * Set the spawn point manager for storing spawn points from chunks
+     * @param {SpawnPointManager} manager - The spawn point manager instance
+     */
+    setSpawnPointManager(manager) {
+        this.spawnPointManager = manager;
     }
 
     /**
@@ -358,10 +384,18 @@ export class TerrainWorkerManager {
     }
 
     /**
-     * Unload a chunk from the cache
+     * Unload a chunk from the cache and landmark registry
      */
     unloadChunk(chunkX, chunkZ) {
         this.blockCache.removeChunk(chunkX, chunkZ);
+        this.landmarkRegistry.removeChunkLandmarks(chunkX, chunkZ);
+    }
+
+    /**
+     * Check if block data is available for a chunk
+     */
+    hasBlockData(chunkX, chunkZ) {
+        return this.blockCache.hasChunk(chunkX, chunkZ);
     }
 
     /**

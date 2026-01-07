@@ -83,6 +83,26 @@ export const BLOCK_TYPE_IDS = {
     cave_floor: 11
 };
 
+// Biome ID encoding for transfer to main thread
+export const BIOME_IDS = {
+    ocean: 0,
+    plains: 1,
+    desert: 2,
+    jungle: 3,
+    snow: 4,
+    mountains: 5
+};
+
+// Reverse mapping for decoding on main thread
+export const BIOME_NAMES = {
+    0: 'ocean',
+    1: 'plains',
+    2: 'desert',
+    3: 'jungle',
+    4: 'snow',
+    5: 'mountains'
+};
+
 // Face definitions - correct CCW winding
 const FACES = {
     top:    { dir: [0, 1, 0],  verts: [[0,1,0], [0,1,1], [1,1,1], [1,1,0]] },
@@ -585,7 +605,7 @@ function generateSurfaceTypes(terrainProvider, chunkX, chunkZ) {
     const worldMinX = chunkX * CHUNK_SIZE;
     const worldMinZ = chunkZ * CHUNK_SIZE;
     const surfaceTypes = new Uint8Array(CHUNK_SIZE * CHUNK_SIZE);
-    
+
     for (let lz = 0; lz < CHUNK_SIZE; lz++) {
         for (let lx = 0; lx < CHUNK_SIZE; lx++) {
             const blockType = terrainProvider.getSurfaceBlockType(worldMinX + lx, worldMinZ + lz);
@@ -593,6 +613,24 @@ function generateSurfaceTypes(terrainProvider, chunkX, chunkZ) {
         }
     }
     return surfaceTypes;
+}
+
+/**
+ * Generate biome data for each cell in the chunk
+ * Returns a Uint8Array with biome IDs encoded per cell
+ */
+function generateBiomeData(terrainProvider, chunkX, chunkZ) {
+    const worldMinX = chunkX * CHUNK_SIZE;
+    const worldMinZ = chunkZ * CHUNK_SIZE;
+    const biomeData = new Uint8Array(CHUNK_SIZE * CHUNK_SIZE);
+
+    for (let lz = 0; lz < CHUNK_SIZE; lz++) {
+        for (let lx = 0; lx < CHUNK_SIZE; lx++) {
+            const biome = terrainProvider.getBiome(worldMinX + lx, worldMinZ + lz);
+            biomeData[lz * CHUNK_SIZE + lx] = BIOME_IDS[biome] ?? 1; // Default to plains if unknown
+        }
+    }
+    return biomeData;
 }
 
 function generateBlockData(terrainProvider, chunkX, chunkZ) {
@@ -1052,6 +1090,7 @@ export function generateChunkData(terrainProvider, chunkX, chunkZ, useDithering 
     const voxelMask = generateVoxelMask(terrainProvider, chunkX, chunkZ);
     const heightfieldHoleMask = generateHeightfieldHoleMask(terrainProvider, chunkX, chunkZ);
     const surfaceTypes = generateSurfaceTypes(terrainProvider, chunkX, chunkZ);
+    const biomeData = generateBiomeData(terrainProvider, chunkX, chunkZ);
     const blockData = generateBlockData(terrainProvider, chunkX, chunkZ);
 
     const surface = generateSurfaceMesh(heightmap, voxelMask, heightfieldHoleMask, surfaceTypes, terrainProvider, chunkX, chunkZ, useDithering);
@@ -1063,6 +1102,7 @@ export function generateChunkData(terrainProvider, chunkX, chunkZ, useDithering 
         voxelMask,
         heightfieldHoleMask,
         surfaceTypes,
+        biomeData,
         surface,
         opaque: voxelOpaque,
         water,
@@ -1078,6 +1118,7 @@ export function getTransferables(chunkData) {
         chunkData.voxelMask.buffer,
         chunkData.heightfieldHoleMask.buffer,
         chunkData.surfaceTypes.buffer,
+        chunkData.biomeData.buffer,
         chunkData.surface.positions.buffer,
         chunkData.surface.normals.buffer,
         chunkData.surface.uvs.buffer,
@@ -1104,6 +1145,15 @@ export function getTransferables(chunkData) {
         // Splatting mode: 4 tiles + weights per vertex
         transferables.push(chunkData.surface.tileIndices.buffer);
         transferables.push(chunkData.surface.blendWeights.buffer);
+    }
+
+    // Add static object position arrays
+    if (chunkData.staticObjects) {
+        for (const positionData of Object.values(chunkData.staticObjects)) {
+            if (positionData && positionData.buffer) {
+                transferables.push(positionData.buffer);
+            }
+        }
     }
 
     return transferables;

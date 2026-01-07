@@ -463,4 +463,30 @@ export class ChunkedTerrain {
     hasChunk(chunkX, chunkZ) {
         return this.chunks.has(`${chunkX},${chunkZ}`);
     }
+
+    /**
+     * Request regeneration of a chunk at world position
+     * This should trigger worker-based regeneration
+     * TODO: Currently a stub - needs ChunkLoader reference to trigger worker regeneration
+     */
+    regenerateChunkAt(x, z) {
+        const chunkX = Math.floor(x / CHUNK_SIZE);
+        const chunkZ = Math.floor(z / CHUNK_SIZE);
+        console.warn(`[ChunkedTerrain] regenerateChunkAt(${chunkX}, ${chunkZ}) - TODO: implement worker regeneration`);
+        // For now, just mark the chunk as needing regeneration
+        // The actual regeneration should happen via ChunkLoader -> Worker
+    }
+
+    /**
+     * Request regeneration of chunks in a radius around world position
+     * TODO: Currently a stub - needs ChunkLoader reference to trigger worker regeneration
+     */
+    regenerateChunksInRadius(x, z, radius) {
+        const centerChunkX = Math.floor(x / CHUNK_SIZE);
+        const centerChunkZ = Math.floor(z / CHUNK_SIZE);
+        const chunkRadius = Math.ceil(radius / CHUNK_SIZE) + 1;
+        console.warn(`[ChunkedTerrain] regenerateChunksInRadius(${centerChunkX}, ${centerChunkZ}, ${chunkRadius} chunks) - TODO: implement worker regeneration`);
+        // For now, just mark the chunks as needing regeneration
+        // The actual regeneration should happen via ChunkLoader -> Worker
+    }
 }

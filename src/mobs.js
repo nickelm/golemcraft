@@ -1275,13 +1275,17 @@ export class Explosion {
 
 /**
  * MobSpawner - Manages mob spawning and updates
+ *
+ * Uses SpawnPointManager to spawn mobs at worker-defined locations
+ * instead of random positions around the player.
  */
 export class MobSpawner {
-    constructor(scene, terrain) {
+    constructor(scene, terrain, spawnPointManager = null) {
         this.scene = scene;
         this.terrain = terrain;
+        this.spawnPointManager = spawnPointManager;
         this.mobs = [];
-        
+
         // Spawn settings
         this.maxMobs = 25;          // Reduced from 40
         this.spawnRadius = 45;      // Spawn within 45 blocks of player
@@ -1290,7 +1294,10 @@ export class MobSpawner {
         this.fadeStartDistance = 45; // Start fading at 45 units
         this.spawnInterval = 2.5;   // Slower spawn rate
         this.timeSinceSpawn = 0;
-        
+
+        // Unique ID counter for mobs
+        this.nextMobId = 1;
+
         // Mob classes by type
         this.mobClasses = {
             cow: Cow,
@@ -1300,10 +1307,10 @@ export class MobSpawner {
             skeleton: Skeleton,
             creeper: Creeper
         };
-        
+
         // Dropped loot from killed mobs (to be collected by game)
         this.droppedLoot = [];
-        
+
         // Pending explosions (creepers)
         this.pendingExplosions = [];
     }
@@ -1315,12 +1322,13 @@ export class MobSpawner {
         this.mobs = this.mobs.filter(mob => {
             // Check if mob is too far away - despawn with fade
             const distance = mob.position.distanceTo(playerPosition);
-            
+
             if (distance > this.despawnDistance) {
+                this.cleanupMobSpawnPoint(mob);
                 mob.destroy();
                 return false;
             }
-            
+
             // Fade out mobs approaching despawn distance
             if (distance > this.fadeStartDistance && !mob.dead) {
                 const fadeProgress = (distance - this.fadeStartDistance) / (this.despawnDistance - this.fadeStartDistance);
@@ -1338,7 +1346,7 @@ export class MobSpawner {
                     }
                 });
             }
-            
+
             // Let mobs try to pick up items
             if (itemSpawner && !mob.dead) {
                 for (const item of itemSpawner.items) {
@@ -1347,15 +1355,15 @@ export class MobSpawner {
                     }
                 }
             }
-            
+
             const alive = mob.update(deltaTime, this.terrain, playerPosition);
-            
+
             // Collect any pending arrows from skeletons
             if (mob.isRanged && !mob.dead) {
                 const arrows = mob.getPendingArrows();
                 skeletonArrows.push(...arrows);
             }
-            
+
             // Check if mob just died and has loot
             if (!alive && mob.hasItems()) {
                 this.droppedLoot.push({
@@ -1363,13 +1371,14 @@ export class MobSpawner {
                     inventory: mob.getInventory()
                 });
             }
-            
+
             // Check for creeper explosion
             if (mob.hasExploded && mob.explosionData) {
                 this.pendingExplosions.push(mob.explosionData);
             }
-            
+
             if (!alive) {
+                this.cleanupMobSpawnPoint(mob);
                 mob.destroy();
             }
             return alive;
@@ -1420,51 +1429,124 @@ export class MobSpawner {
     }
     
     trySpawnMob(playerPosition, waterLevel) {
+        // Use spawn point manager if available
+        if (this.spawnPointManager) {
+            return this.trySpawnMobFromSpawnPoint(playerPosition);
+        }
+
+        // Fallback to old random spawning if no spawn point manager
+        return this.trySpawnMobRandom(playerPosition, waterLevel);
+    }
+
+    /**
+     * Spawn mob using SpawnPointManager (new system)
+     */
+    trySpawnMobFromSpawnPoint(playerPosition) {
+        // Get spawn points near player
+        const nearbyPoints = this.spawnPointManager.getSpawnPointsNear(
+            playerPosition, this.spawnRadius
+        );
+
+        // Filter to available points (not on cooldown, under max count, not too close)
+        const available = nearbyPoints.filter(sp =>
+            this.spawnPointManager.canSpawnAt(sp.id) &&
+            sp.distance >= this.minSpawnDistance
+        );
+
+        if (available.length === 0) return null;
+
+        // Pick random available point
+        const sp = available[Math.floor(Math.random() * available.length)];
+
+        // Determine mob type from spawn point
+        let mobType;
+        if (sp.subtype === 'biome') {
+            // Use biome-based mob selection
+            mobType = this.pickMobType(sp.biome);
+        } else {
+            // Use specific mob type from landmark
+            mobType = sp.subtype;
+        }
+
+        if (!mobType || !this.mobClasses[mobType]) return null;
+
+        // Spawn mob at spawn point location
+        const position = new THREE.Vector3(sp.x, sp.y, sp.z);
+        const MobClass = this.mobClasses[mobType];
+        const mob = new MobClass(this.scene, position);
+
+        // Assign unique ID and spawn point reference
+        mob.mobId = this.nextMobId++;
+        mob.spawnPointId = sp.id;
+
+        this.mobs.push(mob);
+
+        // Mark spawn point as active
+        this.spawnPointManager.markSpawnActive(sp.id, mob.mobId);
+
+        return mob;
+    }
+
+    /**
+     * Fallback random spawning (old system, for when no SpawnPointManager)
+     */
+    trySpawnMobRandom(playerPosition, waterLevel) {
         // Try several times to find a valid spawn position
         for (let attempt = 0; attempt < 5; attempt++) {
             const angle = Math.random() * Math.PI * 2;
             const distance = this.minSpawnDistance + Math.random() * (this.spawnRadius - this.minSpawnDistance);
-            
+
             const x = Math.floor(playerPosition.x + Math.cos(angle) * distance);
             const z = Math.floor(playerPosition.z + Math.sin(angle) * distance);
-            
+
             const height = this.terrain.getHeight(x, z);
-            
+
             // Skip underwater or too high
             if (height <= waterLevel || height > 40) continue;
-            
+
             // Get biome and pick appropriate mob
             const biome = this.terrain.getBiome(x, z);
             const mobType = this.pickMobType(biome);
-            
+
             if (mobType) {
                 const position = new THREE.Vector3(x + 0.5, height + 1, z + 0.5);
                 const MobClass = this.mobClasses[mobType];
                 const mob = new MobClass(this.scene, position);
+                mob.mobId = this.nextMobId++;
                 this.mobs.push(mob);
                 return mob;
             }
         }
-        
+
         return null;
     }
-    
+
+    /**
+     * Clean up spawn point tracking when a mob is removed
+     */
+    cleanupMobSpawnPoint(mob) {
+        if (this.spawnPointManager && mob.spawnPointId) {
+            this.spawnPointManager.markSpawnInactive(mob.spawnPointId, mob.mobId);
+            this.spawnPointManager.startCooldown(mob.spawnPointId);
+        }
+    }
+
     pickMobType(biome) {
         // Filter mobs that can spawn in this biome
         const validMobs = Object.entries(MOB_TYPES)
             .filter(([type, config]) => config.biomes.includes(biome));
-        
+
         if (validMobs.length === 0) return null;
-        
+
         // Weighted random selection
         const totalWeight = validMobs.reduce((sum, [, config]) => sum + config.spawnWeight, 0);
         let random = Math.random() * totalWeight;
-        
+
         for (const [type, config] of validMobs) {
             random -= config.spawnWeight;
             if (random <= 0) return type;
         }
-        
+
         return validMobs[0][0];
     }
     

@@ -1,30 +1,32 @@
 /**
  * WorldManager - High-level coordinator for all world systems
- * 
+ *
  * Architecture:
- * - Web worker generates ALL terrain data (mesh + block data + landmarks)
+ * - Web worker generates ALL terrain data (mesh + block data + landmarks + objects)
  * - Main thread receives and stores block data in ChunkBlockCache
  * - Collision queries the cache - NO terrain regeneration on main thread
  * - Worker is the SINGLE SOURCE OF TRUTH
- * 
+ *
  * Manages:
  * - Chunk loading/unloading with worker
- * - Object placement (trees, rocks) - uses local TerrainGenerator for now
- * - Block modifications (craters, destruction)
+ * - Object mesh creation (trees, rocks) - positions computed in worker
+ * - Block modifications (craters, destruction) - stored locally, synced to worker
  * - World persistence
- * 
- * Note: TerrainGenerator and LandmarkSystem are kept on main thread ONLY for:
- * - Object exclusion zones (don't spawn trees inside temples)
- * - Object height placement
- * TODO: Move object spawning to worker to eliminate main thread terrain entirely
+ *
+ * Terrain queries:
+ * - getHeight(), getInterpolatedHeight(), getBlockType() - via TerrainDataProvider/ChunkBlockCache
+ * - getBiome() - via TerrainDataProvider (biome data cached per chunk)
+ *
+ * Landmarks:
+ * - LandmarkRegistry on main thread receives metadata from worker
+ * - No generation on main thread - worker is source of truth
  */
 
 import * as THREE from 'three';
-import { TerrainGenerator, WATER_LEVEL } from './terrain/terraingenerator.js';
+import { WATER_LEVEL } from './terrain/terraingenerator.js';
 import { ChunkedTerrain } from './terrain/terrainchunks.js';
 import { ObjectGenerator } from './objects/objectgenerator.js';
 import { ChunkLoader } from './chunkloader.js';
-import { LandmarkSystem } from './landmarks/landmarksystem.js';
 import { TerrainDataProvider } from './terraindataprovider.js';
 import { initHeightfieldCollision } from '../collision.js';
 
@@ -57,25 +59,14 @@ export class WorldManager {
 
         console.log(`Creating world: seed=${seed}, id=${worldId}, textureBlending=${this.textureBlending}`);
 
-        // Create terrain generator (kept for object placement - uses height data)
-        // Note: Worker is the source of truth for collision, but objects still need
-        // height queries during placement and landmark exclusion zones
-        this.terrain = new TerrainGenerator(seed);
+        // Block modifications - tracked locally and synced to worker
+        this.destroyedBlocks = new Set();
 
-        // Create landmark system (kept ONLY for object exclusion zones)
-        // The worker has its own LandmarkSystem for actual block generation
-        this.landmarkSystem = new LandmarkSystem(this.terrain, seed);
+        // Create chunked terrain renderer (no longer needs TerrainGenerator reference)
+        this.chunkedTerrain = new ChunkedTerrain(this.scene, null, terrainTexture, this.textureBlending);
 
-        // Connect landmark system to terrain generator (for object height queries)
-        this.terrain.setLandmarkSystem(this.landmarkSystem);
-
-        // Create chunked terrain renderer
-        this.chunkedTerrain = new ChunkedTerrain(this.scene, this.terrain, terrainTexture, this.textureBlending);
-
-        // Create object generator
-        // Pass 'this' (WorldManager) as terrain provider - it has getHeight() and getBiome()
-        // that use the block cache, ensuring trees are at correct height
-        this.objectGenerator = new ObjectGenerator(this, seed, this.landmarkSystem);
+        // Create object generator (mesh factory only - positions come from worker)
+        this.objectGenerator = new ObjectGenerator(seed);
 
         // Create chunk loader (no initial sync load)
         this.chunkLoader = new ChunkLoader(
@@ -85,6 +76,9 @@ export class WorldManager {
             null,
             this.drawDistance  // Pass from constructor options
         );
+
+        // Connect destroyedBlocks to chunk loader for worker context
+        this.chunkLoader.setDestroyedBlocksRef(this.destroyedBlocks);
 
         // Terrain data provider will be created after worker is initialized
         // This is what collision and game logic should use
@@ -191,8 +185,8 @@ export class WorldManager {
         if (this.terrainDataProvider) {
             return this.terrainDataProvider.getHeight(Math.floor(x), Math.floor(z));
         }
-        // Fallback to old terrain generator if not initialized
-        return this.terrain.getHeight(x, z);
+        // Not yet initialized - return 0
+        return 0;
     }
 
     /**
@@ -202,15 +196,20 @@ export class WorldManager {
         if (this.terrainDataProvider) {
             return this.terrainDataProvider.getInterpolatedHeight(x, z);
         }
-        return this.terrain.getInterpolatedHeight(x, z);
+        return 0;
     }
 
     /**
      * Get biome at position
-     * TODO: Move biome data to worker and cache
+     * Uses the worker's block cache (biome data stored per chunk)
      */
     getBiome(x, z) {
-        return this.terrain.getBiome(x, z);
+        if (this.terrainDataProvider) {
+            const biome = this.terrainDataProvider.getBiome(Math.floor(x), Math.floor(z));
+            if (biome) return biome;
+        }
+        // Default for unloaded chunks
+        return 'plains';
     }
 
     /**
@@ -221,14 +220,12 @@ export class WorldManager {
         const fx = Math.floor(x);
         const fy = Math.floor(y);
         const fz = Math.floor(z);
-        
+
         if (this.terrainDataProvider) {
-            const result = this.terrainDataProvider.getBlockType(fx, fy, fz);
-            return result;
+            return this.terrainDataProvider.getBlockType(fx, fy, fz);
         }
-        // Fallback - should not happen in normal operation
-        console.warn('[BLOCK] Using fallback terrain!');
-        return this.terrain.getBlockType(x, y, z);
+        // Not yet initialized
+        return null;
     }
     
     /**
@@ -251,16 +248,22 @@ export class WorldManager {
 
     /**
      * Destroy a block
-     * TODO: Need to notify worker and update block cache
+     * Stores locally and syncs to worker for chunk regeneration
      */
     destroyBlock(x, y, z) {
-        this.terrain.destroyBlock(x, y, z);
-        this.chunkLoader.markBlockDestroyed(x, y, z);
+        const key = `${Math.floor(x)},${Math.floor(y)},${Math.floor(z)}`;
+        this.destroyedBlocks.add(key);
+
+        // Sync to worker and trigger chunk regeneration
+        if (this.chunkLoader.workerManager) {
+            this.chunkLoader.workerManager.updateDestroyedBlocks(this.destroyedBlocks);
+        }
         this.chunkedTerrain.regenerateChunkAt(x, z);
     }
 
     /**
      * Create explosion crater
+     * Stores destroyed blocks locally and triggers worker regeneration
      */
     createExplosionCrater(position, radius) {
         const intRadius = Math.ceil(radius);
@@ -277,13 +280,18 @@ export class WorldManager {
                         const by = py + dy;
                         const bz = pz + dz;
                         if (by > 0) {
-                            this.terrain.destroyBlock(bx, by, bz);
+                            const key = `${bx},${by},${bz}`;
+                            this.destroyedBlocks.add(key);
                         }
                     }
                 }
             }
         }
 
+        // Sync to worker and trigger chunk regeneration
+        if (this.chunkLoader.workerManager) {
+            this.chunkLoader.workerManager.updateDestroyedBlocks(this.destroyedBlocks);
+        }
         this.chunkedTerrain.regenerateChunksInRadius(px, pz, intRadius + 1);
         this.chunkLoader.saveModifiedChunks();
     }

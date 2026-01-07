@@ -58,6 +58,9 @@ export class ChunkLoader {
         this.workerManager = null;
         this.workerReady = false;
 
+        // Reference to destroyed blocks (set by WorldManager)
+        this.destroyedBlocksRef = null;
+
         // Load modified chunks from localStorage
         this.loadModifiedChunks();
 
@@ -77,7 +80,7 @@ export class ChunkLoader {
             this.chunkedTerrain.scene,
             this.chunkedTerrain.opaqueMaterial,
             this.chunkedTerrain.waterMaterial,
-            (chunkX, chunkZ, meshes) => this.onChunkReady(chunkX, chunkZ, meshes),
+            (chunkX, chunkZ, meshes, staticObjects) => this.onChunkReady(chunkX, chunkZ, meshes, staticObjects),
             this.chunkedTerrain.surfaceMaterial  // Splatting shader for smooth terrain
         );
 
@@ -89,8 +92,12 @@ export class ChunkLoader {
     /**
      * Callback when worker finishes generating a chunk
      * Now handles surfaceMesh (smooth terrain) + opaqueMesh (voxels) + waterMesh
+     * @param {number} chunkX - Chunk X index
+     * @param {number} chunkZ - Chunk Z index
+     * @param {Object} meshes - Three.js meshes (surfaceMesh, opaqueMesh, waterMesh)
+     * @param {Object} staticObjects - Worker-generated object positions (Float32Arrays)
      */
-    onChunkReady(chunkX, chunkZ, meshes) {
+    onChunkReady(chunkX, chunkZ, meshes, staticObjects) {
         const key = `${chunkX},${chunkZ}`;
 
         // Check if chunk was unloaded while generating
@@ -129,14 +136,13 @@ export class ChunkLoader {
 
         this.chunksWithMeshes.add(key);
 
-        // Generate objects for this chunk
-        if (this.objectGenerator) {
-            this.objectGenerator.generateForChunk(
+        // Create object meshes from worker-computed positions
+        if (this.objectGenerator && staticObjects) {
+            this.objectGenerator.createMeshesFromWorkerData(
                 this.chunkedTerrain.scene,
                 chunkX,
                 chunkZ,
-                6, // WATER_LEVEL
-                this.loadedChunks
+                staticObjects
             );
         }
 
@@ -176,9 +182,9 @@ export class ChunkLoader {
 
                 // Mark as loading and queue
                 this.loadedChunks.add(key);
-                
+
                 const context = {
-                    destroyedBlocks: Array.from(this.chunkedTerrain.terrain.destroyedBlocks || [])
+                    destroyedBlocks: Array.from(this.destroyedBlocksRef || [])
                 };
                 this.workerManager.requestChunk(chunkX, chunkZ, priority, context);
                 queued++;
@@ -348,9 +354,9 @@ export class ChunkLoader {
 
                 // Mark as loading and queue
                 this.loadedChunks.add(key);
-                
+
                 const context = {
-                    destroyedBlocks: Array.from(this.chunkedTerrain.terrain.destroyedBlocks || [])
+                    destroyedBlocks: Array.from(this.destroyedBlocksRef || [])
                 };
                 this.workerManager.requestChunk(chunkX, chunkZ, priority, context);
             }
@@ -425,9 +431,14 @@ export class ChunkLoader {
             this.objectGenerator.unloadChunk(chunkX, chunkZ);
         }
 
-        // Remove block cache data
-        if (this.workerManager && this.workerManager.blockCache) {
-            this.workerManager.blockCache.removeChunk(chunkX, chunkZ);
+        // Remove block cache data and landmark registry data
+        if (this.workerManager) {
+            this.workerManager.unloadChunk(chunkX, chunkZ);
+        }
+
+        // Remove spawn points for this chunk
+        if (this.workerManager && this.workerManager.spawnPointManager) {
+            this.workerManager.spawnPointManager.removeChunkSpawnPoints(chunkX, chunkZ);
         }
 
         this.chunksUnloaded++;
@@ -459,6 +470,14 @@ export class ChunkLoader {
         } catch (e) {
             console.warn('Failed to save modified chunks:', e);
         }
+    }
+
+    /**
+     * Set reference to destroyed blocks set (from WorldManager)
+     * @param {Set} destroyedBlocks - The destroyed blocks set
+     */
+    setDestroyedBlocksRef(destroyedBlocks) {
+        this.destroyedBlocksRef = destroyedBlocks;
     }
 
     /**

@@ -405,14 +405,14 @@ export class LandmarkDebugRenderer {
     }
 
     /**
-     * Draw landmarks from the landmark system
-     * @param {LandmarkSystem} landmarkSystem - The landmark system instance
+     * Draw landmarks from the landmark registry
+     * @param {LandmarkRegistry} landmarkRegistry - The landmark registry instance
      * @param {number} playerX - Player X position
      * @param {number} playerZ - Player Z position
      * @param {number} radius - Search radius in chunks (default: 3)
      */
-    drawLandmarks(landmarkSystem, playerX, playerZ, radius = 3) {
-        if (!this.enabled || !landmarkSystem) return;
+    drawLandmarks(landmarkRegistry, playerX, playerZ, radius = 3) {
+        if (!this.enabled || !landmarkRegistry) return;
 
         const CHUNK_SIZE = 16;
         const playerChunkX = Math.floor(playerX / CHUNK_SIZE);
@@ -424,7 +424,7 @@ export class LandmarkDebugRenderer {
 
         for (let dx = -radius; dx <= radius; dx++) {
             for (let dz = -radius; dz <= radius; dz++) {
-                const chunkLandmarks = landmarkSystem.getLandmarksForChunk(
+                const chunkLandmarks = landmarkRegistry.getLandmarksForChunk(
                     playerChunkX + dx,
                     playerChunkZ + dz
                 );
@@ -495,7 +495,6 @@ export class LandmarkDebugRenderer {
         if (info.landmarks && info.landmarks.length > 0) {
             html += '<div style="border-top: 1px solid #444; margin-top: 6px; padding-top: 6px;">';
             html += `<div style="color: #ff0;">Landmarks nearby: ${info.landmarks.length}</div>`;
-            html += '<div style="color: #f80; font-size: 10px;">(main thread cache - may differ from worker)</div>';
 
             for (const landmark of info.landmarks.slice(0, 3)) {  // Show max 3
                 const type = landmark.type || 'unknown';
