@@ -2,39 +2,75 @@ import * as THREE from 'three';
 
 /**
  * CameraController - Manages camera modes for the game
- * 
+ *
  * Modes:
- * - 'orbit': Free orbit around hero (default, current behavior)
- * - 'follow': Third-person camera locked behind hero
- * - 'first-person': View from hero's head with mouse look (yaw + pitch)
+ * - 'follow': Third-person camera behind hero (default)
+ *   - Right-drag temporarily orbits camera around hero
+ *   - On release, azimuth lerps back to 0 (behind hero)
+ *   - Movement while dragging is relative to camera facing
+ * - 'first-person': View from hero's eye level with mouselook
+ *   - Hides entire hero mesh
+ *   - Yaw + pitch controlled via drag
+ *
+ * OrbitControls is completely disabled - this controller owns all camera state.
  */
 export class CameraController {
-    constructor(camera, controls, hero) {
+    constructor(camera, controls, hero, terrainProvider = null) {
         this.camera = camera;
         this.controls = controls;
         this.hero = hero;
-        
-        this.mode = 'orbit';
-        
+        this.terrainProvider = terrainProvider;
+
+        // Completely disable OrbitControls - we manage all camera state
+        this.controls.enabled = false;
+
+        this.mode = 'follow';
+
+        // Spherical camera state (relative to hero)
+        this.distance = 15;           // Distance from hero
+        this.azimuth = 0;             // Horizontal angle (0 = behind hero)
+        this.polar = Math.PI / 7;     // Vertical angle (~25 degrees)
+
         // Follow mode settings
-        this.followDistance = 15;
-        this.followHeight = 8;
-        this.followLerpSpeed = 5;
-        
+        this.minDistance = 5;
+        this.maxDistance = 40;
+        this.minPolar = 0.1;          // Minimum polar angle (nearly horizontal)
+        this.maxPolar = Math.PI / 2.5; // Maximum polar angle (~72 degrees)
+
+        // Temporary orbit state (for right-drag in follow mode)
+        this.isOrbiting = false;
+        this.targetAzimuth = 0;       // Lerp target when not orbiting
+        this.azimuthLerpSpeed = 3;    // How fast azimuth returns to 0
+
         // First-person settings
-        this.firstPersonHeight = 2.3; // Eye level on mounted hero
-        this.firstPersonPitch = 0;    // Vertical look angle (radians)
-        this.maxPitch = Math.PI / 2 - 0.1;  // ~80 degrees up
-        this.minPitch = -Math.PI / 2 + 0.1; // ~80 degrees down
-        
-        // Store original orbit settings
-        this.originalMinDistance = controls.minDistance;
-        this.originalMaxDistance = controls.maxDistance;
-        
+        this.firstPersonPitch = 0;
+        this.firstPersonYaw = 0;      // Independent yaw in first-person
+        this.maxPitch = Math.PI * 0.44;  // ~80 degrees
+        this.minPitch = -Math.PI * 0.44;
+
+        // Camera collision settings
+        this.collisionEnabled = true;
+        this.collisionMargin = 0.5;   // Distance to keep from terrain
+        this.collisionSamples = 8;    // Number of samples along ray
+
+        // Smooth camera positioning
+        this.currentCameraPos = new THREE.Vector3();
+        this.positionLerpSpeed = 8;
+
+        // Scroll wheel callback (set by game)
+        this.onScrollWheel = null;
+
         // Create UI
         this.createUI();
     }
-    
+
+    /**
+     * Set terrain provider for collision detection
+     */
+    setTerrainProvider(terrainProvider) {
+        this.terrainProvider = terrainProvider;
+    }
+
     createUI() {
         const container = document.createElement('div');
         container.id = 'camera-controls';
@@ -48,15 +84,14 @@ export class CameraController {
             gap: 5px;
             z-index: 1000;
         `;
-        
+
         const modes = [
-            { id: 'orbit', label: 'Orbit', shortcut: '1' },
-            { id: 'follow', label: 'Follow', shortcut: '2' },
-            { id: 'first-person', label: 'First Person', shortcut: '3' }
+            { id: 'follow', label: 'Follow', shortcut: '1' },
+            { id: 'first-person', label: 'First Person', shortcut: '2' }
         ];
-        
+
         this.buttons = {};
-        
+
         modes.forEach(({ id, label, shortcut }) => {
             const btn = document.createElement('button');
             btn.textContent = `${label} [${shortcut}]`;
@@ -74,7 +109,7 @@ export class CameraController {
                 transition: all 0.2s;
                 white-space: nowrap;
             `;
-            
+
             btn.addEventListener('click', () => this.setMode(id));
             btn.addEventListener('mouseenter', () => {
                 if (this.mode !== id) {
@@ -86,25 +121,24 @@ export class CameraController {
                     btn.style.background = 'rgba(0, 0, 0, 0.6)';
                 }
             });
-            
+
             container.appendChild(btn);
             this.buttons[id] = btn;
         });
-        
+
         document.body.appendChild(container);
         this.container = container;
-        
+
         // Set initial active state
         this.updateButtonStates();
-        
+
         // Keyboard shortcuts
         window.addEventListener('keydown', (e) => {
-            if (e.key === '1') this.setMode('orbit');
-            if (e.key === '2') this.setMode('follow');
-            if (e.key === '3') this.setMode('first-person');
+            if (e.key === '1') this.setMode('follow');
+            if (e.key === '2') this.setMode('first-person');
         });
     }
-    
+
     updateButtonStates() {
         Object.entries(this.buttons).forEach(([id, btn]) => {
             if (id === this.mode) {
@@ -116,148 +150,268 @@ export class CameraController {
             }
         });
     }
-    
+
     setMode(mode) {
         if (this.mode === mode) return;
-        
+
         const oldMode = this.mode;
         this.mode = mode;
-        
-        // Toggle hero head visibility for first-person
-        if (this.hero.heroMount) {
-            this.hero.heroMount.setHeadVisible(mode !== 'first-person');
-        }
-        
-        // Reset pitch when entering first-person
+
+        // Handle hero visibility
         if (mode === 'first-person') {
+            // Hide ENTIRE hero mesh in first-person
+            this.setHeroVisible(false);
+
+            // Initialize first-person yaw from hero rotation
+            this.firstPersonYaw = this.hero.rotation;
             this.firstPersonPitch = 0;
+        } else {
+            // Show hero in follow mode
+            this.setHeroVisible(true);
+
+            // Reset azimuth when switching to follow mode
+            this.azimuth = 0;
+            this.targetAzimuth = 0;
+
+            // If coming from first-person, sync hero rotation to camera yaw
+            if (oldMode === 'first-person') {
+                this.hero.rotation = this.firstPersonYaw;
+            }
         }
-        
-        // Configure controls based on mode
-        switch (mode) {
-            case 'orbit':
-                this.controls.enabled = true;
-                this.controls.minDistance = 5;
-                this.controls.maxDistance = 50;
-                this.controls.maxPolarAngle = Math.PI / 2.5;
-                
-                // Restore reasonable orbit position
-                if (oldMode === 'first-person') {
-                    const heroPos = this.hero.position.clone();
-                    this.camera.position.set(
-                        heroPos.x,
-                        heroPos.y + 20,
-                        heroPos.z + 30
-                    );
-                    this.controls.target.copy(heroPos);
-                }
-                break;
-                
-            case 'follow':
-                this.controls.enabled = true;
-                this.controls.minDistance = 8;
-                this.controls.maxDistance = 25;
-                this.controls.maxPolarAngle = Math.PI / 2.2;
-                break;
-                
-            case 'first-person':
-                // DISABLE OrbitControls entirely - we manage camera directly
-                this.controls.enabled = false;
-                break;
-        }
-        
+
         this.updateButtonStates();
     }
-    
+
     /**
-     * Handle mouse drag for look rotation (called from game.js handleRightDrag)
-     * @param {number} deltaX - Horizontal mouse movement
-     * @param {number} deltaY - Vertical mouse movement
+     * Set visibility of entire hero mesh (not just head)
+     */
+    setHeroVisible(visible) {
+        // Handle mounted hero
+        if (this.hero.heroMount && this.hero.heroMount.mesh) {
+            this.hero.heroMount.mesh.visible = visible;
+        }
+        // Handle on-foot hero
+        if (this.hero.heroOnFoot && this.hero.heroOnFoot.mesh) {
+            this.hero.heroOnFoot.mesh.visible = visible;
+        }
+    }
+
+    /**
+     * Start orbiting (called when right-drag starts in follow mode)
+     */
+    startOrbit() {
+        if (this.mode === 'follow') {
+            this.isOrbiting = true;
+        }
+    }
+
+    /**
+     * Stop orbiting (called when right-drag ends)
+     * Azimuth will lerp back to 0
+     */
+    stopOrbit() {
+        this.isOrbiting = false;
+        this.targetAzimuth = 0;
+    }
+
+    /**
+     * Handle mouse/touch drag for camera rotation
+     * @param {number} deltaX - Horizontal movement
+     * @param {number} deltaY - Vertical movement
      */
     handleLook(deltaX, deltaY) {
-        if (this.mode === 'first-person') {
-            // Update pitch (vertical look) with clamping
-            const pitchSpeed = 0.002;
-            this.firstPersonPitch -= deltaY * pitchSpeed;
+        const sensitivity = 0.003;
+
+        if (this.mode === 'follow') {
+            // In follow mode, drag orbits camera around hero
+            this.azimuth += deltaX * sensitivity;
+            this.polar += deltaY * sensitivity;
+
+            // Clamp polar angle
+            this.polar = Math.max(this.minPolar, Math.min(this.maxPolar, this.polar));
+        } else if (this.mode === 'first-person') {
+            // In first-person, drag controls yaw and pitch
+            this.firstPersonYaw -= deltaX * sensitivity;
+            this.firstPersonPitch -= deltaY * sensitivity;
+
+            // Clamp pitch
             this.firstPersonPitch = Math.max(this.minPitch, Math.min(this.maxPitch, this.firstPersonPitch));
         }
     }
-    
+
     /**
-     * Update camera position - call each frame
-     * @param {number} deltaTime 
+     * Handle scroll wheel for distance adjustment
+     * @param {number} delta - Scroll delta (positive = zoom out)
      */
-    update(deltaTime) {
-        const heroPos = this.hero.position.clone();
-        
-        switch (this.mode) {
-            case 'orbit':
-                // Current behavior: orbit target follows hero
-                this.updateOrbitMode(heroPos);
-                break;
-                
-            case 'follow':
-                this.updateFollowMode(heroPos, deltaTime);
-                break;
-                
-            case 'first-person':
-                this.updateFirstPersonMode(heroPos);
-                break;
+    handleScroll(delta) {
+        if (this.mode === 'follow') {
+            this.distance += delta * 0.01;
+            this.distance = Math.max(this.minDistance, Math.min(this.maxDistance, this.distance));
         }
     }
-    
-    updateOrbitMode(heroPos) {
-        // Move camera with hero (current game behavior)
-        const delta = heroPos.clone().sub(this.controls.target);
-        this.controls.target.copy(heroPos);
-        this.camera.position.add(delta);
+
+    /**
+     * Get the camera's facing direction (for movement relative to camera)
+     * @returns {THREE.Vector3} Normalized direction vector on XZ plane
+     */
+    getCameraFacingDirection() {
+        if (this.mode === 'first-person') {
+            // In first-person, use the yaw angle
+            return new THREE.Vector3(
+                Math.sin(this.firstPersonYaw),
+                0,
+                Math.cos(this.firstPersonYaw)
+            );
+        } else {
+            // In follow mode, combine hero rotation with azimuth offset
+            const angle = this.hero.rotation + this.azimuth;
+            return new THREE.Vector3(
+                Math.sin(angle),
+                0,
+                Math.cos(angle)
+            );
+        }
     }
-    
-    updateFollowMode(heroPos, deltaTime) {
-        // Calculate ideal camera position behind hero
-        const heroRotation = this.hero.rotation;
-        
-        const idealOffset = new THREE.Vector3(
-            -Math.sin(heroRotation) * this.followDistance,
-            this.followHeight,
-            -Math.cos(heroRotation) * this.followDistance
+
+    /**
+     * Check if camera is currently orbiting (for movement behavior)
+     */
+    isCurrentlyOrbiting() {
+        return this.mode === 'follow' && this.isOrbiting;
+    }
+
+    /**
+     * Update camera position - call each frame
+     * @param {number} deltaTime
+     */
+    update(deltaTime) {
+        if (this.mode === 'follow') {
+            this.updateFollowMode(deltaTime);
+        } else if (this.mode === 'first-person') {
+            this.updateFirstPersonMode(deltaTime);
+        }
+    }
+
+    updateFollowMode(deltaTime) {
+        const heroPos = this.hero.position.clone();
+
+        // Lerp azimuth back to 0 when not orbiting
+        if (!this.isOrbiting) {
+            const lerpFactor = 1 - Math.exp(-this.azimuthLerpSpeed * deltaTime);
+            this.azimuth = THREE.MathUtils.lerp(this.azimuth, this.targetAzimuth, lerpFactor);
+
+            // Snap to 0 when close enough
+            if (Math.abs(this.azimuth - this.targetAzimuth) < 0.01) {
+                this.azimuth = this.targetAzimuth;
+            }
+        }
+
+        // Adjust height based on mount state
+        const heightOffset = this.hero.mounted ? 1.5 : 1.0;
+        const targetY = heroPos.y + heightOffset;
+
+        // Calculate camera position using spherical coordinates
+        // azimuth is relative to hero facing (0 = behind hero)
+        const cameraAngle = this.hero.rotation + this.azimuth + Math.PI; // +PI to be behind
+
+        const idealPosition = new THREE.Vector3(
+            heroPos.x + Math.sin(cameraAngle) * this.distance * Math.cos(this.polar),
+            targetY + this.distance * Math.sin(this.polar),
+            heroPos.z + Math.cos(cameraAngle) * this.distance * Math.cos(this.polar)
         );
-        
-        const idealPosition = heroPos.clone().add(idealOffset);
-        
-        // Smoothly interpolate camera position
-        const lerpFactor = 1 - Math.exp(-this.followLerpSpeed * deltaTime);
-        this.camera.position.lerp(idealPosition, lerpFactor);
-        
+
+        // Apply camera collision
+        const collisionAdjustedPosition = this.applyCollision(heroPos, idealPosition);
+
+        // Smooth camera position
+        const posLerpFactor = 1 - Math.exp(-this.positionLerpSpeed * deltaTime);
+        this.camera.position.lerp(collisionAdjustedPosition, posLerpFactor);
+
         // Look at hero
-        this.controls.target.copy(heroPos);
-        this.controls.target.y += 1.5; // Look at upper body
+        const lookTarget = heroPos.clone();
+        lookTarget.y += heightOffset;
+        this.camera.lookAt(lookTarget);
     }
-    
-    updateFirstPersonMode(heroPos) {
+
+    updateFirstPersonMode(deltaTime) {
         // Position camera at hero's eye level
-        const eyePos = heroPos.clone();
-        eyePos.y += this.firstPersonHeight;
-        
-        // Set camera position at eye level
-        this.camera.position.copy(eyePos);
-        
-        // Calculate look direction from hero yaw and camera pitch
-        const yaw = this.hero.rotation;
-        const pitch = this.firstPersonPitch;
-        
-        // Spherical to Cartesian conversion
+        const heroPos = this.hero.position.clone();
+        const eyeHeight = this.hero.getEyeHeight();
+
+        this.camera.position.set(heroPos.x, heroPos.y + eyeHeight, heroPos.z);
+
+        // Calculate look direction from yaw and pitch
         const lookDir = new THREE.Vector3(
-            Math.sin(yaw) * Math.cos(pitch),
-            Math.sin(pitch),
-            Math.cos(yaw) * Math.cos(pitch)
+            Math.sin(this.firstPersonYaw) * Math.cos(this.firstPersonPitch),
+            Math.sin(this.firstPersonPitch),
+            Math.cos(this.firstPersonYaw) * Math.cos(this.firstPersonPitch)
         );
-        
-        // Point camera in that direction
-        const target = eyePos.clone().add(lookDir);
+
+        // Set camera rotation
+        const target = this.camera.position.clone().add(lookDir);
         this.camera.lookAt(target);
+
+        // Sync hero rotation to first-person yaw so movement is correct
+        this.hero.rotation = this.firstPersonYaw;
     }
-    
+
+    /**
+     * Apply camera collision to prevent clipping through terrain
+     * @param {THREE.Vector3} heroPos - Hero position
+     * @param {THREE.Vector3} idealPos - Ideal camera position
+     * @returns {THREE.Vector3} Adjusted camera position
+     */
+    applyCollision(heroPos, idealPos) {
+        if (!this.collisionEnabled || !this.terrainProvider) {
+            return idealPos;
+        }
+
+        // Cast ray from hero toward ideal camera position
+        const direction = idealPos.clone().sub(heroPos);
+        const totalDistance = direction.length();
+        direction.normalize();
+
+        // Sample terrain along the ray
+        const sampleInterval = totalDistance / this.collisionSamples;
+        let hitDistance = totalDistance;
+
+        for (let i = 1; i <= this.collisionSamples; i++) {
+            const sampleDistance = i * sampleInterval;
+            const samplePos = heroPos.clone().add(direction.clone().multiplyScalar(sampleDistance));
+
+            // Check terrain height at this position
+            const terrainHeight = this.terrainProvider.getGroundHeight(
+                Math.floor(samplePos.x),
+                Math.floor(samplePos.z)
+            );
+
+            // Check if camera would be below terrain
+            if (samplePos.y < terrainHeight + this.collisionMargin) {
+                hitDistance = Math.max(this.minDistance, sampleDistance - this.collisionMargin);
+                break;
+            }
+
+            // Check for solid voxels if applicable
+            if (this.terrainProvider.isSolid) {
+                const blockX = Math.floor(samplePos.x);
+                const blockY = Math.floor(samplePos.y);
+                const blockZ = Math.floor(samplePos.z);
+
+                if (this.terrainProvider.isSolid(blockX, blockY, blockZ)) {
+                    hitDistance = Math.max(this.minDistance, sampleDistance - this.collisionMargin);
+                    break;
+                }
+            }
+        }
+
+        // Return adjusted position
+        if (hitDistance < totalDistance) {
+            return heroPos.clone().add(direction.multiplyScalar(hitDistance));
+        }
+
+        return idealPos;
+    }
+
     destroy() {
         if (this.container) {
             this.container.remove();

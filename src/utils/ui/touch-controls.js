@@ -7,7 +7,15 @@ export class TouchControls {
         this.active = false;
         this.buttons = {};
         this.joystick = null;
-        
+
+        // Camera look state (right-side drag)
+        this.cameraLook = {
+            active: false,
+            touchId: null,
+            lastX: 0,
+            lastY: 0
+        };
+
         // Only enable on touch devices
         if ('ontouchstart' in window || navigator.maxTouchPoints > 0) {
             this.createControls();
@@ -157,6 +165,35 @@ export class TouchControls {
         });
         container.appendChild(attackBtn);
         this.buttons.attack = attackBtn;
+
+        // Mount/Dismount button (left side, above joystick)
+        const mountBtn = this.createButton('DISMOUNT', 'left: 30px; bottom: 170px;');
+        mountBtn.style.width = '70px';
+        mountBtn.style.height = '50px';
+        mountBtn.style.borderRadius = '25px';
+        mountBtn.style.fontSize = '11px';
+        mountBtn.addEventListener('touchstart', (e) => {
+            e.preventDefault();
+            if (this.game.hero) {
+                this.game.hero.toggleMount();
+            }
+        });
+        container.appendChild(mountBtn);
+        this.buttons.mount = mountBtn;
+
+        // Weapon swap button (right side, between jump and attack)
+        const weaponBtn = this.createButton('BOW', 'right: 120px; bottom: 85px;');
+        weaponBtn.style.width = '60px';
+        weaponBtn.style.height = '60px';
+        weaponBtn.style.fontSize = '12px';
+        weaponBtn.addEventListener('touchstart', (e) => {
+            e.preventDefault();
+            if (this.game.hero) {
+                this.game.hero.switchWeapon();
+            }
+        });
+        container.appendChild(weaponBtn);
+        this.buttons.weapon = weaponBtn;
     }
 
     createButton(label, position) {
@@ -181,69 +218,163 @@ export class TouchControls {
     }
 
     setupEventListeners() {
-        // Tap-to-shoot on canvas (avoiding control areas)
+        // Touch handling on canvas:
+        // - Right half of screen (above buttons): camera look drag
+        // - Tap anywhere (above bottom controls): shoot/attack
         const canvas = document.querySelector('canvas');
         if (canvas) {
-            let touchStartPos = null;
-            let touchStartTime = 0;
-            
+            // Track tap state for shoot detection
+            const tapState = {
+                startPos: null,
+                startTime: 0,
+                touchId: null
+            };
+
             canvas.addEventListener('touchstart', (e) => {
                 e.preventDefault();
-                const touch = e.touches[0];
-                touchStartPos = { x: touch.clientX, y: touch.clientY };
-                touchStartTime = performance.now();
-            }, { passive: false });
-            
-            canvas.addEventListener('touchmove', (e) => {
-                e.preventDefault();
-            }, { passive: false });
-            
-            canvas.addEventListener('touchend', (e) => {
-                e.preventDefault();
-                
-                if (!touchStartPos) return;
-                
-                const touch = e.changedTouches[0];
-                const touchEndPos = { x: touch.clientX, y: touch.clientY };
-                const touchDuration = performance.now() - touchStartTime;
-                
-                // Calculate distance moved
-                const dx = touchEndPos.x - touchStartPos.x;
-                const dy = touchEndPos.y - touchStartPos.y;
-                const distance = Math.sqrt(dx * dx + dy * dy);
-                
-                // If touch was brief (<300ms) and didn't move much (<10px), treat as tap
-                if (touchDuration < 300 && distance < 10) {
-                    // Check if tap is not on control areas (bottom 250px)
+
+                for (const touch of e.changedTouches) {
+                    const screenWidth = window.innerWidth;
                     const screenHeight = window.innerHeight;
-                    if (touchEndPos.y < screenHeight - 250) {
-                        // Shoot at tap position
-                        this.handleTapShoot(touchEndPos.x, touchEndPos.y);
+
+                    // Check if touch is in camera look zone (right half, above bottom controls)
+                    const isRightSide = touch.clientX > screenWidth / 2;
+                    const isAboveControls = touch.clientY < screenHeight - 250;
+
+                    if (isRightSide && isAboveControls && !this.cameraLook.active) {
+                        // Start camera look
+                        this.cameraLook.active = true;
+                        this.cameraLook.touchId = touch.identifier;
+                        this.cameraLook.lastX = touch.clientX;
+                        this.cameraLook.lastY = touch.clientY;
+
+                        // Notify camera controller that orbit started (for follow mode)
+                        if (this.game.cameraController) {
+                            this.game.cameraController.startOrbit();
+                        }
+                    }
+
+                    // Also track for tap detection (any touch can become a tap)
+                    if (!tapState.startPos) {
+                        tapState.startPos = { x: touch.clientX, y: touch.clientY };
+                        tapState.startTime = performance.now();
+                        tapState.touchId = touch.identifier;
                     }
                 }
-                
-                touchStartPos = null;
+            }, { passive: false });
+
+            canvas.addEventListener('touchmove', (e) => {
+                e.preventDefault();
+
+                for (const touch of e.changedTouches) {
+                    // Handle camera look drag
+                    if (this.cameraLook.active && touch.identifier === this.cameraLook.touchId) {
+                        const deltaX = touch.clientX - this.cameraLook.lastX;
+                        const deltaY = touch.clientY - this.cameraLook.lastY;
+
+                        // Send to camera controller
+                        if (this.game.cameraController) {
+                            // Scale sensitivity for touch (larger movements needed)
+                            this.game.cameraController.handleLook(deltaX * 1.5, deltaY * 1.5);
+                        }
+
+                        this.cameraLook.lastX = touch.clientX;
+                        this.cameraLook.lastY = touch.clientY;
+                    }
+
+                    // Invalidate tap if moved too much
+                    if (tapState.touchId === touch.identifier && tapState.startPos) {
+                        const dx = touch.clientX - tapState.startPos.x;
+                        const dy = touch.clientY - tapState.startPos.y;
+                        const distance = Math.sqrt(dx * dx + dy * dy);
+                        if (distance > 15) {
+                            tapState.startPos = null; // Invalidate tap
+                        }
+                    }
+                }
+            }, { passive: false });
+
+            canvas.addEventListener('touchend', (e) => {
+                e.preventDefault();
+
+                for (const touch of e.changedTouches) {
+                    // End camera look
+                    if (this.cameraLook.active && touch.identifier === this.cameraLook.touchId) {
+                        this.cameraLook.active = false;
+                        this.cameraLook.touchId = null;
+
+                        // Notify camera controller that orbit ended
+                        if (this.game.cameraController) {
+                            this.game.cameraController.stopOrbit();
+                        }
+                    }
+
+                    // Check for tap (short duration, minimal movement)
+                    if (tapState.touchId === touch.identifier && tapState.startPos) {
+                        const touchEndPos = { x: touch.clientX, y: touch.clientY };
+                        const touchDuration = performance.now() - tapState.startTime;
+
+                        const dx = touchEndPos.x - tapState.startPos.x;
+                        const dy = touchEndPos.y - tapState.startPos.y;
+                        const distance = Math.sqrt(dx * dx + dy * dy);
+
+                        // If touch was brief (<300ms) and didn't move much (<15px), treat as tap
+                        if (touchDuration < 300 && distance < 15) {
+                            const screenHeight = window.innerHeight;
+                            // Only shoot if above bottom control area
+                            if (touchEndPos.y < screenHeight - 250) {
+                                this.handleTapShoot(touchEndPos.x, touchEndPos.y);
+                            }
+                        }
+
+                        tapState.startPos = null;
+                        tapState.touchId = null;
+                    }
+                }
+            }, { passive: false });
+
+            // Handle touch cancel
+            canvas.addEventListener('touchcancel', (e) => {
+                for (const touch of e.changedTouches) {
+                    if (this.cameraLook.active && touch.identifier === this.cameraLook.touchId) {
+                        this.cameraLook.active = false;
+                        this.cameraLook.touchId = null;
+                        if (this.game.cameraController) {
+                            this.game.cameraController.stopOrbit();
+                        }
+                    }
+                    if (tapState.touchId === touch.identifier) {
+                        tapState.startPos = null;
+                        tapState.touchId = null;
+                    }
+                }
             }, { passive: false });
         }
     }
     
     /**
-     * Handle tap-to-shoot
+     * Handle tap-to-attack (routes to ranged or melee based on active weapon)
      */
     handleTapShoot(screenX, screenY) {
-        // Convert screen coordinates to normalized device coordinates
+        // For melee attacks, just trigger the attack (no target needed)
+        if (this.game.hero && this.game.hero.activeWeapon === 'sword') {
+            this.game.handleMeleeAttack();
+            return;
+        }
+
+        // For ranged attacks, convert screen coordinates to world target
         const mouse = {
             x: (screenX / window.innerWidth) * 2 - 1,
             y: -(screenY / window.innerHeight) * 2 + 1
         };
-        
+
         // Use game's raycaster to find world position
         this.game.raycaster.setFromCamera(mouse, this.game.camera);
         const intersects = this.game.raycaster.intersectObjects(this.game.scene.children);
-        
+
         if (intersects.length > 0) {
             const point = intersects[0].point;
-            
+
             // Import Arrow class
             const arrowData = this.game.hero.shootArrow(point);
             if (arrowData) {
@@ -263,23 +394,56 @@ export class TouchControls {
 
     // Call this in game update loop to apply joystick input
     update(deltaTime) {
-        if (!this.active || !this.joystick.active) return;
+        if (!this.active) return;
+
+        // Update button labels based on hero state
+        this.updateMountButton();
+        this.updateWeaponButton();
+
+        if (!this.joystick.active) return;
 
         const { currentX, currentY } = this.joystick;
-        
+
         // Forward/backward based on Y axis
         if (currentY < -0.2) {
             this.game.hero.moveForward(8 * deltaTime * Math.abs(currentY));
         } else if (currentY > 0.2) {
             this.game.hero.moveBackward(6 * deltaTime * Math.abs(currentY));
         }
-        
+
         // Turn based on X axis
         if (currentX < -0.2) {
             this.game.hero.turn(1, deltaTime * Math.abs(currentX));
         } else if (currentX > 0.2) {
             this.game.hero.turn(-1, deltaTime * Math.abs(currentX));
         }
+    }
+
+    /**
+     * Update the mount button label based on hero state
+     */
+    updateMountButton() {
+        if (!this.buttons.mount || !this.game.hero) return;
+
+        const hero = this.game.hero;
+        if (hero.isMounting) {
+            this.buttons.mount.textContent = 'CANCEL';
+        } else if (hero.mounted) {
+            this.buttons.mount.textContent = 'DISMOUNT';
+        } else {
+            this.buttons.mount.textContent = 'MOUNT';
+        }
+    }
+
+    /**
+     * Update the weapon button label based on active weapon
+     */
+    updateWeaponButton() {
+        if (!this.buttons.weapon || !this.game.hero) return;
+
+        const hero = this.game.hero;
+        // Show the name of the CURRENT weapon
+        this.buttons.weapon.textContent = hero.activeWeapon === 'bow' ? 'BOW' : 'SWORD';
     }
 
     destroy() {
