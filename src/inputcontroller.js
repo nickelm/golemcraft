@@ -80,7 +80,7 @@ export class InputController {
                     // Start left-drag if not already started
                     if (!this.isLeftDragging) {
                         this.isLeftDragging = true;
-                        this.renderer.domElement.requestPointerLock();
+                        // this.renderer.domElement.requestPointerLock();
                         if (this.onLeftDragStart) {
                             this.onLeftDragStart();
                         }
@@ -89,11 +89,11 @@ export class InputController {
             }
 
             // Handle left-drag for camera orbit using pointer lock
-            if (this.isLeftDragging && document.pointerLockElement) {
+            if (this.isLeftDragging) { //} && document.pointerLockElement) {
                 const deltaX = e.movementX;
                 const deltaY = e.movementY;
                 if (this.onLeftDrag) {
-                    this.onLeftDrag(deltaX, deltaY);
+                    this.onLeftDrag(-deltaX, deltaY);
                 }
             }
 
