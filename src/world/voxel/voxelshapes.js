@@ -71,18 +71,69 @@ export function strokeBox(target, minX, minY, minZ, maxX, maxY, maxZ, blockType,
 
 /**
  * Carve (delete) a box region
+ * @param {VoxelVolume|Map} target - Volume or blocks Map to modify
+ * @param {number} minX - Minimum X (inclusive)
+ * @param {number} minY - Minimum Y (inclusive)
+ * @param {number} minZ - Minimum Z (inclusive)
+ * @param {number} maxX - Maximum X (exclusive)
+ * @param {number} maxY - Maximum Y (exclusive)
+ * @param {number} maxZ - Maximum Z (exclusive)
+ * @param {number|null} brightness - Optional brightness for the carved air space (0.0-1.0)
  */
-export function carveBox(target, minX, minY, minZ, maxX, maxY, maxZ) {
+export function carveBox(target, minX, minY, minZ, maxX, maxY, maxZ, brightness = null) {
     const isVolume = typeof target.carve === 'function';
-    
+
     for (let y = minY; y < maxY; y++) {
         for (let x = minX; x < maxX; x++) {
             for (let z = minZ; z < maxZ; z++) {
                 if (isVolume) {
-                    target.carve(x, y, z);
+                    target.carve(x, y, z, brightness);
                 } else {
                     target.delete(`${x},${y},${z}`);
                 }
+            }
+        }
+    }
+}
+
+/**
+ * Carve a box region with graduated brightness along an axis
+ * Useful for tunnels that transition from light to dark
+ * @param {VoxelVolume} target - Volume to modify (must be VoxelVolume, not Map)
+ * @param {number} minX - Minimum X (inclusive)
+ * @param {number} minY - Minimum Y (inclusive)
+ * @param {number} minZ - Minimum Z (inclusive)
+ * @param {number} maxX - Maximum X (exclusive)
+ * @param {number} maxY - Maximum Y (exclusive)
+ * @param {number} maxZ - Maximum Z (exclusive)
+ * @param {string} gradientAxis - Axis for gradient: 'x', 'y', or 'z'
+ * @param {number} startBrightness - Brightness at min edge of axis (0.0-1.0)
+ * @param {number} endBrightness - Brightness at max edge of axis (0.0-1.0)
+ */
+export function carveBoxGradient(target, minX, minY, minZ, maxX, maxY, maxZ, gradientAxis, startBrightness, endBrightness) {
+    const isVolume = typeof target.carve === 'function';
+    if (!isVolume) return;  // Only works with VoxelVolume
+
+    for (let y = minY; y < maxY; y++) {
+        for (let x = minX; x < maxX; x++) {
+            for (let z = minZ; z < maxZ; z++) {
+                // Calculate gradient progress along axis (0.0 to 1.0)
+                let t;
+                const axisLength = {
+                    x: maxX - minX,
+                    y: maxY - minY,
+                    z: maxZ - minZ
+                }[gradientAxis] || 1;
+
+                switch (gradientAxis) {
+                    case 'x': t = axisLength > 1 ? (x - minX) / (axisLength - 1) : 0; break;
+                    case 'y': t = axisLength > 1 ? (y - minY) / (axisLength - 1) : 0; break;
+                    case 'z': t = axisLength > 1 ? (z - minZ) / (axisLength - 1) : 0; break;
+                    default: t = 0;
+                }
+
+                const brightness = startBrightness + t * (endBrightness - startBrightness);
+                target.carve(x, y, z, brightness);
             }
         }
     }
@@ -153,24 +204,66 @@ export function strokeSphere(target, centerX, centerY, centerZ, radius, blockTyp
 
 /**
  * Carve a spherical region
+ * @param {VoxelVolume|Map} target - Volume or blocks Map to modify
+ * @param {number} centerX - Center X
+ * @param {number} centerY - Center Y
+ * @param {number} centerZ - Center Z
+ * @param {number} radius - Radius (inclusive)
+ * @param {number|null} brightness - Optional brightness for the carved air space (0.0-1.0)
  */
-export function carveSphere(target, centerX, centerY, centerZ, radius) {
+export function carveSphere(target, centerX, centerY, centerZ, radius, brightness = null) {
     const isVolume = typeof target.carve === 'function';
     const r2 = radius * radius;
-    
+
     for (let y = centerY - radius; y <= centerY + radius; y++) {
         for (let x = centerX - radius; x <= centerX + radius; x++) {
             for (let z = centerZ - radius; z <= centerZ + radius; z++) {
                 const dx = x - centerX;
                 const dy = y - centerY;
                 const dz = z - centerZ;
-                
+
                 if (dx * dx + dy * dy + dz * dz <= r2) {
                     if (isVolume) {
-                        target.carve(x, y, z);
+                        target.carve(x, y, z, brightness);
                     } else {
                         target.delete(`${x},${y},${z}`);
                     }
+                }
+            }
+        }
+    }
+}
+
+/**
+ * Carve a spherical region with radial brightness gradient
+ * Useful for cave chambers where the center is darker than the edges
+ * @param {VoxelVolume} target - Volume to modify (must be VoxelVolume, not Map)
+ * @param {number} centerX - Center X
+ * @param {number} centerY - Center Y
+ * @param {number} centerZ - Center Z
+ * @param {number} radius - Radius (inclusive)
+ * @param {number} centerBrightness - Brightness at sphere center (0.0-1.0)
+ * @param {number} edgeBrightness - Brightness at sphere edge (0.0-1.0)
+ */
+export function carveSphereRadialBrightness(target, centerX, centerY, centerZ, radius, centerBrightness, edgeBrightness) {
+    const isVolume = typeof target.carve === 'function';
+    if (!isVolume) return;  // Only works with VoxelVolume
+
+    const r2 = radius * radius;
+
+    for (let y = centerY - radius; y <= centerY + radius; y++) {
+        for (let x = centerX - radius; x <= centerX + radius; x++) {
+            for (let z = centerZ - radius; z <= centerZ + radius; z++) {
+                const dx = x - centerX;
+                const dy = y - centerY;
+                const dz = z - centerZ;
+                const d2 = dx * dx + dy * dy + dz * dz;
+
+                if (d2 <= r2) {
+                    // Radial interpolation: center to edge
+                    const t = Math.sqrt(d2) / radius;
+                    const brightness = centerBrightness + t * (edgeBrightness - centerBrightness);
+                    target.carve(x, y, z, brightness);
                 }
             }
         }

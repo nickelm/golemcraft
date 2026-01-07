@@ -213,8 +213,8 @@ export class ObjectGenerator {
                 const height = this.terrain.getHeight(x, z);
                 if (height < waterLevel) continue;
                 
-                // Skip if inside a landmark's footprint
-                if (this.landmarkSystem && this.landmarkSystem.isInsideLandmark(x, z)) {
+                // Skip if inside a clearing (landmark exclusion zone)
+                if (this.landmarkSystem && this.landmarkSystem.isInClearing(x, z)) {
                     continue;
                 }
                 

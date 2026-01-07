@@ -12,6 +12,7 @@
  */
 
 import { LANDMARK_TYPES, generateLandmarkStructure } from './landmarkdefinitions.js';
+import { ClearingRegistry } from '../terrain/clearingregistry.js';
 
 // Grid cell size for landmark placement (landmarks are spaced on this grid)
 // Smaller = more frequent landmarks
@@ -24,12 +25,15 @@ export class LandmarkSystem {
     constructor(terrain, seed) {
         this.terrain = terrain;
         this.seed = seed;
-        
+
         // Cache of generated landmarks: Map<"gridX,gridZ" -> landmark data>
         this.landmarkCache = new Map();
-        
+
         // Spatial hash: Map<"chunkX,chunkZ" -> array of landmarks affecting this chunk>
         this.chunkLandmarkIndex = new Map();
+
+        // Registry for object suppression zones (trees, rocks, etc.)
+        this.clearingRegistry = new ClearingRegistry();
     }
     
     /**
@@ -88,56 +92,58 @@ export class LandmarkSystem {
      */
     getLandmarkInCell(gridX, gridZ) {
         const key = `${gridX},${gridZ}`;
-        
+
         if (this.landmarkCache.has(key)) {
             return this.landmarkCache.get(key);
         }
-        
+
         // Deterministic check: should this cell have a landmark?
-        const spawnChance = this.hash(gridX, gridZ, 12345);
-        
-        // ~50% of grid cells have landmarks (temporarily high for testing)
-        if (spawnChance > 0.50) {
-            this.landmarkCache.set(key, null);
-            return null;
-        }
-        
-        // Determine position within cell (with margins to avoid edge placement)
-        const margin = 32;
-        const cellWorldX = gridX * LANDMARK_GRID_SIZE;
-        const cellWorldZ = gridZ * LANDMARK_GRID_SIZE;
-        
-        const offsetX = margin + this.hash(gridX, gridZ, 11111) * (LANDMARK_GRID_SIZE - 2 * margin);
-        const offsetZ = margin + this.hash(gridX, gridZ, 22222) * (LANDMARK_GRID_SIZE - 2 * margin);
-        
-        const worldX = Math.floor(cellWorldX + offsetX);
-        const worldZ = Math.floor(cellWorldZ + offsetZ);
-        
+        // NOTE: Must match WorkerLandmarkSystem.getLandmarkInCell() exactly!
+        const roll = this.hash(gridX, gridZ, 12345);
+
+        // Get world position for this grid cell (center of cell)
+        const worldX = gridX * LANDMARK_GRID_SIZE + Math.floor(LANDMARK_GRID_SIZE / 2);
+        const worldZ = gridZ * LANDMARK_GRID_SIZE + Math.floor(LANDMARK_GRID_SIZE / 2);
+
         // Check biome at this position
         const biome = this.terrain.getBiome(worldX, worldZ);
-        
-        // Find valid landmark types for this biome
+
+        // Find valid landmark types for this biome (as array of type names)
         const validTypes = Object.entries(LANDMARK_TYPES)
-            .filter(([_, config]) => config.biomes.includes(biome));
-        
+            .filter(([_, config]) => config.biomes.includes(biome))
+            .map(([type, _]) => type);
+
         if (validTypes.length === 0) {
             this.landmarkCache.set(key, null);
             return null;
         }
-        
-        // Select landmark type based on hash
-        const typeIndex = Math.floor(this.hash(gridX, gridZ, 33333) * validTypes.length);
-        const [typeName, typeConfig] = validTypes[typeIndex];
-        
+
+        // Select landmark type based on hash (must match worker's salt: 54321)
+        const typeIndex = Math.floor(this.hash(gridX, gridZ, 54321) * validTypes.length);
+        const typeName = validTypes[typeIndex];
+        const typeConfig = LANDMARK_TYPES[typeName];
+
+        // Check rarity AFTER selecting type (must match worker logic)
+        if (roll > typeConfig.rarity) {
+            this.landmarkCache.set(key, null);
+            return null;
+        }
+
+        // Skip cliff-based landmarks (caves) - main thread can't do cliff detection
+        if (typeConfig.minSlope !== undefined) {
+            this.landmarkCache.set(key, null);
+            return null;
+        }
+
         // Calculate footprint half-size from config
         const halfSize = Math.floor(typeConfig.baseSize / 2);
-        
+
         // Get MINIMUM terrain height across entire footprint
         // This ensures the base extends down to meet the lowest ground point
         const baseY = this.getMinHeightInFootprint(worldX, worldZ, halfSize);
-        
-        // Don't place landmarks underwater or too high
-        if (baseY < 8 || baseY > 35) {
+
+        // Check height constraints from config (must match worker logic)
+        if (baseY < typeConfig.minHeight || baseY > typeConfig.maxHeight) {
             this.landmarkCache.set(key, null);
             return null;
         }
@@ -162,33 +168,58 @@ export class LandmarkSystem {
         );
         
         this.landmarkCache.set(key, landmark);
-        
-        // Index this landmark by affected chunks
+
+        // Index this landmark by affected chunks and register clearings
         if (landmark) {
-            this.indexLandmarkByChunks(landmark);
+            this.indexLandmarkByChunks(landmark, gridX, gridZ);
         }
-        
+
         return landmark;
     }
     
     /**
      * Index a landmark by the chunks it affects (for spatial queries)
+     * Also registers any clearings defined by the landmark
      */
-    indexLandmarkByChunks(landmark) {
+    indexLandmarkByChunks(landmark, gridX, gridZ) {
         const minChunkX = Math.floor(landmark.bounds.minX / CHUNK_SIZE);
         const maxChunkX = Math.floor(landmark.bounds.maxX / CHUNK_SIZE);
         const minChunkZ = Math.floor(landmark.bounds.minZ / CHUNK_SIZE);
         const maxChunkZ = Math.floor(landmark.bounds.maxZ / CHUNK_SIZE);
-        
+
         for (let cx = minChunkX; cx <= maxChunkX; cx++) {
             for (let cz = minChunkZ; cz <= maxChunkZ; cz++) {
                 const chunkKey = `${cx},${cz}`;
-                
+
                 if (!this.chunkLandmarkIndex.has(chunkKey)) {
                     this.chunkLandmarkIndex.set(chunkKey, []);
                 }
-                
+
                 this.chunkLandmarkIndex.get(chunkKey).push(landmark);
+            }
+        }
+
+        // Register clearings for object suppression
+        const landmarkId = `${gridX},${gridZ}`;
+        if (landmark.clearings) {
+            for (const clearing of landmark.clearings) {
+                if (clearing.type === 'rect') {
+                    this.clearingRegistry.addRect(
+                        clearing.centerX,
+                        clearing.centerZ,
+                        clearing.width,
+                        clearing.depth,
+                        clearing.rotation || 0,
+                        landmarkId
+                    );
+                } else if (clearing.type === 'circle') {
+                    this.clearingRegistry.addCircle(
+                        clearing.centerX,
+                        clearing.centerZ,
+                        clearing.radius,
+                        landmarkId
+                    );
+                }
             }
         }
     }
@@ -289,7 +320,7 @@ export class LandmarkSystem {
     
     /**
      * Check if a position is inside any landmark's exclusion zone
-     * Used to prevent trees/rocks from spawning inside landmarks
+     * Used internally - prefer isInClearing() for object suppression
      * @param {number} x - World X
      * @param {number} z - World Z
      * @returns {boolean} True if inside a landmark exclusion zone
@@ -297,19 +328,40 @@ export class LandmarkSystem {
     isInsideLandmark(x, z) {
         const chunkX = Math.floor(x / CHUNK_SIZE);
         const chunkZ = Math.floor(z / CHUNK_SIZE);
-        
+
         const landmarks = this.getLandmarksForChunk(chunkX, chunkZ);
-        
+
         for (const landmark of landmarks) {
             if (x >= landmark.bounds.minX && x <= landmark.bounds.maxX &&
                 z >= landmark.bounds.minZ && z <= landmark.bounds.maxZ) {
                 return true;
             }
         }
-        
+
         return false;
     }
-    
+
+    /**
+     * Check if a position is inside any clearing (object suppression zone)
+     * This is the primary method for object spawning to check exclusion
+     * @param {number} x - World X
+     * @param {number} z - World Z
+     * @returns {boolean} True if objects should not spawn here
+     */
+    isInClearing(x, z) {
+        return this.clearingRegistry.isInClearing(x, z);
+    }
+
+    /**
+     * Get the landmark ID of the clearing at a position (for debugging)
+     * @param {number} x - World X
+     * @param {number} z - World Z
+     * @returns {string|null} Landmark ID or null
+     */
+    getClearingAt(x, z) {
+        return this.clearingRegistry.getClearingAt(x, z);
+    }
+
     /**
      * Get all landmarks (for debugging/visualization)
      * @returns {Array} Array of all generated landmarks
@@ -317,12 +369,13 @@ export class LandmarkSystem {
     getAllLandmarks() {
         return Array.from(this.landmarkCache.values()).filter(l => l !== null);
     }
-    
+
     /**
      * Clear cache (for world regeneration)
      */
     clearCache() {
         this.landmarkCache.clear();
         this.chunkLandmarkIndex.clear();
+        this.clearingRegistry.clear();
     }
 }

@@ -255,7 +255,10 @@ class WorkerTerrainProvider {
         if (this.destroyedBlocks.has(`${x},${y},${z}`)) return null;
 
         const landmarkBlock = this.landmarkSystem.getLandmarkBlockType(x, y, z);
-        if (landmarkBlock) {
+        if (landmarkBlock !== null) {
+            // 'air' means forced air (carved space) - return null to create air
+            if (landmarkBlock === 'air') return null;
+            // Otherwise return the landmark block type
             return landmarkBlock;
         }
 
@@ -290,15 +293,46 @@ class WorkerTerrainProvider {
         const height = this.getHeight(x, z);
         const biome = this.getBiome(x, z);
         const biomeData = BIOMES[biome];
-        
+
         if (height < WATER_LEVEL) return biomeData.underwater || 'sand';
         if (height <= WATER_LEVEL + 2 && biome !== 'desert' && biome !== 'snow') return 'sand';
         if (biome === 'mountains' && height > 22) return 'snow';
         return biomeData.surface;
     }
-    
+
+    /**
+     * Get brightness override for air spaces in landmarks
+     * @param {number} x - World X
+     * @param {number} y - World Y
+     * @param {number} z - World Z
+     * @returns {number|null} Brightness (0.0-1.0) or null if no override
+     */
+    getBrightnessOverride(x, y, z) {
+        return this.landmarkSystem.getLandmarkBrightnessOverride(x, y, z);
+    }
+
+    /**
+     * Check if heightfield should be skipped at this position (for cave floors, etc.)
+     * @param {number} x - World X
+     * @param {number} z - World Z
+     * @returns {boolean} True to skip heightfield rendering at this cell
+     */
+    shouldSkipHeightfield(x, z) {
+        return this.landmarkSystem.shouldSkipHeightfield(x, z);
+    }
+
     prepareLandmarksForChunk(chunkX, chunkZ) {
         this.landmarkSystem.ensureLandmarksForChunk(chunkX, chunkZ);
+    }
+
+    /**
+     * Get heightfield modifications for landmarks affecting a chunk
+     * @param {number} chunkX - Chunk X index
+     * @param {number} chunkZ - Chunk Z index
+     * @returns {Array} Array of modification specs
+     */
+    getHeightfieldModifications(chunkX, chunkZ) {
+        return this.landmarkSystem.getHeightfieldModifications(chunkX, chunkZ);
     }
 }
 

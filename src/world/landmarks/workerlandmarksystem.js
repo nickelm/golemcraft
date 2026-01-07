@@ -98,22 +98,89 @@ export class WorkerLandmarkSystem {
             return null;
         }
         
+        // Special handling for cave landmarks (require cliff face)
+        if (typeConfig.minSlope !== undefined) {
+            // Search multiple positions in grid cell for suitable cliff
+            const searchOffsets = [
+                [0, 0], [-20, 0], [20, 0], [0, -20], [0, 20],
+                [-15, -15], [15, -15], [-15, 15], [15, 15]
+            ];
+
+            let bestCliff = null;
+            let bestPosition = null;
+
+            for (const [dx, dz] of searchOffsets) {
+                const sx = worldX + dx;
+                const sz = worldZ + dz;
+                const cliff = this.findCliffFace(sx, sz, typeConfig.sampleRadius || 8, typeConfig.minSlope);
+                if (cliff && (!bestCliff || cliff.slope > bestCliff.slope)) {
+                    bestCliff = cliff;
+                    bestPosition = [sx, sz];
+                }
+            }
+
+            if (!bestCliff) {
+                // No suitable cliff found
+                this.landmarkCache.set(key, null);
+                return null;
+            }
+
+            // Use cliff position
+            const cliffX = bestPosition[0];
+            const cliffZ = bestPosition[1];
+            const cliffBaseY = this.terrainProvider.getHeight(cliffX, cliffZ);
+
+            // Check height constraints
+            if (cliffBaseY < typeConfig.minHeight || cliffBaseY > typeConfig.maxHeight) {
+                this.landmarkCache.set(key, null);
+                return null;
+            }
+
+            console.log(`[LANDMARK] Generating ${typeName} at cliff (${cliffX}, ${cliffBaseY}, ${cliffZ}), slope: ${bestCliff.slope.toFixed(2)}, direction: (${bestCliff.dx}, ${bestCliff.dz})`);
+
+            // Generate the cave with cliff direction
+            const landmark = generateLandmarkStructure(
+                typeName,
+                typeConfig,
+                cliffX,
+                cliffBaseY,
+                cliffZ,
+                this.hash.bind(this),
+                gridX,
+                gridZ,
+                bestCliff  // Pass cliff direction instead of entrance direction string
+            );
+
+            if (landmark) {
+                console.log(`[LANDMARK] Generated cave with ${landmark.blocks.size} blocks, voxelBounds: ${JSON.stringify(landmark.voxelBounds)}`);
+            }
+
+            this.landmarkCache.set(key, landmark);
+
+            if (landmark) {
+                this.indexLandmarkByChunks(landmark);
+            }
+
+            return landmark;
+        }
+
+        // Standard landmark handling (temples, etc.)
         // Check terrain height constraints
         const halfBase = Math.floor(typeConfig.baseSize / 2);
         const baseY = this.getMinHeightInFootprint(worldX, worldZ, halfBase);
-        
+
         if (baseY < typeConfig.minHeight || baseY > typeConfig.maxHeight) {
             this.landmarkCache.set(key, null);
             return null;
         }
-        
+
         // Determine entrance direction
         const directions = ['+X', '-X', '+Z', '-Z'];
         const dirIndex = Math.abs((worldX * 3 + worldZ * 7 + this.seed) % 4);
         const entranceDirection = directions[dirIndex];
-        
+
         console.log(`[LANDMARK] Generating ${typeName} at (${worldX}, ${baseY}, ${worldZ}), grid (${gridX}, ${gridZ}), biome: ${biome}`);
-        
+
         // Generate the landmark
         const landmark = generateLandmarkStructure(
             typeName,
@@ -224,42 +291,180 @@ export class WorkerLandmarkSystem {
     
     /**
      * Get landmark block type at position
+     * Returns block type string, 'air' for carved/forced air, or null if not in landmark
      */
     getLandmarkBlockType(x, y, z) {
         const chunkX = Math.floor(x / CHUNK_SIZE);
         const chunkZ = Math.floor(z / CHUNK_SIZE);
-        
+
         const landmarks = this.getLandmarksForChunk(chunkX, chunkZ);
-        
+        const key = `${x},${y},${z}`;
+
         for (const landmark of landmarks) {
-            const key = `${x},${y},${z}`;
+            // Check for solid blocks first
             if (landmark.blocks && landmark.blocks.has(key)) {
                 return landmark.blocks.get(key);
             }
+
+            // Check for carved air (positions with brightness overrides are forced air)
+            if (landmark.brightnessOverrides && landmark.brightnessOverrides.has(key)) {
+                return 'air';  // Special value indicating forced air
+            }
         }
-        
+
         return null;
     }
-    
+
     /**
-     * Check if position is inside any landmark's exclusion zone
+     * Get brightness override at position (for air spaces in landmarks)
+     * @param {number} x - World X
+     * @param {number} y - World Y
+     * @param {number} z - World Z
+     * @returns {number|null} Brightness value (0.0-1.0) or null if no override
+     */
+    getLandmarkBrightnessOverride(x, y, z) {
+        const chunkX = Math.floor(x / CHUNK_SIZE);
+        const chunkZ = Math.floor(z / CHUNK_SIZE);
+
+        const landmarks = this.getLandmarksForChunk(chunkX, chunkZ);
+
+        for (const landmark of landmarks) {
+            const key = `${x},${y},${z}`;
+            if (landmark.brightnessOverrides && landmark.brightnessOverrides.has(key)) {
+                return landmark.brightnessOverrides.get(key);
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * Check if position is inside any landmark's voxel rendering zone
+     * Uses voxelBounds if available (for caves), otherwise uses full bounds
      */
     isInsideLandmark(x, z) {
         const chunkX = Math.floor(x / CHUNK_SIZE);
         const chunkZ = Math.floor(z / CHUNK_SIZE);
-        
+
         const landmarks = this.getLandmarksForChunk(chunkX, chunkZ);
-        
+
         for (const landmark of landmarks) {
-            if (x >= landmark.bounds.minX && x <= landmark.bounds.maxX &&
-                z >= landmark.bounds.minZ && z <= landmark.bounds.maxZ) {
+            // Use voxelBounds if available (caves only render entrance as voxels)
+            const checkBounds = landmark.voxelBounds || landmark.bounds;
+            if (x >= checkBounds.minX && x <= checkBounds.maxX &&
+                z >= checkBounds.minZ && z <= checkBounds.maxZ) {
                 return true;
             }
         }
-        
+
         return false;
     }
-    
+
+    /**
+     * Check if heightfield should be skipped at this position
+     * Currently always returns false - caves are under the heightfield, not replacing it
+     * @param {number} x - World X
+     * @param {number} z - World Z
+     * @returns {boolean} Always false for now
+     */
+    shouldSkipHeightfield(x, z) {
+        // Caves are under the smooth heightfield terrain, not replacing it
+        // The heightfield renders above, cave interiors are carved below
+        return false;
+    }
+
+    /**
+     * Find cliff face direction at a position
+     * Returns direction vector pointing downslope, or null if not steep enough
+     * @param {number} x - World X
+     * @param {number} z - World Z
+     * @param {number} sampleRadius - Distance to check (default 8)
+     * @param {number} minSlope - Minimum slope threshold (default 0.5 = 4 blocks over 8)
+     * @returns {{ dx: number, dz: number, slope: number, baseHeight: number }|null}
+     */
+    findCliffFace(x, z, sampleRadius = 8, minSlope = 0.5) {
+        const centerH = this.terrainProvider.getHeight(x, z);
+
+        // Sample in cardinal directions
+        const directions = [
+            { dx: 1, dz: 0 },
+            { dx: -1, dz: 0 },
+            { dx: 0, dz: 1 },
+            { dx: 0, dz: -1 }
+        ];
+
+        let bestDirection = null;
+        let maxSlope = minSlope;
+
+        for (const dir of directions) {
+            const sampleX = x + dir.dx * sampleRadius;
+            const sampleZ = z + dir.dz * sampleRadius;
+            const sampleH = this.terrainProvider.getHeight(sampleX, sampleZ);
+
+            // Positive slope means terrain drops in that direction
+            const heightDiff = centerH - sampleH;
+            const slope = heightDiff / sampleRadius;
+
+            if (slope >= maxSlope) {
+                maxSlope = slope;
+                bestDirection = {
+                    dx: dir.dx,
+                    dz: dir.dz,
+                    slope: slope,
+                    baseHeight: sampleH
+                };
+            }
+        }
+
+        return bestDirection;
+    }
+
+    /**
+     * Compute AABB from oriented bounds
+     * Used to convert rotated rectangles to axis-aligned boxes for spatial indexing
+     * @param {{ centerX: number, centerZ: number, baseY: number, width: number, depth: number, height: number, rotation: number }} ob
+     * @returns {{ minX: number, maxX: number, minY: number, maxY: number, minZ: number, maxZ: number }}
+     */
+    computeAABBFromOrientedBounds(ob) {
+        // Compute AABB that contains the rotated rectangle
+        const cos = Math.abs(Math.cos(ob.rotation));
+        const sin = Math.abs(Math.sin(ob.rotation));
+        const halfW = ob.width / 2;
+        const halfD = ob.depth / 2;
+
+        // Rotated AABB dimensions
+        const aabbHalfW = halfW * cos + halfD * sin;
+        const aabbHalfD = halfW * sin + halfD * cos;
+
+        return {
+            minX: Math.floor(ob.centerX - aabbHalfW),
+            maxX: Math.ceil(ob.centerX + aabbHalfW),
+            minY: ob.baseY,
+            maxY: ob.baseY + ob.height,
+            minZ: Math.floor(ob.centerZ - aabbHalfD),
+            maxZ: Math.ceil(ob.centerZ + aabbHalfD)
+        };
+    }
+
+    /**
+     * Get all heightfield modifications for landmarks affecting a chunk
+     * @param {number} chunkX - Chunk X index
+     * @param {number} chunkZ - Chunk Z index
+     * @returns {Array} Array of modification specs
+     */
+    getHeightfieldModifications(chunkX, chunkZ) {
+        const modifications = [];
+        const landmarks = this.getLandmarksForChunk(chunkX, chunkZ);
+
+        for (const landmark of landmarks) {
+            if (landmark.heightfieldModifications) {
+                modifications.push(...landmark.heightfieldModifications);
+            }
+        }
+
+        return modifications;
+    }
+
     /**
      * Clear cache
      */

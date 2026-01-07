@@ -10,6 +10,14 @@ npm run dev      # Development server at localhost:5173
 npm run build    # Production build to dist/
 ```
 
+# Current Development Focus
+
+* **Procedural world generation** - achieving a procedural and deterministic world (theme park MMO) without more than a random seed
+
+* **Improved lighting** - making the graphics look good
+
+* **MOBA to MMO** - supporting first/third-person MMO RPG gameplay
+
 ## Game Design
 
 **Genre**: Single-player RPG with voxel aesthetics. "Theme park MMO for one"—procedurally generated worlds with diverse biomes, landmarks, and adventure-focused gameplay.

@@ -19,11 +19,13 @@ export {
     fillBox,
     strokeBox,
     carveBox,
+    carveBoxGradient,
     
     // Sphere operations
     fillSphere,
     strokeSphere,
     carveSphere,
+    carveSphereRadialBrightness,
     
     // Cylinder operations
     fillCylinder,

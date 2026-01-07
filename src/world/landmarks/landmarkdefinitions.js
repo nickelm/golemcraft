@@ -10,11 +10,13 @@
  * Collision is determined by the voxels themselves - no separate tracking needed.
  */
 
-import { 
-    VoxelVolume, 
+import {
+    VoxelVolume,
     VoxelState,
-    fillBox, 
+    fillBox,
     carveBox,
+    carveBoxGradient,
+    carveSphereRadialBrightness,
     stairs,
     pillar
 } from '../voxel/index.js';
@@ -26,7 +28,7 @@ export const LANDMARK_TYPES = {
     mayanTemple: {
         name: 'Mayan Temple',
         biomes: ['jungle', 'plains', 'mountains'],
-        rarity: 0.5,
+        rarity: 0.15,            // Reduced from 0.5 - temples are now rare
         minHeight: 8,
         maxHeight: 25,
         baseSize: 17,
@@ -38,6 +40,8 @@ export const LANDMARK_TYPES = {
         stairBlockType: 'stone',
         generator: generateMayanTemple
     }
+    // missionCave: DISABLED - needs VoxelFrame API for proper terrain-relative placement
+    // See summary in conversation for proposed API design
 };
 
 /**
@@ -137,59 +141,113 @@ function generateMayanTemple(config, centerX, baseY, centerZ, hashFn, gridX, gri
         stairBlockType, VoxelState.SOLID
     );
     
-    // Carve hollow interior (1-block thick walls)
+    // Carve hollow interior (1-block thick walls) - slightly darker than outside
+    const hutBrightness = 0.6;  // Shaded but not dark
     carveBox(
         volume,
         centerX - hutHalfSize + 1, hutY, centerZ - hutHalfSize + 1,
-        centerX + hutHalfSize, hutY + hutHeight - 1, centerZ + hutHalfSize
+        centerX + hutHalfSize, hutY + hutHeight - 1, centerZ + hutHalfSize,
+        hutBrightness
     );
-    
+
     // Carve doorways on three sides (not the entrance side of pyramid)
     const hutDoorHeight = 2;
     const allDirs = ['+X', '-X', '+Z', '-Z'];
-    
+
     for (const doorDir of allDirs) {
         if (doorDir === entranceDirection) {
             continue;  // No door on entrance side (that's where you came up the stairs)
         }
-        
+
         const d = DIRECTION_VECTORS[doorDir];
         const doorDist = hutHalfSize;  // Door is in the wall
-        
-        // Carve door opening
+
+        // Carve door opening (bright - open to outside)
         for (let dy = 0; dy < hutDoorHeight; dy++) {
             for (let dw = -hutDoorWidth; dw <= hutDoorWidth; dw++) {
                 const x = d.dx !== 0 ? centerX + d.dx * doorDist : centerX + dw;
                 const z = d.dz !== 0 ? centerZ + d.dz * doorDist : centerZ + dw;
-                volume.carve(x, hutY + dy, z);
+                volume.carve(x, hutY + dy, z, 1.0);  // Doorways are bright
             }
         }
     }
-    
+
     // =========================================================================
-    // STEP 2: Carve interior chamber (forced air - always hollow)
+    // STEP 2: Carve interior chamber (forced air - always hollow, very dark)
     // =========================================================================
+    const chamberBrightness = 0.1;  // Very dark interior
     carveBox(
         volume,
         centerX - halfChamber, chamberY, centerZ - halfChamber,
-        centerX + halfChamber + 1, chamberY + chamberHeight, centerZ + halfChamber + 1
+        centerX + halfChamber + 1, chamberY + chamberHeight, centerZ + halfChamber + 1,
+        chamberBrightness
     );
-    
+
     // =========================================================================
-    // STEP 3: Carve entrance tunnel
+    // STEP 3: Carve entrance tunnel with gradient brightness (light→dark)
     // =========================================================================
     const tunnelLength = halfBase - halfChamber + 2;
-    
-    for (let i = 0; i < tunnelLength; i++) {
-        const tx = dir.dx !== 0 ? centerX + dir.dx * (halfChamber + i) : centerX;
-        const tz = dir.dz !== 0 ? centerZ + dir.dz * (halfChamber + i) : centerZ;
-        
-        for (let dy = 0; dy < entranceHeight; dy++) {
-            for (let dw = -halfEntrance; dw <= halfEntrance; dw++) {
-                const x = dir.dx !== 0 ? tx : tx + dw;
-                const z = dir.dz !== 0 ? tz : tz + dw;
-                volume.carve(x, chamberY + dy, z);
-            }
+    const entranceBrightness = 1.0;  // Bright at entrance
+
+    // Calculate tunnel bounds based on entrance direction
+    let tunnelMinX, tunnelMaxX, tunnelMinZ, tunnelMaxZ;
+    const tunnelWidth = halfEntrance * 2 + 1;
+
+    if (dir.dx !== 0) {
+        // Tunnel runs along X axis
+        if (dir.dx > 0) {
+            tunnelMinX = centerX + halfChamber;
+            tunnelMaxX = centerX + halfChamber + tunnelLength;
+        } else {
+            tunnelMinX = centerX - halfChamber - tunnelLength + 1;
+            tunnelMaxX = centerX - halfChamber + 1;
+        }
+        tunnelMinZ = centerZ - halfEntrance;
+        tunnelMaxZ = centerZ + halfEntrance + 1;
+
+        // Gradient along X: entrance (far from center) to chamber (near center)
+        if (dir.dx > 0) {
+            // +X direction: entrance at maxX, chamber at minX
+            carveBoxGradient(volume,
+                tunnelMinX, chamberY, tunnelMinZ,
+                tunnelMaxX, chamberY + entranceHeight, tunnelMaxZ,
+                'x', chamberBrightness, entranceBrightness  // dark→bright as X increases
+            );
+        } else {
+            // -X direction: entrance at minX, chamber at maxX
+            carveBoxGradient(volume,
+                tunnelMinX, chamberY, tunnelMinZ,
+                tunnelMaxX, chamberY + entranceHeight, tunnelMaxZ,
+                'x', entranceBrightness, chamberBrightness  // bright→dark as X increases
+            );
+        }
+    } else {
+        // Tunnel runs along Z axis
+        if (dir.dz > 0) {
+            tunnelMinZ = centerZ + halfChamber;
+            tunnelMaxZ = centerZ + halfChamber + tunnelLength;
+        } else {
+            tunnelMinZ = centerZ - halfChamber - tunnelLength + 1;
+            tunnelMaxZ = centerZ - halfChamber + 1;
+        }
+        tunnelMinX = centerX - halfEntrance;
+        tunnelMaxX = centerX + halfEntrance + 1;
+
+        // Gradient along Z: entrance (far from center) to chamber (near center)
+        if (dir.dz > 0) {
+            // +Z direction: entrance at maxZ, chamber at minZ
+            carveBoxGradient(volume,
+                tunnelMinX, chamberY, tunnelMinZ,
+                tunnelMaxX, chamberY + entranceHeight, tunnelMaxZ,
+                'z', chamberBrightness, entranceBrightness  // dark→bright as Z increases
+            );
+        } else {
+            // -Z direction: entrance at minZ, chamber at maxZ
+            carveBoxGradient(volume,
+                tunnelMinX, chamberY, tunnelMinZ,
+                tunnelMaxX, chamberY + entranceHeight, tunnelMaxZ,
+                'z', entranceBrightness, chamberBrightness  // bright→dark as Z increases
+            );
         }
     }
     
@@ -327,11 +385,11 @@ function generateMayanTemple(config, centerX, baseY, centerZ, hashFn, gridX, gri
     }
     
     // =========================================================================
-    // STEP 8: Blend volume into final blocks map
+    // STEP 8: Blend volume into final blocks map (and capture brightness)
     // =========================================================================
     const blocks = new Map();
-    volume.blendIntoWorld(blocks, 0, 0, 0, null);
-    
+    const brightnessOverrides = volume.blendIntoWorld(blocks, 0, 0, 0, null);
+
     // =========================================================================
     // Calculate bounds for spatial indexing (chunk queries only)
     // =========================================================================
@@ -344,7 +402,7 @@ function generateMayanTemple(config, centerX, baseY, centerZ, hashFn, gridX, gri
         minZ: centerZ - halfBase - stairExtension,
         maxZ: centerZ + halfBase + stairExtension
     };
-    
+
     // Mob spawn points around the temple base
     const spawnOffset = halfBase + 5;
     const mobSpawnPoints = [
@@ -353,14 +411,30 @@ function generateMayanTemple(config, centerX, baseY, centerZ, hashFn, gridX, gri
         { x: centerX, y: baseY, z: centerZ + spawnOffset },
         { x: centerX, y: baseY, z: centerZ - spawnOffset }
     ];
-    
+
+    // Clearing zone for object suppression (trees, rocks, etc.)
+    // Includes the temple bounds plus a margin
+    const clearingMargin = 2;
+    const clearings = [
+        {
+            type: 'rect',
+            centerX,
+            centerZ,
+            width: (bounds.maxX - bounds.minX) + clearingMargin * 2,
+            depth: (bounds.maxZ - bounds.minZ) + clearingMargin * 2,
+            rotation: 0
+        }
+    ];
+
     return {
         type: 'mayanTemple',
         centerX,
         centerZ,
         baseY,
         blocks,
+        brightnessOverrides,
         bounds,
+        clearings,
         metadata: {
             shrinePosition: { x: centerX, y: chamberY + 2, z: centerZ },
             mobSpawnPoints,
@@ -379,4 +453,384 @@ function wouldBlockEntrance(px, pz, centerX, centerZ, halfEntrance, dir) {
     if (dir.dz > 0 && pz > centerZ && Math.abs(px - centerX) <= halfEntrance) return true;
     if (dir.dz < 0 && pz < centerZ && Math.abs(px - centerX) <= halfEntrance) return true;
     return false;
+}
+
+/**
+ * Generate a Mission Cave carved into a cliff face
+ *
+ * DISABLED: This function needs a VoxelFrame API for proper terrain-relative
+ * coordinate transforms. See conversation summary for proposed API design.
+ *
+ * Structure:
+ * - Arched entrance in cliff face (3 wide × 4 tall)
+ * - Rectangular entrance tunnel (4 blocks deep)
+ * - Spherical main chamber (radius 5, floor flattened)
+ * - Stalactites (ceiling) and stalagmites (floor) - simple columns
+ * - Metadata for game objects (altar, treasure, lights, spawn points)
+ *
+ * @param {object} config - Landmark configuration
+ * @param {number} centerX - World X at cliff face
+ * @param {number} baseY - Height at entrance
+ * @param {number} centerZ - World Z at cliff face
+ * @param {function} hashFn - Deterministic random function
+ * @param {number} gridX - Grid cell X
+ * @param {number} gridZ - Grid cell Z
+ * @param {object} cliffDirection - { dx, dz, slope, baseHeight } from cliff detection
+ */
+// eslint-disable-next-line no-unused-vars
+function generateMissionCave(config, centerX, _baseY, centerZ, hashFn, gridX, gridZ, cliffDirection) {
+    const volume = new VoxelVolume();
+
+    const {
+        entranceWidth,
+        entranceHeight,
+        tunnelDepth,
+        chamberRadius,
+        floorDropBlocks,
+        blockType,
+        floorBlockType
+    } = config;
+
+    // cliffDirection: { dx, dz, slope, baseHeight } from site selection
+    // Entrance faces downslope (outward from cliff), cave goes INTO the cliff
+    const dx = cliffDirection.dx;
+    const dz = cliffDirection.dz;
+
+    // Calculate rotation angle for oriented bounds
+    const rotation = Math.atan2(dz, dx);
+
+    // baseY is the height at cliff TOP, baseHeight is the height at cliff BOTTOM (downslope)
+    // Position entrance near the bottom of the cliff, slightly above the lower terrain
+    const cliffBottomY = Math.floor(cliffDirection.baseHeight);
+
+    // Entrance should be at the lower part of cliff face, a few blocks up from bottom
+    const entranceY = cliffBottomY + 2;  // Slightly above the base for visual appeal
+
+    // Entrance position: move outward from cliff center toward downslope direction
+    // This positions the entrance where terrain is lower (visible from outside)
+    const entranceOffsetDist = 4;  // How far toward downslope to place entrance
+    const entranceX = centerX + dx * entranceOffsetDist;
+    const entranceZ = centerZ + dz * entranceOffsetDist;
+
+    // Chamber center: tunnel depth + chamber radius INTO the cliff (opposite of entrance direction)
+    const chamberDist = tunnelDepth + chamberRadius;
+    const chamberX = Math.floor(entranceX - dx * chamberDist);
+    const chamberZ = Math.floor(entranceZ - dz * chamberDist);
+    const chamberFloorY = entranceY - floorDropBlocks;  // Floor dropped below entrance
+    const chamberCenterY = chamberFloorY + chamberRadius;  // Sphere center elevated
+
+    // Brightness values for cave atmosphere
+    const entranceBrightness = 1.0;      // Bright at entrance
+    const chamberCenterBrightness = 0.15; // Very dark in chamber center
+    const chamberEdgeBrightness = 0.25;   // Slightly brighter at edges
+    const tunnelStartBrightness = 0.8;    // Transition zone start
+    const tunnelEndBrightness = 0.3;      // Transition zone end (near chamber)
+
+    const halfEntrance = Math.floor(entranceWidth / 2);
+
+    // =========================================================================
+    // STEP 1: Carve spherical chamber interior with radial brightness
+    // The cave carves into existing terrain - no need to add rock shell
+    // =========================================================================
+    carveSphereRadialBrightness(
+        volume,
+        chamberX, chamberCenterY, chamberZ,
+        chamberRadius,
+        chamberCenterBrightness,  // Dark in center
+        chamberEdgeBrightness     // Slightly brighter at edges
+    );
+
+    // Note: No need to fill floor - natural terrain below the carved sphere provides the floor
+
+    // =========================================================================
+    // STEP 2: Build entrance frame with sheer cliff face
+    // Creates a solid wall that extends outward and upward, with opening carved in
+    // =========================================================================
+    const frameThickness = 2;   // How thick the side walls are
+    const frameOutward = 5;     // How far the frame extends outward from entrance
+    const frameHeight = entranceHeight + 4;  // Frame is taller than entrance
+    const cliffWallWidth = halfEntrance + frameThickness + 2;  // Total width of cliff face
+
+    // Build a sheer cliff wall that the cave emerges from
+    // This ensures the entrance is always visible against solid rock
+    if (Math.abs(dx) > Math.abs(dz)) {
+        // Frame extends along X axis (entrance faces +X or -X)
+        const frameStartX = dx > 0 ? entranceX : entranceX - frameOutward;
+        const frameEndX = dx > 0 ? entranceX + frameOutward : entranceX;
+        const cliffFaceX = dx > 0 ? entranceX : entranceX;  // Position of sheer cliff wall
+
+        // Build full sheer cliff face wall (solid block that entrance cuts through)
+        fillBox(
+            volume,
+            cliffFaceX - (dx > 0 ? 1 : 0), entranceY - 2, entranceZ - cliffWallWidth,
+            cliffFaceX + (dx > 0 ? 0 : 1), entranceY + frameHeight, entranceZ + cliffWallWidth + 1,
+            blockType, VoxelState.SOLID
+        );
+
+        // Left wall of frame (extends outward)
+        fillBox(
+            volume,
+            frameStartX, entranceY - 1, entranceZ - halfEntrance - frameThickness,
+            frameEndX + 1, entranceY + frameHeight, entranceZ - halfEntrance,
+            blockType, VoxelState.SOLID
+        );
+        // Right wall of frame (extends outward)
+        fillBox(
+            volume,
+            frameStartX, entranceY - 1, entranceZ + halfEntrance + 1,
+            frameEndX + 1, entranceY + frameHeight, entranceZ + halfEntrance + frameThickness + 1,
+            blockType, VoxelState.SOLID
+        );
+        // Top of frame (lintel extending outward)
+        fillBox(
+            volume,
+            frameStartX, entranceY + entranceHeight, entranceZ - halfEntrance - frameThickness,
+            frameEndX + 1, entranceY + frameHeight, entranceZ + halfEntrance + frameThickness + 1,
+            blockType, VoxelState.SOLID
+        );
+        // Floor of frame (extends outward to create landing)
+        fillBox(
+            volume,
+            frameStartX, entranceY - 2, entranceZ - halfEntrance - frameThickness,
+            frameEndX + 1, entranceY, entranceZ + halfEntrance + frameThickness + 1,
+            blockType, VoxelState.SOLID
+        );
+    } else {
+        // Frame extends along Z axis (entrance faces +Z or -Z)
+        const frameStartZ = dz > 0 ? entranceZ : entranceZ - frameOutward;
+        const frameEndZ = dz > 0 ? entranceZ + frameOutward : entranceZ;
+        const cliffFaceZ = dz > 0 ? entranceZ : entranceZ;  // Position of sheer cliff wall
+
+        // Build full sheer cliff face wall (solid block that entrance cuts through)
+        fillBox(
+            volume,
+            entranceX - cliffWallWidth, entranceY - 2, cliffFaceZ - (dz > 0 ? 1 : 0),
+            entranceX + cliffWallWidth + 1, entranceY + frameHeight, cliffFaceZ + (dz > 0 ? 0 : 1),
+            blockType, VoxelState.SOLID
+        );
+
+        // Left wall of frame (extends outward)
+        fillBox(
+            volume,
+            entranceX - halfEntrance - frameThickness, entranceY - 1, frameStartZ,
+            entranceX - halfEntrance, entranceY + frameHeight, frameEndZ + 1,
+            blockType, VoxelState.SOLID
+        );
+        // Right wall of frame (extends outward)
+        fillBox(
+            volume,
+            entranceX + halfEntrance + 1, entranceY - 1, frameStartZ,
+            entranceX + halfEntrance + frameThickness + 1, entranceY + frameHeight, frameEndZ + 1,
+            blockType, VoxelState.SOLID
+        );
+        // Top of frame (lintel extending outward)
+        fillBox(
+            volume,
+            entranceX - halfEntrance - frameThickness, entranceY + entranceHeight, frameStartZ,
+            entranceX + halfEntrance + frameThickness + 1, entranceY + frameHeight, frameEndZ + 1,
+            blockType, VoxelState.SOLID
+        );
+        // Floor of frame (extends outward to create landing)
+        fillBox(
+            volume,
+            entranceX - halfEntrance - frameThickness, entranceY - 2, frameStartZ,
+            entranceX + halfEntrance + frameThickness + 1, entranceY, frameEndZ + 1,
+            blockType, VoxelState.SOLID
+        );
+    }
+
+    // =========================================================================
+    // STEP 3: Carve entrance tunnel through the frame and into cliff
+    // =========================================================================
+    if (Math.abs(dx) > Math.abs(dz)) {
+        // Tunnel runs along X axis
+        const tunnelMinX = dx > 0 ? entranceX - tunnelDepth : entranceX - frameOutward;
+        const tunnelMaxX = dx > 0 ? entranceX + frameOutward + 1 : entranceX + tunnelDepth + 1;
+
+        carveBoxGradient(
+            volume,
+            tunnelMinX, entranceY, entranceZ - halfEntrance,
+            tunnelMaxX, entranceY + entranceHeight, entranceZ + halfEntrance + 1,
+            'x',
+            dx > 0 ? tunnelEndBrightness : entranceBrightness,
+            dx > 0 ? entranceBrightness : tunnelEndBrightness
+        );
+    } else {
+        // Tunnel runs along Z axis
+        const tunnelMinZ = dz > 0 ? entranceZ - tunnelDepth : entranceZ - frameOutward;
+        const tunnelMaxZ = dz > 0 ? entranceZ + frameOutward + 1 : entranceZ + tunnelDepth + 1;
+
+        carveBoxGradient(
+            volume,
+            entranceX - halfEntrance, entranceY, tunnelMinZ,
+            entranceX + halfEntrance + 1, entranceY + entranceHeight, tunnelMaxZ,
+            'z',
+            dz > 0 ? tunnelEndBrightness : entranceBrightness,
+            dz > 0 ? entranceBrightness : tunnelEndBrightness
+        );
+    }
+
+    // =========================================================================
+    // STEP 4: Add stalactites (ceiling) - simple columns
+    // =========================================================================
+    const numStalactites = 5 + Math.floor(hashFn(gridX, gridZ, 111) * 4);  // 5-8
+
+    for (let i = 0; i < numStalactites; i++) {
+        const angle = hashFn(gridX + i, gridZ, 333) * Math.PI * 2;
+        const dist = 1 + hashFn(gridX, gridZ + i, 444) * (chamberRadius - 2);
+        const sx = Math.floor(chamberX + Math.cos(angle) * dist);
+        const sz = Math.floor(chamberZ + Math.sin(angle) * dist);
+
+        // Skip if too close to entrance path
+        const toEntranceX = entranceX - sx;
+        const toEntranceZ = entranceZ - sz;
+        const dotProduct = toEntranceX * (-dx) + toEntranceZ * (-dz);
+        if (dotProduct > 0 && Math.abs(toEntranceX * dz - toEntranceZ * dx) < 2) {
+            continue;  // Skip - would block entrance path
+        }
+
+        const ceilingY = chamberFloorY + chamberRadius * 2 - 1;
+        const length = 1 + Math.floor(hashFn(gridX + i, gridZ + i, 555) * 3);  // 1-4 blocks
+
+        // Simple stalactite: vertical pillar from ceiling downward
+        pillar(volume, sx, ceilingY - length + 1, sz, length, blockType, {
+            state: VoxelState.SOLID
+        });
+    }
+
+    // =========================================================================
+    // STEP 5: Add stalagmites (floor) - simple columns
+    // =========================================================================
+    const numStalagmites = 3 + Math.floor(hashFn(gridX, gridZ, 222) * 3);  // 3-5
+
+    for (let i = 0; i < numStalagmites; i++) {
+        const angle = hashFn(gridX + i, gridZ, 666) * Math.PI * 2;
+        const dist = 1.5 + hashFn(gridX, gridZ + i, 777) * (chamberRadius - 3);
+        const sx = Math.floor(chamberX + Math.cos(angle) * dist);
+        const sz = Math.floor(chamberZ + Math.sin(angle) * dist);
+
+        // Skip if too close to entrance path or altar area
+        const toEntranceX = entranceX - sx;
+        const toEntranceZ = entranceZ - sz;
+        const dotProduct = toEntranceX * (-dx) + toEntranceZ * (-dz);
+        if (dotProduct > 0 && Math.abs(toEntranceX * dz - toEntranceZ * dx) < 2) {
+            continue;  // Skip - would block entrance path
+        }
+
+        // Skip if too close to altar (back of chamber)
+        const altarX = chamberX - dx * (chamberRadius - 2);
+        const altarZ = chamberZ - dz * (chamberRadius - 2);
+        if (Math.abs(sx - altarX) < 2 && Math.abs(sz - altarZ) < 2) {
+            continue;
+        }
+
+        const length = 1 + Math.floor(hashFn(gridX + i, gridZ + i, 888) * 2);  // 1-3 blocks
+
+        // Simple stalagmite: vertical pillar from floor upward
+        pillar(volume, sx, chamberFloorY, sz, length, blockType, {
+            state: VoxelState.SOLID
+        });
+    }
+
+    // =========================================================================
+    // STEP 6: Blend volume into blocks map
+    // =========================================================================
+    const blocks = new Map();
+    const brightnessOverrides = volume.blendIntoWorld(blocks, 0, 0, 0, null);
+
+    // =========================================================================
+    // STEP 7: Calculate bounds
+    // =========================================================================
+    // Full bounds for spatial indexing (includes entire cave for block queries)
+    const padding = 3;
+    const bounds = {
+        minX: Math.min(entranceX - halfEntrance, chamberX - chamberRadius) - padding,
+        maxX: Math.max(entranceX + halfEntrance, chamberX + chamberRadius) + padding,
+        minY: chamberFloorY - 2,
+        maxY: chamberCenterY + chamberRadius + 2,
+        minZ: Math.min(entranceZ - halfEntrance, chamberZ - chamberRadius) - padding,
+        maxZ: Math.max(entranceZ + halfEntrance, chamberZ + chamberRadius) + padding
+    };
+
+    // Voxel bounds - covers the entrance frame and cliff face that extend OUT
+    // Must encompass the entire frame structure including sheer wall, walls, lintel, floor
+    // Everything underground (chamber, tunnel interior) is under smooth heightfield
+    const voxelBounds = {
+        minX: entranceX - cliffWallWidth - 1,
+        maxX: entranceX + cliffWallWidth + 2,
+        minY: entranceY - 3,
+        maxY: entranceY + frameHeight + 2,
+        minZ: entranceZ - cliffWallWidth - 1,
+        maxZ: entranceZ + cliffWallWidth + 2
+    };
+    // Extend voxel bounds OUTWARD from cliff to cover the protruding frame
+    // frameOutward determines how far the frame extends from entrance
+    const outwardExtent = frameOutward + 2;  // Match frame extent plus padding
+    if (Math.abs(dx) > Math.abs(dz)) {
+        if (dx > 0) {
+            // Entrance faces +X (downslope), extend outward in +X
+            voxelBounds.maxX = entranceX + outwardExtent;
+        } else {
+            // Entrance faces -X (downslope), extend outward in -X
+            voxelBounds.minX = entranceX - outwardExtent;
+        }
+    } else {
+        if (dz > 0) {
+            // Entrance faces +Z (downslope), extend outward in +Z
+            voxelBounds.maxZ = entranceZ + outwardExtent;
+        } else {
+            // Entrance faces -Z (downslope), extend outward in -Z
+            voxelBounds.minZ = entranceZ - outwardExtent;
+        }
+    }
+
+    // =========================================================================
+    // STEP 8: Build metadata with spawn positions
+    // =========================================================================
+    // Altar at back of chamber (opposite entrance direction)
+    const altarX = chamberX - dx * (chamberRadius - 2);
+    const altarZ = chamberZ - dz * (chamberRadius - 2);
+
+    // Treasure chest to the side (perpendicular to entrance)
+    const chestX = chamberX + dz * (chamberRadius - 2);
+    const chestZ = chamberZ - dx * (chamberRadius - 2);
+
+    // Crystal positions on walls
+    const crystalPositions = [
+        { x: chamberX + chamberRadius - 1, y: chamberFloorY + 2, z: chamberZ },
+        { x: chamberX - chamberRadius + 1, y: chamberFloorY + 2, z: chamberZ },
+        { x: chamberX, y: chamberFloorY + 2, z: chamberZ + chamberRadius - 1 }
+    ];
+
+    // Torch positions at entrance frame
+    const torchPositions = [];
+    if (Math.abs(dx) > Math.abs(dz)) {
+        torchPositions.push({ x: entranceX, y: entranceY + 2, z: entranceZ - halfEntrance - 1 });
+        torchPositions.push({ x: entranceX, y: entranceY + 2, z: entranceZ + halfEntrance + 1 });
+    } else {
+        torchPositions.push({ x: entranceX - halfEntrance - 1, y: entranceY + 2, z: entranceZ });
+        torchPositions.push({ x: entranceX + halfEntrance + 1, y: entranceY + 2, z: entranceZ });
+    }
+
+    const metadata = {
+        altarPosition: { x: altarX, y: chamberFloorY, z: altarZ },
+        treasureChestPosition: { x: chestX, y: chamberFloorY, z: chestZ },
+        crystalPositions,
+        torchPositions,
+        guardianSpawnPoint: { x: chamberX, y: chamberFloorY, z: chamberZ },
+        entranceDirection: { dx, dz },
+        chamberCenter: { x: chamberX, y: chamberFloorY, z: chamberZ }
+    };
+
+    return {
+        type: 'missionCave',
+        centerX: entranceX,
+        centerZ: entranceZ,
+        baseY: entranceY,
+        blocks,
+        brightnessOverrides,
+        voxelBounds,         // Only entrance uses voxel rendering
+        bounds,              // Full AABB for spatial indexing (block queries)
+        metadata
+    };
 }

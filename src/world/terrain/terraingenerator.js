@@ -331,6 +331,14 @@ export const BLOCK_TYPES = {
     mayan_stone: {
         name: 'Temple Sandstone',
         tile: [7, 0]  // Use stone texture until custom texture is added at [7,0]
+    },
+    cave_stone: {
+        name: 'Cave Stone',
+        tile: [1, 0]  // Placeholder: uses stone texture
+    },
+    cave_floor: {
+        name: 'Cave Floor',
+        tile: [3, 0]  // Placeholder: uses dirt texture
     }
 };
 

@@ -121,7 +121,15 @@ export class Game {
                 // Update setting
                 settingsManager.set('showPerformance', this.showPerformanceMonitor);
             }
+            // Toggle landmark debug with F3 key
+            if (e.key === 'F3') {
+                e.preventDefault();  // Prevent browser's default F3 behavior (search)
+                this.toggleLandmarkDebug();
+            }
         });
+
+        // Landmark debug renderer (lazy-loaded on first F3 press)
+        this.landmarkDebug = null;
 
         // Touch controls
         this.touchControls = new TouchControls(this);
@@ -334,6 +342,68 @@ export class Game {
         // Spawn torch at hero position
         const torch = new DroppedTorch(this.scene, this.hero.position.clone());
         this.torches.push(torch);
+    }
+
+    async toggleLandmarkDebug() {
+        if (!this.landmarkDebug) {
+            // Lazy load the debug renderer
+            const { LandmarkDebugRenderer } = await import('./debug/landmark-debug.js');
+            this.landmarkDebug = new LandmarkDebugRenderer(this.scene);
+        }
+        const enabled = this.landmarkDebug.toggle();
+        console.log('Landmark debug:', enabled ? 'ON' : 'OFF');
+    }
+
+    updateLandmarkDebug() {
+        if (!this.landmarkDebug || !this.landmarkDebug.enabled) return;
+
+        // Lazy load terrain probe
+        if (!this._terrainProbe) {
+            import('./world/terrain-probe.js').then(({ createMainThreadTerrainProbe }) => {
+                const blockCache = this.world.chunkLoader.workerManager.blockCache;
+                this._terrainProbe = createMainThreadTerrainProbe(blockCache);
+            });
+            return;
+        }
+
+        const probe = this._terrainProbe;
+        const px = this.hero.position.x;
+        const pz = this.hero.position.z;
+
+        this.landmarkDebug.beginFrame();
+
+        // Draw terrain normal at player position
+        this.landmarkDebug.drawTerrainNormal(probe, px, pz);
+
+        // Draw gradient (slope direction)
+        this.landmarkDebug.drawGradient(probe, px, pz);
+
+        // Draw coordinate frame at terrain surface
+        const height = probe.sampleHeight(px, pz);
+        this.landmarkDebug.drawCoordinateFrame(px, height, pz, 2);
+
+        // Draw nearby landmarks
+        const landmarkSystem = this.world.landmarkSystem;
+        const landmarks = this.landmarkDebug.drawLandmarks(landmarkSystem, px, pz, 5);
+
+        // Check if player is inside a landmark
+        const insideLandmark = landmarkSystem ? landmarkSystem.isInsideLandmark(px, pz) : false;
+
+        // Update info overlay
+        const gradient = probe.sampleGradient(px, pz);
+        const normal = probe.sampleNormal(px, pz);
+        const biome = this.world.getBiome(Math.floor(px), Math.floor(pz));
+
+        this.landmarkDebug.updateOverlay({
+            position: { x: px, z: pz },
+            playerPos: { x: px, z: pz },
+            height: height,
+            gradient: gradient,
+            normal: normal,
+            biome: biome,
+            landmarks: landmarks || [],
+            insideLandmark: insideLandmark
+        });
     }
 
     handleInput(deltaTime) {
@@ -581,6 +651,9 @@ export class Game {
         }
         // this.controls.update();
         this.updateUI();
+
+        // Update landmark debug visualization if enabled
+        this.updateLandmarkDebug();
 
         // Clear single-press key state at end of frame
         this.input.clearJustPressed();
