@@ -375,7 +375,24 @@ export class Hero extends Entity {
         this.velocity.x -= direction.x * this.moveSpeed * 0.6 * deltaTime;
         this.velocity.z -= direction.z * this.moveSpeed * 0.6 * deltaTime;
     }
-    
+
+    /**
+     * Strafe movement (move perpendicular to facing direction)
+     * @param {number} direction - 1 for right, -1 for left
+     * @param {number} deltaTime - Time delta
+     */
+    strafe(direction, deltaTime) {
+        // Calculate perpendicular direction (rotate facing by 90 degrees)
+        const strafeAngle = this.rotation + (direction * Math.PI / 2);
+        const strafeDir = new THREE.Vector3(
+            Math.sin(strafeAngle),
+            0,
+            Math.cos(strafeAngle)
+        );
+        this.velocity.x += strafeDir.x * this.moveSpeed * 0.8 * deltaTime;
+        this.velocity.z += strafeDir.z * this.moveSpeed * 0.8 * deltaTime;
+    }
+
     jump(force = 12) {
         if (this.onGround && !this.isMounting) {
             this.velocity.y = force;
