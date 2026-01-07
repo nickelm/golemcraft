@@ -30,12 +30,9 @@ export class InputController {
         this.raycaster = new THREE.Raycaster();
         
         // Callbacks
-        this.onLeftClick = null;       // Called on left-click (not drag)
-        this.onRightDrag = null;       // Called during right-drag with (deltaX, deltaY)
-        this.onRightDragStart = null;  // Called when right-drag starts
-        this.onRightDragEnd = null;    // Called when right-drag ends
-        this.onScrollWheel = null;     // Called on scroll wheel with (delta)
-
+        this.onLeftClick = null;     // Called on left-click (not drag)
+        this.onRightDrag = null;     // Called during right-drag with (deltaX, deltaY)
+        
         this.setupEventListeners();
     }
     
@@ -94,10 +91,6 @@ export class InputController {
                 this.isRightDragging = true;
                 // Request pointer lock for infinite rotation
                 this.renderer.domElement.requestPointerLock();
-                // Notify callback that drag started
-                if (this.onRightDragStart) {
-                    this.onRightDragStart();
-                }
             }
         });
         
@@ -116,19 +109,8 @@ export class InputController {
                 if (document.pointerLockElement) {
                     document.exitPointerLock();
                 }
-                // Notify callback that drag ended
-                if (this.onRightDragEnd) {
-                    this.onRightDragEnd();
-                }
             }
         });
-
-        // Scroll wheel for camera distance
-        window.addEventListener('wheel', (e) => {
-            if (this.onScrollWheel) {
-                this.onScrollWheel(e.deltaY);
-            }
-        }, { passive: true });
         
         // Prevent context menu on right-click
         window.addEventListener('contextmenu', (e) => {
@@ -199,31 +181,7 @@ export class InputController {
     setRightDragCallback(callback) {
         this.onRightDrag = callback;
     }
-
-    /**
-     * Set callback for right-drag start
-     * @param {Function} callback - Called when right-drag starts
-     */
-    setRightDragStartCallback(callback) {
-        this.onRightDragStart = callback;
-    }
-
-    /**
-     * Set callback for right-drag end
-     * @param {Function} callback - Called when right-drag ends
-     */
-    setRightDragEndCallback(callback) {
-        this.onRightDragEnd = callback;
-    }
-
-    /**
-     * Set callback for scroll wheel
-     * @param {Function} callback - Called with (delta)
-     */
-    setScrollWheelCallback(callback) {
-        this.onScrollWheel = callback;
-    }
-
+    
     /**
      * Clean up event listeners
      */
