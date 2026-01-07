@@ -336,14 +336,14 @@ export class HeroOnFoot {
 
         // === LEGS ===
         // Legs are 0.8 tall, attached at hip (y=0.8), extending to y=0
-        const legGeo = new THREE.BoxGeometry(0.18, 0.8, 0.18);
+        const legGeo = new THREE.BoxGeometry(0.15, 0.8, 0.15);
         // Shift geometry down so rotation pivot is at top (hip)
         legGeo.translate(0, -0.4, 0);
 
         const legs = [];
         const legPositions = [
-            { pos: [-0.12, 0.8, 0], name: 'left' },
-            { pos: [0.12, 0.8, 0], name: 'right' }
+            { pos: [-0.1, 0.8, 0], name: 'left' },
+            { pos: [0.1, 0.8, 0], name: 'right' }
         ];
 
         legPositions.forEach(({ pos, name }, index) => {
@@ -359,24 +359,24 @@ export class HeroOnFoot {
         group.userData.legs = legs;
 
         // === TORSO ===
-        // Torso sits above legs (legs end at y=0.8, torso is 0.6 tall, center at 1.1)
+        // Torso sits above legs (legs end at y=0.8, torso is 0.6 tall, center at 1.4)
         const torsoGeo = new THREE.BoxGeometry(0.4, 0.6, 0.25);
         const torso = new THREE.Mesh(torsoGeo, heroMat);
-        torso.position.set(0, 1.1, 0);
+        torso.position.set(0, 1.4, 0);
         torso.castShadow = true;
         group.add(torso);
         group.userData.torso = torso;
 
         // === ARMS ===
-        // Arms attached at shoulder height (y=1.3), 0.6 tall
-        const armGeo = new THREE.BoxGeometry(0.14, 0.6, 0.14);
+        // Arms attached at shoulder height (y=1.6), 0.6 tall
+        const armGeo = new THREE.BoxGeometry(0.12, 0.6, 0.12);
         // Shift geometry down so rotation pivot is at top (shoulder)
         armGeo.translate(0, -0.3, 0);
 
         const arms = [];
         const armPositions = [
-            { pos: [-0.27, 1.3, 0], name: 'left' },
-            { pos: [0.27, 1.3, 0], name: 'right' }
+            { pos: [-0.26, 1.6, 0], name: 'left' },
+            { pos: [0.26, 1.6, 0], name: 'right' }
         ];
 
         armPositions.forEach(({ pos, name }, index) => {
@@ -392,17 +392,17 @@ export class HeroOnFoot {
         group.userData.arms = arms;
 
         // === HEAD ===
-        const headGeo = new THREE.BoxGeometry(0.35, 0.35, 0.35);
+        const headGeo = new THREE.BoxGeometry(0.3, 0.3, 0.3);
         const heroHead = new THREE.Mesh(headGeo, heroMat);
-        heroHead.position.set(0, 1.58, 0);
+        heroHead.position.set(0, 1.9, 0);
         heroHead.castShadow = true;
         group.add(heroHead);
         group.userData.heroHead = heroHead;
 
         // Helmet/Visor
-        const visorGeo = new THREE.BoxGeometry(0.25, 0.07, 0.2);
+        const visorGeo = new THREE.BoxGeometry(0.22, 0.06, 0.18);
         const visor = new THREE.Mesh(visorGeo, darkMat);
-        visor.position.set(0, 1.58, 0.1);
+        visor.position.set(0, 1.9, 0.1);
         group.add(visor);
         group.userData.visor = visor;
 
