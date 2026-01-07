@@ -329,12 +329,9 @@ export class Hero extends Entity {
         this.activeVisual = this.heroOnFoot;
         this.mesh = this.heroOnFoot.mesh;
 
-        // Re-attach bow to new mesh
+        // Re-attach bow to on-foot mesh
         if (this.bow) {
-            this.heroMount.mesh.remove(this.bow.mesh);
-            this.heroOnFoot.mesh.add(this.bow.mesh);
-            // Adjust bow position for on-foot character
-            this.bow.mesh.position.set(0.35, 1.2, 0);
+            this.bow.attachTo(this.heroOnFoot.mesh, false);
         }
 
         // Switch AABB to taller, narrower on-foot version
@@ -384,11 +381,8 @@ export class Hero extends Entity {
         this.mesh = this.heroMount.mesh;
 
         // Re-attach bow to mount mesh
-        if (this.bow && this.heroOnFoot) {
-            this.heroOnFoot.mesh.remove(this.bow.mesh);
-            this.heroMount.mesh.add(this.bow.mesh);
-            // Reset bow position for mounted character
-            this.bow.mesh.position.set(0.5, 2.0, 0);
+        if (this.bow) {
+            this.bow.attachTo(this.heroMount.mesh, true);
         }
 
         // Switch AABB to mounted version

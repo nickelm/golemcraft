@@ -260,17 +260,41 @@ export class Arrow {
  * Bow - Visual weapon for archer hero
  */
 export class Bow {
+    // Position offsets for different mount states
+    static MOUNTED_POSITION = { x: 0.5, y: 2.0, z: 0 };      // Rider's arm height on mount
+    static ON_FOOT_POSITION = { x: 0.35, y: 1.2, z: 0 };     // Standing hero's arm height
+
     constructor(scene, heroMesh) {
         this.scene = scene;
         this.heroMesh = heroMesh;
         this.mesh = this.createMesh();
-        
+
         // Attack animation
         this.drawAmount = 0;  // 0 to 1, bow draw progress
         this.isDrawing = false;
-        
+
         // Attach bow to hero (as child so it follows)
         this.heroMesh.add(this.mesh);
+    }
+
+    /**
+     * Attach bow to a new mesh, used when switching between mounted/dismounted states
+     * @param {THREE.Object3D} newMesh - The mesh to attach to
+     * @param {boolean} mounted - Whether the hero is mounted (affects position)
+     */
+    attachTo(newMesh, mounted = true) {
+        // Remove from current parent
+        if (this.mesh.parent) {
+            this.mesh.parent.remove(this.mesh);
+        }
+
+        // Add to new parent
+        newMesh.add(this.mesh);
+        this.heroMesh = newMesh;
+
+        // Set position based on mount state
+        const pos = mounted ? Bow.MOUNTED_POSITION : Bow.ON_FOOT_POSITION;
+        this.mesh.position.set(pos.x, pos.y, pos.z);
     }
     
     createMesh() {
@@ -307,7 +331,9 @@ export class Bow {
         group.userData.bowstring = bowstring;
         
         // Position bow at hero's side, pointing forward
-        group.position.set(0, 1.75, 0.8);  // Centered, chest height, in front
+        // Use mounted position since hero starts mounted
+        const pos = Bow.MOUNTED_POSITION;
+        group.position.set(pos.x, pos.y, pos.z);
         group.rotation.z = -Math.PI / 4;  // Angled 45Â° to the right        
         
         group.castShadow = true;
