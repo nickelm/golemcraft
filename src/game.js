@@ -98,6 +98,9 @@ export class Game {
         this.input = new InputController(this.renderer, this.camera);
         this.input.setLeftClickCallback(() => this.handleClick());
         this.input.setRightDragCallback((deltaX, deltaY) => this.handleRightDrag(deltaX, deltaY));
+        this.input.setRightDragStartCallback(() => this.handleRightDragStart());
+        this.input.setRightDragEndCallback(() => this.handleRightDragEnd());
+        this.input.setScrollWheelCallback((delta) => this.handleScrollWheel(delta));
         
         // For compatibility with TouchControls
         this.keys = this.input.keys;
@@ -260,8 +263,8 @@ export class Game {
         this.camera.lookAt(spawnPos);
         this.controls.target.copy(spawnPos);
         
-        // Initialize camera controller
-        this.cameraController = new CameraController(this.camera, this.controls, this.hero);
+        // Initialize camera controller with terrain provider for collision
+        this.cameraController = new CameraController(this.camera, this.controls, this.hero, this.world);
     }
 
     findSpawnPoint(startX = 0, startZ = 0) {
@@ -328,27 +331,38 @@ export class Game {
     }
     
     handleRightDrag(deltaX, deltaY) {
-        const rotationSpeed = 0.002;
-        this.hero.rotation -= deltaX * rotationSpeed;
-        
-        // In orbit mode, rotate camera around hero
-        if (this.cameraController && this.cameraController.mode === 'orbit') {
-            const angle = deltaX * rotationSpeed;
-            const heroPos = this.hero.position;
-            
-            // Rotate camera position around hero
-            const dx = this.camera.position.x - heroPos.x;
-            const dz = this.camera.position.z - heroPos.z;
-            const cos = Math.cos(angle);
-            const sin = Math.sin(angle);
-            
-            this.camera.position.x = heroPos.x + (dx * cos - dz * sin);
-            this.camera.position.z = heroPos.z + (dx * sin + dz * cos);
-        }
-        
-        // Handle vertical look for first-person mode
+        // Delegate all camera rotation to CameraController
+        // In follow mode: orbits camera around hero (hero does NOT rotate)
+        // In first-person mode: controls yaw + pitch
         if (this.cameraController) {
             this.cameraController.handleLook(deltaX, deltaY);
+        }
+    }
+
+    /**
+     * Called when right-drag starts (for orbit tracking in follow mode)
+     */
+    handleRightDragStart() {
+        if (this.cameraController) {
+            this.cameraController.startOrbit();
+        }
+    }
+
+    /**
+     * Called when right-drag ends (azimuth lerps back to 0 in follow mode)
+     */
+    handleRightDragEnd() {
+        if (this.cameraController) {
+            this.cameraController.stopOrbit();
+        }
+    }
+
+    /**
+     * Handle scroll wheel for camera distance
+     */
+    handleScrollWheel(delta) {
+        if (this.cameraController) {
+            this.cameraController.handleScroll(delta);
         }
     }
 
@@ -367,18 +381,59 @@ export class Game {
     handleInput(deltaTime) {
         // Movement disabled during mounting animation
         if (this.hero.canMove()) {
-            if (this.input.isKeyPressed('a')) {
-                this.hero.turn(1, deltaTime);
+            // Desktop: A/D are strafe, movement is relative to camera facing
+            // When orbiting or in first-person, hero faces camera direction
+            const isDesktop = !this.touchControls.active;
+
+            if (isDesktop) {
+                // Get camera facing direction for movement
+                const cameraDir = this.cameraController
+                    ? this.cameraController.getCameraFacingDirection()
+                    : null;
+
+                // During movement, hero faces camera direction
+                const isMoving = this.input.isKeyPressed('w') ||
+                                 this.input.isKeyPressed('s') ||
+                                 this.input.isKeyPressed('a') ||
+                                 this.input.isKeyPressed('d');
+
+                if (isMoving && cameraDir && this.cameraController.mode === 'follow') {
+                    // Update hero facing to match camera-relative movement direction
+                    this.hero.rotation = Math.atan2(cameraDir.x, cameraDir.z);
+                }
+
+                // Forward/backward movement
+                if (this.input.isKeyPressed('w')) {
+                    this.hero.moveForward(8 * deltaTime);
+                }
+                if (this.input.isKeyPressed('s')) {
+                    this.hero.moveBackward(6 * deltaTime);
+                }
+
+                // Strafe movement (A/D)
+                if (this.input.isKeyPressed('a')) {
+                    this.hero.strafe(-1, 7 * deltaTime);
+                }
+                if (this.input.isKeyPressed('d')) {
+                    this.hero.strafe(1, 7 * deltaTime);
+                }
+            } else {
+                // Touch: Keep turn-based movement (joystick handles this in touch-controls.js)
+                // This path is mainly for any keyboard fallback on touch devices
+                if (this.input.isKeyPressed('a')) {
+                    this.hero.turn(1, deltaTime);
+                }
+                if (this.input.isKeyPressed('d')) {
+                    this.hero.turn(-1, deltaTime);
+                }
+                if (this.input.isKeyPressed('w')) {
+                    this.hero.moveForward(8 * deltaTime);
+                }
+                if (this.input.isKeyPressed('s')) {
+                    this.hero.moveBackward(6 * deltaTime);
+                }
             }
-            if (this.input.isKeyPressed('d')) {
-                this.hero.turn(-1, deltaTime);
-            }
-            if (this.input.isKeyPressed('w')) {
-                this.hero.moveForward(8 * deltaTime);
-            }
-            if (this.input.isKeyPressed('s')) {
-                this.hero.moveBackward(6 * deltaTime);
-            }
+
             if (this.input.isKeyPressed(' ')) {
                 this.hero.jump(12);
             }
@@ -615,10 +670,7 @@ export class Game {
         );
         this.gameTime = timeOfDay;  // For saving
         
-        if (!this.cameraController || this.cameraController.mode !== 'first-person') {
-            this.controls.update();
-        }
-        // this.controls.update();
+        // OrbitControls is disabled - CameraController manages all camera state
         this.updateUI();
 
         // Clear single-press key state at end of frame

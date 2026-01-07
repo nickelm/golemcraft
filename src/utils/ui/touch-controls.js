@@ -7,7 +7,15 @@ export class TouchControls {
         this.active = false;
         this.buttons = {};
         this.joystick = null;
-        
+
+        // Camera look state (right-side drag)
+        this.cameraLook = {
+            active: false,
+            touchId: null,
+            lastX: 0,
+            lastY: 0
+        };
+
         // Only enable on touch devices
         if ('ontouchstart' in window || navigator.maxTouchPoints > 0) {
             this.createControls();
@@ -210,48 +218,136 @@ export class TouchControls {
     }
 
     setupEventListeners() {
-        // Tap-to-shoot on canvas (avoiding control areas)
+        // Touch handling on canvas:
+        // - Right half of screen (above buttons): camera look drag
+        // - Tap anywhere (above bottom controls): shoot/attack
         const canvas = document.querySelector('canvas');
         if (canvas) {
-            let touchStartPos = null;
-            let touchStartTime = 0;
-            
+            // Track tap state for shoot detection
+            const tapState = {
+                startPos: null,
+                startTime: 0,
+                touchId: null
+            };
+
             canvas.addEventListener('touchstart', (e) => {
                 e.preventDefault();
-                const touch = e.touches[0];
-                touchStartPos = { x: touch.clientX, y: touch.clientY };
-                touchStartTime = performance.now();
-            }, { passive: false });
-            
-            canvas.addEventListener('touchmove', (e) => {
-                e.preventDefault();
-            }, { passive: false });
-            
-            canvas.addEventListener('touchend', (e) => {
-                e.preventDefault();
-                
-                if (!touchStartPos) return;
-                
-                const touch = e.changedTouches[0];
-                const touchEndPos = { x: touch.clientX, y: touch.clientY };
-                const touchDuration = performance.now() - touchStartTime;
-                
-                // Calculate distance moved
-                const dx = touchEndPos.x - touchStartPos.x;
-                const dy = touchEndPos.y - touchStartPos.y;
-                const distance = Math.sqrt(dx * dx + dy * dy);
-                
-                // If touch was brief (<300ms) and didn't move much (<10px), treat as tap
-                if (touchDuration < 300 && distance < 10) {
-                    // Check if tap is not on control areas (bottom 250px)
+
+                for (const touch of e.changedTouches) {
+                    const screenWidth = window.innerWidth;
                     const screenHeight = window.innerHeight;
-                    if (touchEndPos.y < screenHeight - 250) {
-                        // Shoot at tap position
-                        this.handleTapShoot(touchEndPos.x, touchEndPos.y);
+
+                    // Check if touch is in camera look zone (right half, above bottom controls)
+                    const isRightSide = touch.clientX > screenWidth / 2;
+                    const isAboveControls = touch.clientY < screenHeight - 250;
+
+                    if (isRightSide && isAboveControls && !this.cameraLook.active) {
+                        // Start camera look
+                        this.cameraLook.active = true;
+                        this.cameraLook.touchId = touch.identifier;
+                        this.cameraLook.lastX = touch.clientX;
+                        this.cameraLook.lastY = touch.clientY;
+
+                        // Notify camera controller that orbit started (for follow mode)
+                        if (this.game.cameraController) {
+                            this.game.cameraController.startOrbit();
+                        }
+                    }
+
+                    // Also track for tap detection (any touch can become a tap)
+                    if (!tapState.startPos) {
+                        tapState.startPos = { x: touch.clientX, y: touch.clientY };
+                        tapState.startTime = performance.now();
+                        tapState.touchId = touch.identifier;
                     }
                 }
-                
-                touchStartPos = null;
+            }, { passive: false });
+
+            canvas.addEventListener('touchmove', (e) => {
+                e.preventDefault();
+
+                for (const touch of e.changedTouches) {
+                    // Handle camera look drag
+                    if (this.cameraLook.active && touch.identifier === this.cameraLook.touchId) {
+                        const deltaX = touch.clientX - this.cameraLook.lastX;
+                        const deltaY = touch.clientY - this.cameraLook.lastY;
+
+                        // Send to camera controller
+                        if (this.game.cameraController) {
+                            // Scale sensitivity for touch (larger movements needed)
+                            this.game.cameraController.handleLook(deltaX * 1.5, deltaY * 1.5);
+                        }
+
+                        this.cameraLook.lastX = touch.clientX;
+                        this.cameraLook.lastY = touch.clientY;
+                    }
+
+                    // Invalidate tap if moved too much
+                    if (tapState.touchId === touch.identifier && tapState.startPos) {
+                        const dx = touch.clientX - tapState.startPos.x;
+                        const dy = touch.clientY - tapState.startPos.y;
+                        const distance = Math.sqrt(dx * dx + dy * dy);
+                        if (distance > 15) {
+                            tapState.startPos = null; // Invalidate tap
+                        }
+                    }
+                }
+            }, { passive: false });
+
+            canvas.addEventListener('touchend', (e) => {
+                e.preventDefault();
+
+                for (const touch of e.changedTouches) {
+                    // End camera look
+                    if (this.cameraLook.active && touch.identifier === this.cameraLook.touchId) {
+                        this.cameraLook.active = false;
+                        this.cameraLook.touchId = null;
+
+                        // Notify camera controller that orbit ended
+                        if (this.game.cameraController) {
+                            this.game.cameraController.stopOrbit();
+                        }
+                    }
+
+                    // Check for tap (short duration, minimal movement)
+                    if (tapState.touchId === touch.identifier && tapState.startPos) {
+                        const touchEndPos = { x: touch.clientX, y: touch.clientY };
+                        const touchDuration = performance.now() - tapState.startTime;
+
+                        const dx = touchEndPos.x - tapState.startPos.x;
+                        const dy = touchEndPos.y - tapState.startPos.y;
+                        const distance = Math.sqrt(dx * dx + dy * dy);
+
+                        // If touch was brief (<300ms) and didn't move much (<15px), treat as tap
+                        if (touchDuration < 300 && distance < 15) {
+                            const screenHeight = window.innerHeight;
+                            // Only shoot if above bottom control area
+                            if (touchEndPos.y < screenHeight - 250) {
+                                this.handleTapShoot(touchEndPos.x, touchEndPos.y);
+                            }
+                        }
+
+                        tapState.startPos = null;
+                        tapState.touchId = null;
+                    }
+                }
+            }, { passive: false });
+
+            // Handle touch cancel
+            canvas.addEventListener('touchcancel', (e) => {
+                for (const touch of e.changedTouches) {
+                    if (this.cameraLook.active && touch.identifier === this.cameraLook.touchId) {
+                        this.cameraLook.active = false;
+                        this.cameraLook.touchId = null;
+                        if (this.game.cameraController) {
+                            this.game.cameraController.stopOrbit();
+                        }
+                    }
+                    if (tapState.touchId === touch.identifier) {
+                        tapState.startPos = null;
+                        tapState.touchId = null;
+                    }
+                }
             }, { passive: false });
         }
     }
