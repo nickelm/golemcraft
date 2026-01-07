@@ -1,5 +1,4 @@
 import * as THREE from 'three';
-import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { WorldManager, WATER_LEVEL } from './world/worldmanager.js';
 import { Hero } from './entities.js';
 import { FPSCounter } from './utils/ui/fps-counter.js';
@@ -55,12 +54,6 @@ export class Game {
         this.renderer.shadowMap.enabled = !this.isMobile;
         this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
         document.body.appendChild(this.renderer.domElement);
-
-        this.controls = new OrbitControls(this.camera, this.renderer.domElement);
-        this.controls.enableDamping = true;
-        this.controls.dampingFactor = 0.05;
-        this.controls.maxPolarAngle = Math.PI / 2.5;
-        this.controls.enablePan = false;
 
         // Use seed from world data, or generate random
         const seed = worldData?.seed ?? Math.floor(Math.random() * 100000);
@@ -279,10 +272,9 @@ export class Game {
         // Position camera
         this.camera.position.set(spawnPos.x, spawnPos.y + 20, spawnPos.z + 30);
         this.camera.lookAt(spawnPos);
-        this.controls.target.copy(spawnPos);
-        
+
         // Initialize camera controller with terrain provider for collision
-        this.cameraController = new CameraController(this.camera, this.controls, this.hero, this.world);
+        this.cameraController = new CameraController(this.camera, this.hero, this.world);
     }
 
     findSpawnPoint(startX = 0, startZ = 0) {

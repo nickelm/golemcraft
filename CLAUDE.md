@@ -35,9 +35,20 @@ npm run build    # Production build to dist/
 **Key data flow**:
 1. `ChunkLoader` requests chunks by priority (distance from player)
 2. `TerrainWorkerManager` queues requests to worker
-3. Worker generates heightmap, voxel mask, surface types, block data, meshes
+3. Worker generates:
+   - Heightmap, voxel mask, surface types, block data, meshes
+   - Spawn points (biome-based + landmark-specific)
+   - Landmark metadata
+   - Static object positions (trees, rocks, etc.)
 4. `ChunkBlockCache` stores block data for collision queries
-5. `TerrainDataProvider` routes all terrain queries to cache
+5. `SpawnPointManager` receives and manages spawn points
+6. `TerrainDataProvider` routes all terrain queries to cache
+
+**Spawn point lifecycle**:
+1. Worker generates spawn points per chunk via `spawnpointgenerator.js`
+2. Points include: position, mob type, respawn cooldown, max count
+3. `SpawnPointManager` on main thread stores and tracks active entities
+4. `MobSpawner` queries nearby spawn points and manages mob lifecycle
 
 ## Directory Structure
 
@@ -56,18 +67,29 @@ src/
 
 ## Critical Files
 
-- `src/workers/terrainworker.js` - Terrain generation (runs in worker)
+**Worker (terrain generation)**:
+- `src/workers/terrainworker.js` - Main terrain generation orchestrator
+- `src/workers/terrainworkermanager.js` - Main thread worker controller
+- `src/workers/spawnpointgenerator.js` - Deterministic spawn point generation
 - `src/world/terrain/chunkdatagenerator.js` - Pure functions for mesh generation
-- `src/world/terrain/biomesystem.js` - Biome definitions (source of truth for biome config)
+- `src/world/terrain/biomesystem.js` - Biome definitions (source of truth)
+- `src/world/landmarks/workerlandmarksystem.js` - Worker-side landmark generation
+
+**Main thread (rendering & queries)**:
 - `src/world/terrain/terrainchunks.js` - Chunk mesh management
-- `src/shaders/` - Custom GLSL shaders
+- `src/world/chunkblockcache.js` - Block data cache for collision queries
+- `src/world/terraindataprovider.js` - Query interface for collision/game systems
+- `src/world/spawnpointmanager.js` - Main thread spawn point registry
+
+**Game systems**:
 - `src/game.js` - Main game loop and initialization
+- `src/shaders/` - Custom GLSL shaders
 
 ## Texture Atlas
 
 720×720 pixels, 10×10 grid of 72×72 cells (64×64 tile + 4px gutter).
 
-Block types defined in `terraingenerator.js`:
+Block types defined in `chunkdatagenerator.js`:
 - grass [0,0], stone [1,0], snow [2,0], dirt [3,0], water [4,0], sand [5,0], ice [6,0], mayan_stone [7,0]
 
 ## Performance Targets
@@ -110,7 +132,7 @@ See TODO file for current bugs and planned features.
 ## Common Tasks
 
 **Adding a new block type**:
-1. Add to `BLOCK_TYPES` in `terraingenerator.js`
+1. Add to `BLOCK_TYPES` in `chunkdatagenerator.js`
 2. Add texture to atlas at specified [col, row]
 3. Add to `BLOCK_TYPE_IDS` in `chunkdatagenerator.js`
 

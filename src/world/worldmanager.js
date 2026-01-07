@@ -23,7 +23,7 @@
  */
 
 import * as THREE from 'three';
-import { WATER_LEVEL } from './terrain/terraingenerator.js';
+import { WATER_LEVEL } from './terrain/chunkdatagenerator.js';
 import { ChunkedTerrain } from './terrain/terrainchunks.js';
 import { ObjectGenerator } from './objects/objectgenerator.js';
 import { ChunkLoader } from './chunkloader.js';

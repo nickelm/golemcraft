@@ -11,18 +11,12 @@ import * as THREE from 'three';
  * - 'first-person': View from hero's eye level with mouselook
  *   - Hides entire hero mesh
  *   - Yaw + pitch controlled via drag
- *
- * OrbitControls is completely disabled - this controller owns all camera state.
  */
 export class CameraController {
-    constructor(camera, controls, hero, terrainProvider = null) {
+    constructor(camera, hero, terrainProvider = null) {
         this.camera = camera;
-        this.controls = controls;
         this.hero = hero;
         this.terrainProvider = terrainProvider;
-
-        // Completely disable OrbitControls - we manage all camera state
-        this.controls.enabled = false;
 
         this.mode = 'follow';
 

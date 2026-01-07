@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { BLOCK_TYPES, WATER_LEVEL } from './terraingenerator.js';
+import { BLOCK_TYPES, WATER_LEVEL } from './chunkdatagenerator.js';
 import {
     terrainSplatVertexShader,
     terrainSplatFragmentShader,

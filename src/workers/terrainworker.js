@@ -1,8 +1,44 @@
 /**
  * TerrainWorker - Web Worker for background chunk generation
- * 
+ *
  * SINGLE SOURCE OF TRUTH for all terrain data.
- * 
+ *
+ * ARCHITECTURE: Worker-Based Terrain Generation
+ * =============================================
+ *
+ * ┌─────────────────────────────────────────────────────────────────┐
+ * │                        MAIN THREAD                              │
+ * ├─────────────────────────────────────────────────────────────────┤
+ * │  ChunkLoader ──────► TerrainWorkerManager                       │
+ * │      │                      │                                   │
+ * │      │                      │ postMessage()                     │
+ * │      │                      ▼                                   │
+ * │      │              ┌───────────────┐                           │
+ * │      │              │  WEB WORKER   │ (this file)               │
+ * │      │              │               │                           │
+ * │      │              │ ► Heightmap   │                           │
+ * │      │              │ ► Meshes      │                           │
+ * │      │              │ ► Block data  │                           │
+ * │      │              │ ► Spawn pts   │                           │
+ * │      │              │ ► Landmarks   │                           │
+ * │      │              │ ► Objects     │                           │
+ * │      │              └───────┬───────┘                           │
+ * │      │                      │ Transferables                     │
+ * │      │                      ▼                                   │
+ * │      │              TerrainWorkerManager                        │
+ * │      │                      │                                   │
+ * │      │    ┌─────────────────┼─────────────────┐                 │
+ * │      │    ▼                 ▼                 ▼                 │
+ * │  ChunkBlockCache    SpawnPointManager   LandmarkRegistry        │
+ * │      │                      │                 │                 │
+ * │      ▼                      ▼                 ▼                 │
+ * │  TerrainDataProvider   MobSpawner      Collision queries        │
+ * │                                                                 │
+ * └─────────────────────────────────────────────────────────────────┘
+ *
+ * Data flow: Worker is SINGLE SOURCE OF TRUTH for terrain.
+ * Main thread only READS from worker-generated data.
+ *
  * IMPROVEMENTS in this version:
  * - Domain warping for more organic terrain shapes
  * - Micro-detail noise for surface variation
