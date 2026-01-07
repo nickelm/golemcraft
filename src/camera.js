@@ -380,15 +380,20 @@ export class CameraController {
             const samplePos = heroPos.clone().add(direction.clone().multiplyScalar(sampleDistance));
 
             // Check terrain height at this position
-            const terrainHeight = this.terrainProvider.getGroundHeight(
-                Math.floor(samplePos.x),
-                Math.floor(samplePos.z)
-            );
+            // WorldManager uses getHeight(), TerrainDataProvider uses getGroundHeight()
+            const getHeightFn = this.terrainProvider.getHeight || this.terrainProvider.getGroundHeight;
+            if (getHeightFn) {
+                const terrainHeight = getHeightFn.call(
+                    this.terrainProvider,
+                    Math.floor(samplePos.x),
+                    Math.floor(samplePos.z)
+                );
 
-            // Check if camera would be below terrain
-            if (samplePos.y < terrainHeight + this.collisionMargin) {
-                hitDistance = Math.max(this.minDistance, sampleDistance - this.collisionMargin);
-                break;
+                // Check if camera would be below terrain
+                if (terrainHeight !== undefined && samplePos.y < terrainHeight + this.collisionMargin) {
+                    hitDistance = Math.max(this.minDistance, sampleDistance - this.collisionMargin);
+                    break;
+                }
             }
 
             // Check for solid voxels if applicable
