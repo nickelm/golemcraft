@@ -337,20 +337,27 @@ export class Game {
     }
 
     handleInput(deltaTime) {
-        if (this.input.isKeyPressed('a')) {
-            this.hero.turn(1, deltaTime);
+        // Movement disabled during mounting animation
+        if (this.hero.canMove()) {
+            if (this.input.isKeyPressed('a')) {
+                this.hero.turn(1, deltaTime);
+            }
+            if (this.input.isKeyPressed('d')) {
+                this.hero.turn(-1, deltaTime);
+            }
+            if (this.input.isKeyPressed('w')) {
+                this.hero.moveForward(8 * deltaTime);
+            }
+            if (this.input.isKeyPressed('s')) {
+                this.hero.moveBackward(6 * deltaTime);
+            }
+            if (this.input.isKeyPressed(' ')) {
+                this.hero.jump(12);
+            }
         }
-        if (this.input.isKeyPressed('d')) {
-            this.hero.turn(-1, deltaTime);
-        }
-        if (this.input.isKeyPressed('w')) {
-            this.hero.moveForward(8 * deltaTime);
-        }
-        if (this.input.isKeyPressed('s')) {
-            this.hero.moveBackward(6 * deltaTime);
-        }
-        if (this.input.isKeyPressed(' ')) {
-            this.hero.jump(12);
+        // Mount/dismount toggle with M key
+        if (this.input.isKeyJustPressed('m')) {
+            this.hero.toggleMount();
         }
         // Debug: Press 'b' to dump block column at player position
         if (this.input.isKeyPressed('b') && !this._debugCooldown) {

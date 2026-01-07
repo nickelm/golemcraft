@@ -480,6 +480,11 @@ export function createHeroAABB() {
     return new AABB(0.5, 1.0, 0.5, 0);
 }
 
+export function createHeroOnFootAABB() {
+    // Narrower and taller AABB for hero on foot (0.4 × 1.8 × 0.4)
+    return new AABB(0.4, 1.8, 0.4, 0);
+}
+
 // ============================================================================
 // UTILITY FUNCTIONS
 // ============================================================================
