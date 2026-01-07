@@ -431,24 +431,26 @@ export class HeroOnFoot {
             }
 
         } else if (isMoving) {
-            // WALKING ANIMATION
+            // WALKING ANIMATION - bipedal walk cycle with opposing arm/leg swing
 
             // Leg stride animation (opposite phase)
+            // Left leg positive phase, right leg negative (opposition)
             if (this.legs) {
-                const legSwing = Math.sin(this.animationTime * 10) * 0.6;
-                this.legs[0].rotation.x = legSwing;
-                this.legs[1].rotation.x = -legSwing;
+                const legAngle = Math.sin(this.animationTime * 6) * 0.6;
+                this.legs[0].rotation.x = legAngle;   // Left leg
+                this.legs[1].rotation.x = -legAngle;  // Right leg (opposite)
             }
 
             // Arm swing (opposite to legs for natural walk)
+            // Left arm swings with right leg, right arm with left leg
             if (this.arms) {
-                const armSwing = Math.sin(this.animationTime * 10) * 0.4;
-                this.arms[0].rotation.x = -armSwing;
-                this.arms[1].rotation.x = armSwing;
+                const armAngle = Math.sin(this.animationTime * 6) * 0.4;
+                this.arms[0].rotation.x = -armAngle;  // Left arm (opposite to left leg)
+                this.arms[1].rotation.x = armAngle;   // Right arm (opposite to right leg)
             }
 
-            // Subtle body bob
-            this.bobOffset = Math.sin(this.animationTime * 10) * 0.03;
+            // Slight torso bob (double frequency for up-down per step)
+            this.bobOffset = Math.sin(this.animationTime * 12) * 0.03;
 
         } else {
             // IDLE ANIMATION
