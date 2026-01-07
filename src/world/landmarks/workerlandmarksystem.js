@@ -61,7 +61,69 @@ export class WorkerLandmarkSystem {
         
         return minHeight;
     }
-    
+
+    /**
+     * Check if terrain is suitable for a flat-footed landmark (huts, cabins, etc.)
+     * @param {number} worldX - Center X position
+     * @param {number} worldZ - Center Z position
+     * @param {number} halfSize - Half of footprint size
+     * @param {number} maxHeightVariance - Maximum height difference allowed
+     * @param {number} maxSlopeMagnitude - Maximum slope gradient allowed
+     * @returns {{ suitable: boolean, baseY: number, gradient: { dx: number, dz: number, magnitude: number } }}
+     */
+    checkTerrainSuitability(worldX, worldZ, halfSize, maxHeightVariance, maxSlopeMagnitude) {
+        // Sample heights at footprint corners and edges
+        const sampleOffsets = [
+            [-halfSize, -halfSize], [halfSize, -halfSize],
+            [-halfSize, halfSize], [halfSize, halfSize],
+            [0, -halfSize], [0, halfSize],
+            [-halfSize, 0], [halfSize, 0],
+            [0, 0]
+        ];
+
+        let minHeight = Infinity;
+        let maxHeight = -Infinity;
+
+        for (const [dx, dz] of sampleOffsets) {
+            const h = this.terrainProvider.getHeight(worldX + dx, worldZ + dz);
+            minHeight = Math.min(minHeight, h);
+            maxHeight = Math.max(maxHeight, h);
+        }
+
+        // Check height variance
+        const heightVariance = maxHeight - minHeight;
+        if (heightVariance > maxHeightVariance) {
+            return { suitable: false, baseY: 0, gradient: null };
+        }
+
+        // Calculate gradient at center using central differences
+        const hLeft = this.terrainProvider.getHeight(worldX - 1, worldZ);
+        const hRight = this.terrainProvider.getHeight(worldX + 1, worldZ);
+        const hBack = this.terrainProvider.getHeight(worldX, worldZ - 1);
+        const hFront = this.terrainProvider.getHeight(worldX, worldZ + 1);
+
+        const gradX = (hRight - hLeft) / 2;
+        const gradZ = (hFront - hBack) / 2;
+        const magnitude = Math.sqrt(gradX * gradX + gradZ * gradZ);
+
+        // Check slope magnitude
+        if (magnitude > maxSlopeMagnitude) {
+            return { suitable: false, baseY: 0, gradient: null };
+        }
+
+        // Use minimum height for base (ensures structure doesn't float)
+        const baseY = Math.floor(minHeight);
+
+        // Descent direction (normalized) - door should face downhill
+        const gradient = magnitude > 0.001 ? {
+            dx: -gradX / magnitude,
+            dz: -gradZ / magnitude,
+            magnitude
+        } : { dx: 0, dz: 1, magnitude: 0 };  // Default to +Z if flat
+
+        return { suitable: true, baseY, gradient };
+    }
+
     /**
      * Get or generate landmark for a grid cell
      */
@@ -71,10 +133,7 @@ export class WorkerLandmarkSystem {
         if (this.landmarkCache.has(key)) {
             return this.landmarkCache.get(key);
         }
-        
-        // Deterministic check: should this cell have a landmark?
-        const roll = this.hash(gridX, gridZ, 12345);
-        
+
         // Get world position for this grid cell
         const worldX = gridX * LANDMARK_GRID_SIZE + Math.floor(LANDMARK_GRID_SIZE / 2);
         const worldZ = gridZ * LANDMARK_GRID_SIZE + Math.floor(LANDMARK_GRID_SIZE / 2);
@@ -82,21 +141,29 @@ export class WorkerLandmarkSystem {
         // Check biome
         const biome = this.terrainProvider.getBiome(worldX, worldZ);
         const validTypes = getLandmarkTypesForBiome(biome);
-        
+
         if (validTypes.length === 0) {
             this.landmarkCache.set(key, null);
             return null;
         }
-        
-        // Check if this cell should have a landmark
-        const typeIndex = Math.floor(this.hash(gridX, gridZ, 54321) * validTypes.length);
-        const typeName = validTypes[typeIndex];
-        const typeConfig = LANDMARK_TYPES[typeName];
-        
-        if (roll > typeConfig.rarity) {
+
+        // Filter to types that pass their individual rarity checks
+        // Each type gets its own roll so they're evaluated independently
+        const passingTypes = validTypes.filter((typeName, index) => {
+            const typeConfig = LANDMARK_TYPES[typeName];
+            const typeRoll = this.hash(gridX, gridZ, 54321 + index * 1000);
+            return typeRoll <= typeConfig.rarity;
+        });
+
+        if (passingTypes.length === 0) {
             this.landmarkCache.set(key, null);
             return null;
         }
+
+        // Randomly select from types that passed their rarity checks
+        const typeIndex = Math.floor(this.hash(gridX, gridZ, 98765) * passingTypes.length);
+        const typeName = passingTypes[typeIndex];
+        const typeConfig = LANDMARK_TYPES[typeName];
         
         // Special handling for cave landmarks (require cliff face)
         if (typeConfig.minSlope !== undefined) {
@@ -136,8 +203,6 @@ export class WorkerLandmarkSystem {
                 return null;
             }
 
-            console.log(`[LANDMARK] Generating ${typeName} at cliff (${cliffX}, ${cliffBaseY}, ${cliffZ}), slope: ${bestCliff.slope.toFixed(2)}, direction: (${bestCliff.dx}, ${bestCliff.dz})`);
-
             // Generate the cave with cliff direction
             const landmark = generateLandmarkStructure(
                 typeName,
@@ -151,9 +216,92 @@ export class WorkerLandmarkSystem {
                 bestCliff  // Pass cliff direction instead of entrance direction string
             );
 
+            this.landmarkCache.set(key, landmark);
+
             if (landmark) {
-                console.log(`[LANDMARK] Generated cave with ${landmark.blocks.size} blocks, voxelBounds: ${JSON.stringify(landmark.voxelBounds)}`);
+                this.indexLandmarkByChunks(landmark);
             }
+
+            return landmark;
+        }
+
+        // Flat-terrain landmarks (huts, cabins) - require terrain suitability check
+        if (typeConfig.maxHeightVariance !== undefined) {
+            const halfBase = Math.floor(typeConfig.baseSize / 2);
+            const maxVariance = typeConfig.maxHeightVariance;
+            const maxSlope = typeConfig.maxSlopeMagnitude || 0.5;
+
+            // Check terrain suitability at grid cell center
+            let suitability = this.checkTerrainSuitability(
+                worldX, worldZ, halfBase, maxVariance, maxSlope
+            );
+
+            // Track final position (may be offset from grid center)
+            let flatX = worldX;
+            let flatZ = worldZ;
+
+            // If center position unsuitable, try offset positions within grid cell
+            if (!suitability.suitable) {
+                const offsets = [[-16, 0], [16, 0], [0, -16], [0, 16], [-16, -16], [16, -16], [-16, 16], [16, 16]];
+                let foundPosition = false;
+
+                for (const [ox, oz] of offsets) {
+                    const testX = worldX + ox;
+                    const testZ = worldZ + oz;
+
+                    // Check biome at offset position
+                    const testBiome = this.terrainProvider.getBiome(testX, testZ);
+                    if (testBiome !== biome) continue;
+
+                    const testSuit = this.checkTerrainSuitability(
+                        testX, testZ, halfBase, maxVariance, maxSlope
+                    );
+
+                    if (testSuit.suitable) {
+                        suitability = testSuit;
+                        flatX = testX;
+                        flatZ = testZ;
+                        foundPosition = true;
+                        break;
+                    }
+                }
+
+                if (!foundPosition) {
+                    // No suitable flat terrain found
+                    this.landmarkCache.set(key, null);
+                    return null;
+                }
+            }
+
+            const baseY = suitability.baseY;
+
+            // Check height constraints
+            if (baseY < typeConfig.minHeight || baseY > typeConfig.maxHeight) {
+                this.landmarkCache.set(key, null);
+                return null;
+            }
+
+            // Determine entrance direction from gradient (door faces downslope)
+            const { dx, dz } = suitability.gradient;
+            let entranceDirection;
+            if (Math.abs(dx) > Math.abs(dz)) {
+                entranceDirection = dx > 0 ? '+X' : '-X';
+            } else {
+                entranceDirection = dz > 0 ? '+Z' : '-Z';
+            }
+
+            // Generate the landmark
+            const landmark = generateLandmarkStructure(
+                typeName,
+                typeConfig,
+                flatX,
+                baseY,
+                flatZ,
+                this.hash.bind(this),
+                gridX,
+                gridZ,
+                entranceDirection
+            );
 
             this.landmarkCache.set(key, landmark);
 
@@ -179,8 +327,6 @@ export class WorkerLandmarkSystem {
         const dirIndex = Math.abs((worldX * 3 + worldZ * 7 + this.seed) % 4);
         const entranceDirection = directions[dirIndex];
 
-        console.log(`[LANDMARK] Generating ${typeName} at (${worldX}, ${baseY}, ${worldZ}), grid (${gridX}, ${gridZ}), biome: ${biome}`);
-
         // Generate the landmark
         const landmark = generateLandmarkStructure(
             typeName,
@@ -193,11 +339,7 @@ export class WorkerLandmarkSystem {
             gridZ,
             entranceDirection
         );
-        
-        if (landmark) {
-            console.log(`[LANDMARK] Generated with ${landmark.blocks.size} blocks, bounds: ${JSON.stringify(landmark.bounds)}`);
-        }
-        
+
         this.landmarkCache.set(key, landmark);
         
         if (landmark) {

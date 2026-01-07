@@ -28,7 +28,7 @@ export const LANDMARK_TYPES = {
     mayanTemple: {
         name: 'Mayan Temple',
         biomes: ['jungle', 'plains', 'mountains'],
-        rarity: 0.15,            // Reduced from 0.5 - temples are now rare
+        rarity: 0.15,            // Rare landmark
         minHeight: 8,
         maxHeight: 25,
         baseSize: 17,
@@ -39,6 +39,21 @@ export const LANDMARK_TYPES = {
         blockType: 'mayan_stone',
         stairBlockType: 'stone',
         generator: generateMayanTemple
+    },
+
+    forestHut: {
+        name: 'Forest Hut',
+        biomes: ['plains'],
+        rarity: 0.25,              // Moderately common small structure
+        minHeight: 8,
+        maxHeight: 20,
+        baseSize: 5,               // 5x5 footprint
+        maxHeightVariance: 3,      // Max 3 block height diff across footprint
+        maxSlopeMagnitude: 0.3,    // Max slope gradient for placement
+        wallBlockType: 'stone',    // Placeholder for wood planks
+        roofBlockType: 'mayan_stone', // Placeholder for thatch/shingles
+        foundationBlockType: 'stone', // Cobblestone-style fill
+        generator: generateForestHut
     }
     // missionCave: DISABLED - needs VoxelFrame API for proper terrain-relative placement
     // See summary in conversation for proposed API design
@@ -439,6 +454,234 @@ function generateMayanTemple(config, centerX, baseY, centerZ, hashFn, gridX, gri
             shrinePosition: { x: centerX, y: chamberY + 2, z: centerZ },
             mobSpawnPoints,
             topY,
+            entranceDirection
+        }
+    };
+}
+
+/**
+ * Generate a Forest Hut - small wooden structure on flat terrain
+ *
+ * Structure:
+ * - 5×5 footprint with foundation, floor, walls, and peaked roof
+ * - Foundation fills Y=-2 to Y=-1 under structure
+ * - Floor at Y=0 (5×5 solid)
+ * - Walls Y=1 to Y=3 (hollow box with doorway)
+ * - Roof Y=4 to Y=6 (stepped peak: 7×7, 7×3, 7×1)
+ * - Door faces downslope direction
+ *
+ * Uses HeightfieldModifier for terrain flattening and ClearingRegistry for tree suppression.
+ */
+function generateForestHut(config, centerX, baseY, centerZ, hashFn, gridX, gridZ, entranceDirection = '+Z') {
+    const volume = new VoxelVolume();
+
+    const {
+        wallBlockType,
+        roofBlockType,
+        foundationBlockType
+    } = config;
+
+    const dir = DIRECTION_VECTORS[entranceDirection];
+
+    // Structure dimensions
+    const halfFootprint = 2;        // 5×5 = ±2 from center
+    const foundationDepth = 2;      // Y=-2 to Y=-1
+    const wallHeight = 3;           // Y=1 to Y=3
+    const doorHeight = 2;           // 2 blocks tall
+    const interiorBrightness = 0.4; // Darker inside
+
+    // =========================================================================
+    // STEP 1: Foundation (Y = baseY - 2 to baseY - 1)
+    // Fill 5×5 area with foundation blocks to ensure solid base
+    // =========================================================================
+    fillBox(
+        volume,
+        centerX - halfFootprint, baseY - foundationDepth, centerZ - halfFootprint,
+        centerX + halfFootprint + 1, baseY, centerZ + halfFootprint + 1,
+        foundationBlockType, VoxelState.SOLID
+    );
+
+    // =========================================================================
+    // STEP 2: Floor (Y = baseY)
+    // Solid 5×5 floor layer
+    // =========================================================================
+    fillBox(
+        volume,
+        centerX - halfFootprint, baseY, centerZ - halfFootprint,
+        centerX + halfFootprint + 1, baseY + 1, centerZ + halfFootprint + 1,
+        wallBlockType, VoxelState.SOLID
+    );
+
+    // =========================================================================
+    // STEP 3: Walls (Y = baseY + 1 to baseY + wallHeight)
+    // Solid 5×5 box, then carve interior for hollow structure
+    // =========================================================================
+    const wallBaseY = baseY + 1;
+
+    // Solid walls
+    fillBox(
+        volume,
+        centerX - halfFootprint, wallBaseY, centerZ - halfFootprint,
+        centerX + halfFootprint + 1, wallBaseY + wallHeight, centerZ + halfFootprint + 1,
+        wallBlockType, VoxelState.SOLID
+    );
+
+    // Carve interior (3×3 hollow space) - leaving 1-block thick walls
+    carveBox(
+        volume,
+        centerX - halfFootprint + 1, wallBaseY, centerZ - halfFootprint + 1,
+        centerX + halfFootprint, wallBaseY + wallHeight, centerZ + halfFootprint,
+        interiorBrightness
+    );
+
+    // =========================================================================
+    // STEP 4: Doorway (1 wide × 2 tall opening facing entrance direction)
+    // =========================================================================
+    if (Math.abs(dir.dx) > 0) {
+        // Door on X face (east/west)
+        const doorX = centerX + dir.dx * halfFootprint;
+        for (let dy = 0; dy < doorHeight; dy++) {
+            volume.carve(doorX, wallBaseY + dy, centerZ, 1.0);  // Bright doorway
+        }
+    } else {
+        // Door on Z face (north/south)
+        const doorZ = centerZ + dir.dz * halfFootprint;
+        for (let dy = 0; dy < doorHeight; dy++) {
+            volume.carve(centerX, wallBaseY + dy, doorZ, 1.0);  // Bright doorway
+        }
+    }
+
+    // =========================================================================
+    // STEP 5: Roof (Y = baseY + 4 to baseY + 6)
+    // Stepped peak: 7×7 base overhang, 7×3 middle, 7×1 ridge
+    // Ridge runs perpendicular to door direction
+    // =========================================================================
+    const roofBaseY = baseY + 1 + wallHeight;  // Y = 4
+    const roofOverhang = 3;  // Extends 3 blocks from center (7×7 total)
+
+    // Bottom tier: 7×7 overhang
+    fillBox(
+        volume,
+        centerX - roofOverhang, roofBaseY, centerZ - roofOverhang,
+        centerX + roofOverhang + 1, roofBaseY + 1, centerZ + roofOverhang + 1,
+        roofBlockType, VoxelState.SOLID
+    );
+
+    // Middle tier and ridge depend on door direction
+    // Ridge runs perpendicular to entrance (parallel to side walls)
+    if (Math.abs(dir.dz) > 0) {
+        // Door on Z face → ridge runs along X axis
+        // Middle tier: 7×3 (narrow along Z)
+        fillBox(
+            volume,
+            centerX - roofOverhang, roofBaseY + 1, centerZ - 1,
+            centerX + roofOverhang + 1, roofBaseY + 2, centerZ + 2,
+            roofBlockType, VoxelState.SOLID
+        );
+        // Top ridge: 7×1
+        fillBox(
+            volume,
+            centerX - roofOverhang, roofBaseY + 2, centerZ,
+            centerX + roofOverhang + 1, roofBaseY + 3, centerZ + 1,
+            roofBlockType, VoxelState.SOLID
+        );
+    } else {
+        // Door on X face → ridge runs along Z axis
+        // Middle tier: 3×7 (narrow along X)
+        fillBox(
+            volume,
+            centerX - 1, roofBaseY + 1, centerZ - roofOverhang,
+            centerX + 2, roofBaseY + 2, centerZ + roofOverhang + 1,
+            roofBlockType, VoxelState.SOLID
+        );
+        // Top ridge: 1×7
+        fillBox(
+            volume,
+            centerX, roofBaseY + 2, centerZ - roofOverhang,
+            centerX + 1, roofBaseY + 3, centerZ + roofOverhang + 1,
+            roofBlockType, VoxelState.SOLID
+        );
+    }
+
+    // =========================================================================
+    // STEP 6: Blend volume into blocks map
+    // =========================================================================
+    const blocks = new Map();
+    const brightnessOverrides = volume.blendIntoWorld(blocks, 0, 0, 0, null);
+
+    // =========================================================================
+    // STEP 7: Calculate bounds (includes roof overhang)
+    // =========================================================================
+    const bounds = {
+        minX: centerX - roofOverhang,
+        maxX: centerX + roofOverhang + 1,
+        minY: baseY - foundationDepth,
+        maxY: roofBaseY + 3,
+        minZ: centerZ - roofOverhang,
+        maxZ: centerZ + roofOverhang + 1
+    };
+
+    // =========================================================================
+    // STEP 8: Define clearings for tree suppression (9×9 area)
+    // =========================================================================
+    const doorRotation = Math.atan2(dir.dz, dir.dx);
+    const clearings = [
+        {
+            type: 'rect',
+            centerX,
+            centerZ,
+            width: 9,
+            depth: 9,
+            rotation: doorRotation
+        }
+    ];
+
+    // =========================================================================
+    // STEP 9: Define heightfield modifications for terrain flattening
+    // =========================================================================
+    const heightfieldModifications = [
+        {
+            type: 'flatten',
+            centerX,
+            centerZ,
+            width: 5,
+            depth: 5,
+            targetY: baseY
+        },
+        {
+            type: 'blend',
+            centerX,
+            centerZ,
+            innerRadius: 2.5,
+            outerRadius: 4.5,
+            targetY: baseY
+        }
+    ];
+
+    // =========================================================================
+    // STEP 10: Return landmark data
+    // =========================================================================
+    return {
+        type: 'forestHut',
+        centerX,
+        centerZ,
+        baseY,
+        blocks,
+        brightnessOverrides,
+        bounds,
+        clearings,
+        heightfieldModifications,
+        metadata: {
+            doorPosition: {
+                x: Math.abs(dir.dx) > 0 ? centerX + dir.dx * halfFootprint : centerX,
+                y: wallBaseY,
+                z: Math.abs(dir.dz) > 0 ? centerZ + dir.dz * halfFootprint : centerZ
+            },
+            interiorCenter: {
+                x: centerX,
+                y: wallBaseY + 1,
+                z: centerZ
+            },
             entranceDirection
         }
     };
