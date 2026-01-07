@@ -97,6 +97,11 @@ export class Game {
         // Input controller (handles keyboard, mouse, touch events)
         this.input = new InputController(this.renderer, this.camera);
         this.input.setLeftClickCallback(() => this.handleClick());
+        // Left-drag: Camera orbit (follow mode)
+        this.input.setLeftDragCallback((deltaX, deltaY) => this.handleLeftDrag(deltaX, deltaY));
+        this.input.setLeftDragStartCallback(() => this.handleLeftDragStart());
+        this.input.setLeftDragEndCallback(() => this.handleLeftDragEnd());
+        // Right-drag: Hero rotation (both modes)
         this.input.setRightDragCallback((deltaX, deltaY) => this.handleRightDrag(deltaX, deltaY));
         this.input.setRightDragStartCallback(() => this.handleRightDragStart());
         this.input.setRightDragEndCallback(() => this.handleRightDragEnd());
@@ -338,31 +343,61 @@ export class Game {
         }
     }
     
-    handleRightDrag(deltaX, deltaY) {
-        // Delegate all camera rotation to CameraController
-        // In follow mode: orbits camera around hero (hero does NOT rotate)
-        // In first-person mode: controls yaw + pitch
-        if (this.cameraController) {
+    /**
+     * Left-drag: Camera orbit in follow mode only
+     */
+    handleLeftDrag(deltaX, deltaY) {
+        if (this.cameraController && this.cameraController.mode === 'follow') {
             this.cameraController.handleLook(deltaX, deltaY);
         }
     }
 
     /**
-     * Called when right-drag starts (for orbit tracking in follow mode)
+     * Called when left-drag starts (for orbit tracking in follow mode)
      */
-    handleRightDragStart() {
-        if (this.cameraController) {
+    handleLeftDragStart() {
+        if (this.cameraController && this.cameraController.mode === 'follow') {
             this.cameraController.startOrbit();
         }
     }
 
     /**
-     * Called when right-drag ends (azimuth lerps back to 0 in follow mode)
+     * Called when left-drag ends
      */
-    handleRightDragEnd() {
-        if (this.cameraController) {
+    handleLeftDragEnd() {
+        if (this.cameraController && this.cameraController.mode === 'follow') {
             this.cameraController.stopOrbit();
         }
+    }
+
+    /**
+     * Right-drag: Change hero orientation (and camera in first-person)
+     */
+    handleRightDrag(deltaX, deltaY) {
+        if (this.cameraController) {
+            if (this.cameraController.mode === 'first-person') {
+                // First-person: control camera yaw + pitch
+                this.cameraController.handleLook(deltaX, deltaY);
+            } else {
+                // Follow mode: rotate hero (camera follows)
+                const sensitivity = 0.003;
+                this.hero.rotation -= deltaX * sensitivity;
+            }
+        }
+    }
+
+    /**
+     * Called when right-drag starts
+     */
+    handleRightDragStart() {
+        // No special action needed
+    }
+
+    /**
+     * Called when right-drag ends
+     */
+    handleRightDragEnd() {
+        // No special action needed
     }
 
     /**
@@ -449,58 +484,41 @@ export class Game {
     }
 
     handleInput(deltaTime) {
-        // Movement disabled during mounting animation
         if (this.hero.canMove()) {
-            // Desktop: A/D are strafe, movement is relative to camera facing
-            // When orbiting or in first-person, hero faces camera direction
-            const isDesktop = !this.touchControls.active;
+            // WASD: Camera-relative movement (works in both follow and first-person modes)
+            const forward = this.input.isKeyPressed('w');
+            const backward = this.input.isKeyPressed('s');
+            const left = this.input.isKeyPressed('a');
+            const right = this.input.isKeyPressed('d');
 
-            if (isDesktop) {
-                // Get camera facing direction for movement
-                const cameraDir = this.cameraController
-                    ? this.cameraController.getCameraFacingDirection()
-                    : null;
+            if (forward || backward || left || right) {
+                const cameraYaw = this.hero.rotation;
 
-                // During movement, hero faces camera direction
-                const isMoving = this.input.isKeyPressed('w') ||
-                                 this.input.isKeyPressed('s') ||
-                                 this.input.isKeyPressed('a') ||
-                                 this.input.isKeyPressed('d');
+                if (forward || left || right) {
+                    let moveX = 0, moveZ = 0;
 
-                if (isMoving && cameraDir && this.cameraController.mode === 'follow') {
-                    // Update hero facing to match camera-relative movement direction
-                    this.hero.rotation = Math.atan2(cameraDir.x, cameraDir.z);
-                }
+                    if (forward) {
+                        moveX += Math.sin(cameraYaw);
+                        moveZ += Math.cos(cameraYaw);
+                    }
+                    if (left) {
+                        moveX += Math.sin(cameraYaw + Math.PI / 2);
+                        moveZ += Math.cos(cameraYaw + Math.PI / 2);
+                    }
+                    if (right) {
+                        moveX += Math.sin(cameraYaw - Math.PI / 2);
+                        moveZ += Math.cos(cameraYaw - Math.PI / 2);
+                    }
 
-                // Forward/backward movement
-                if (this.input.isKeyPressed('w')) {
-                    this.hero.moveForward(8 * deltaTime);
-                }
-                if (this.input.isKeyPressed('s')) {
-                    this.hero.moveBackward(6 * deltaTime);
-                }
-
-                // Strafe movement (A/D)
-                if (this.input.isKeyPressed('a')) {
-                    this.hero.strafe(-1, 7 * deltaTime);
-                }
-                if (this.input.isKeyPressed('d')) {
-                    this.hero.strafe(1, 7 * deltaTime);
-                }
-            } else {
-                // Touch: Keep turn-based movement (joystick handles this in touch-controls.js)
-                // This path is mainly for any keyboard fallback on touch devices
-                if (this.input.isKeyPressed('a')) {
-                    this.hero.turn(1, deltaTime);
-                }
-                if (this.input.isKeyPressed('d')) {
-                    this.hero.turn(-1, deltaTime);
-                }
-                if (this.input.isKeyPressed('w')) {
-                    this.hero.moveForward(8 * deltaTime);
-                }
-                if (this.input.isKeyPressed('s')) {
-                    this.hero.moveBackward(6 * deltaTime);
+                    const len = Math.sqrt(moveX * moveX + moveZ * moveZ);
+                    if (len > 0) {
+                        moveX /= len;
+                        moveZ /= len;
+                        const speed = forward ? 8 : 7;
+                        this.hero.moveInWorldDirection(moveX, moveZ, speed * deltaTime);
+                    }
+                } else if (backward) {
+                    this.hero.moveBackwardCameraRelative(cameraYaw, 6 * deltaTime);
                 }
             }
 

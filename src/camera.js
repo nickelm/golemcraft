@@ -207,11 +207,11 @@ export class CameraController {
 
     /**
      * Stop orbiting (called when right-drag ends)
-     * Azimuth will lerp back to 0
+     * Camera stays at current azimuth angle - no auto-return
      */
     stopOrbit() {
         this.isOrbiting = false;
-        this.targetAzimuth = 0;
+        // Camera azimuth stays where player left it (no reset to 0)
     }
 
     /**
@@ -274,6 +274,19 @@ export class CameraController {
     }
 
     /**
+     * Get the camera's world yaw angle (for movement calculations)
+     * In follow mode: hero.rotation + azimuth
+     * In first-person: firstPersonYaw
+     * @returns {number} Yaw angle in radians
+     */
+    getCameraWorldYaw() {
+        if (this.mode === 'first-person') {
+            return this.firstPersonYaw;
+        }
+        return this.hero.rotation + this.azimuth;
+    }
+
+    /**
      * Check if camera is currently orbiting (for movement behavior)
      */
     isCurrentlyOrbiting() {
@@ -295,16 +308,8 @@ export class CameraController {
     updateFollowMode(deltaTime) {
         const heroPos = this.hero.position.clone();
 
-        // Lerp azimuth back to 0 when not orbiting
-        if (!this.isOrbiting) {
-            const lerpFactor = 1 - Math.exp(-this.azimuthLerpSpeed * deltaTime);
-            this.azimuth = THREE.MathUtils.lerp(this.azimuth, this.targetAzimuth, lerpFactor);
-
-            // Snap to 0 when close enough
-            if (Math.abs(this.azimuth - this.targetAzimuth) < 0.01) {
-                this.azimuth = this.targetAzimuth;
-            }
-        }
+        // Camera azimuth stays at player-set angle - no auto-return
+        // (Previously lerped azimuth back to 0 when not orbiting)
 
         // Adjust height based on mount state
         const heightOffset = this.hero.mounted ? 1.5 : 1.0;

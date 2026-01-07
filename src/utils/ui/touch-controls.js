@@ -16,7 +16,7 @@ export class TouchControls {
             lastY: 0
         };
 
-        // Only enable on touch devices
+        // // Only enable on touch devices
         if ('ontouchstart' in window || navigator.maxTouchPoints > 0) {
             this.createControls();
             this.setupEventListeners();
@@ -392,30 +392,69 @@ export class TouchControls {
         }
     }
 
-    // Call this in game update loop to apply joystick input
+    /**
+     * Apply joystick input each frame
+     * - First-person: Y = forward/back, X = strafe (camera-relative)
+     * - Follow mode: Y = forward/back, X = turn hero
+     */
     update(deltaTime) {
         if (!this.active) return;
 
-        // Update button labels based on hero state
         this.updateMountButton();
         this.updateWeaponButton();
 
         if (!this.joystick.active) return;
 
         const { currentX, currentY } = this.joystick;
+        const isFirstPerson = this.game.cameraController?.mode === 'first-person';
+        const cameraYaw = this.game.cameraController
+            ? this.game.cameraController.getCameraWorldYaw()
+            : this.game.hero.rotation;
 
-        // Forward/backward based on Y axis
-        if (currentY < -0.2) {
-            this.game.hero.moveForward(8 * deltaTime * Math.abs(currentY));
-        } else if (currentY > 0.2) {
-            this.game.hero.moveBackward(6 * deltaTime * Math.abs(currentY));
-        }
+        const hasForward = currentY < -0.2;
+        const hasBackward = currentY > 0.2;
+        const hasLeft = currentX < -0.2;
+        const hasRight = currentX > 0.2;
 
-        // Turn based on X axis
-        if (currentX < -0.2) {
-            this.game.hero.turn(1, deltaTime * Math.abs(currentX));
-        } else if (currentX > 0.2) {
-            this.game.hero.turn(-1, deltaTime * Math.abs(currentX));
+        if (isFirstPerson) {
+            // First-person: camera-relative strafe movement
+            if (hasForward || hasLeft || hasRight) {
+                let moveX = 0, moveZ = 0;
+
+                if (hasForward) {
+                    moveX += Math.sin(cameraYaw) * Math.abs(currentY);
+                    moveZ += Math.cos(cameraYaw) * Math.abs(currentY);
+                }
+                if (hasLeft) {
+                    moveX += Math.sin(cameraYaw + Math.PI / 2) * Math.abs(currentX);
+                    moveZ += Math.cos(cameraYaw + Math.PI / 2) * Math.abs(currentX);
+                }
+                if (hasRight) {
+                    moveX += Math.sin(cameraYaw - Math.PI / 2) * Math.abs(currentX);
+                    moveZ += Math.cos(cameraYaw - Math.PI / 2) * Math.abs(currentX);
+                }
+
+                const len = Math.sqrt(moveX * moveX + moveZ * moveZ);
+                if (len > 0) {
+                    const speed = hasForward ? 8 : 7;
+                    this.game.hero.moveInWorldDirection(moveX / len, moveZ / len, speed * deltaTime * len);
+                }
+            } else if (hasBackward) {
+                this.game.hero.moveBackwardCameraRelative(cameraYaw, 6 * deltaTime * Math.abs(currentY));
+            }
+        } else {
+            // Follow mode: hero-relative movement with turning
+            if (hasForward) {
+                this.game.hero.moveForward(8 * deltaTime * Math.abs(currentY));
+            } else if (hasBackward) {
+                this.game.hero.moveBackward(6 * deltaTime * Math.abs(currentY));
+            }
+
+            if (hasLeft) {
+                this.game.hero.turn(1, deltaTime * Math.abs(currentX) * 2);
+            } else if (hasRight) {
+                this.game.hero.turn(-1, deltaTime * Math.abs(currentX) * 2);
+            }
         }
     }
 

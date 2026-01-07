@@ -393,6 +393,48 @@ export class Hero extends Entity {
         this.velocity.z += strafeDir.z * this.moveSpeed * 0.8 * deltaTime;
     }
 
+    /**
+     * Move hero in a world-space direction (camera-relative)
+     * @param {number} dirX - Normalized X direction
+     * @param {number} dirZ - Normalized Z direction
+     * @param {number} speed - Movement speed (already multiplied by deltaTime)
+     */
+    moveInWorldDirection(dirX, dirZ, speed) {
+        this.velocity.x += dirX * this.moveSpeed * speed;
+        this.velocity.z += dirZ * this.moveSpeed * speed;
+    }
+
+    /**
+     * Move backward relative to camera direction (no rotation change)
+     * @param {number} cameraYaw - Camera world yaw angle
+     * @param {number} speed - Movement speed (already multiplied by deltaTime)
+     */
+    moveBackwardCameraRelative(cameraYaw, speed) {
+        // Move opposite to camera facing, at 60% speed
+        this.velocity.x -= Math.sin(cameraYaw) * this.moveSpeed * speed * 0.6;
+        this.velocity.z -= Math.cos(cameraYaw) * this.moveSpeed * speed * 0.6;
+    }
+
+    /**
+     * Smoothly rotate hero to face a target direction
+     * @param {number} targetRotation - Target rotation in radians
+     * @param {number} deltaTime - Frame delta time
+     */
+    faceDirection(targetRotation, deltaTime) {
+        const lerpSpeed = 12; // Higher = snappier rotation
+        const angleDiff = this.normalizeAngle(targetRotation - this.rotation);
+        this.rotation += angleDiff * Math.min(1, lerpSpeed * deltaTime);
+    }
+
+    /**
+     * Normalize angle to [-PI, PI] range
+     */
+    normalizeAngle(angle) {
+        while (angle > Math.PI) angle -= Math.PI * 2;
+        while (angle < -Math.PI) angle += Math.PI * 2;
+        return angle;
+    }
+
     jump(force = 12) {
         if (this.onGround && !this.isMounting) {
             this.velocity.y = force;

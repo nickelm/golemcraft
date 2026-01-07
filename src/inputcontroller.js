@@ -31,10 +31,16 @@ export class InputController {
         
         // Callbacks
         this.onLeftClick = null;       // Called on left-click (not drag)
+        this.onLeftDrag = null;        // Called during left-drag with (deltaX, deltaY)
+        this.onLeftDragStart = null;   // Called when left-drag starts
+        this.onLeftDragEnd = null;     // Called when left-drag ends
         this.onRightDrag = null;       // Called during right-drag with (deltaX, deltaY)
         this.onRightDragStart = null;  // Called when right-drag starts
         this.onRightDragEnd = null;    // Called when right-drag ends
         this.onScrollWheel = null;     // Called on scroll wheel with (delta)
+
+        // Left-drag state
+        this.isLeftDragging = false;
 
         this.setupEventListeners();
     }
@@ -61,19 +67,36 @@ export class InputController {
             this.mouse.x = (e.clientX / window.innerWidth) * 2 - 1;
             this.mouse.y = -(e.clientY / window.innerHeight) * 2 + 1;
             
-            // Track drag distance
+            // Track drag distance for left-click
             if (this.mouseDownTime > 0) {
                 const moveDistance = Math.sqrt(
                     Math.pow(e.clientX - this.mouseDownPos.x, 2) +
                     Math.pow(e.clientY - this.mouseDownPos.y, 2)
                 );
-                
+
                 // If mouse moved more than 5 pixels, it's a drag
                 if (moveDistance > 5) {
                     this.isDragging = true;
+                    // Start left-drag if not already started
+                    if (!this.isLeftDragging) {
+                        this.isLeftDragging = true;
+                        this.renderer.domElement.requestPointerLock();
+                        if (this.onLeftDragStart) {
+                            this.onLeftDragStart();
+                        }
+                    }
                 }
             }
-            
+
+            // Handle left-drag for camera orbit using pointer lock
+            if (this.isLeftDragging && document.pointerLockElement) {
+                const deltaX = e.movementX;
+                const deltaY = e.movementY;
+                if (this.onLeftDrag) {
+                    this.onLeftDrag(deltaX, deltaY);
+                }
+            }
+
             // Handle right-click drag for rotation using pointer lock
             if (this.isRightDragging && document.pointerLockElement) {
                 const deltaX = e.movementX;
@@ -107,6 +130,16 @@ export class InputController {
                 // Only trigger click if not dragging
                 if (!this.isDragging && this.onLeftClick) {
                     this.onLeftClick(this.mouse);
+                }
+                // End left-drag if active
+                if (this.isLeftDragging) {
+                    this.isLeftDragging = false;
+                    if (document.pointerLockElement) {
+                        document.exitPointerLock();
+                    }
+                    if (this.onLeftDragEnd) {
+                        this.onLeftDragEnd();
+                    }
                 }
                 this.mouseDownTime = 0;
                 this.isDragging = false;
@@ -192,6 +225,30 @@ export class InputController {
         this.onLeftClick = callback;
     }
     
+    /**
+     * Set callback for left-drag (camera orbit in follow mode)
+     * @param {Function} callback - Called with (deltaX, deltaY)
+     */
+    setLeftDragCallback(callback) {
+        this.onLeftDrag = callback;
+    }
+
+    /**
+     * Set callback for left-drag start
+     * @param {Function} callback - Called when left-drag starts
+     */
+    setLeftDragStartCallback(callback) {
+        this.onLeftDragStart = callback;
+    }
+
+    /**
+     * Set callback for left-drag end
+     * @param {Function} callback - Called when left-drag ends
+     */
+    setLeftDragEndCallback(callback) {
+        this.onLeftDragEnd = callback;
+    }
+
     /**
      * Set callback for right-drag rotation
      * @param {Function} callback - Called with (deltaX, deltaY)
