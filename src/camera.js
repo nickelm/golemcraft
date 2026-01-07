@@ -123,9 +123,12 @@ export class CameraController {
         const oldMode = this.mode;
         this.mode = mode;
         
-        // Toggle hero head visibility for first-person
+        // Toggle hero head visibility for first-person (handle both mounted and on-foot)
         if (this.hero.heroMount) {
             this.hero.heroMount.setHeadVisible(mode !== 'first-person');
+        }
+        if (this.hero.heroOnFoot) {
+            this.hero.heroOnFoot.setHeadVisible(mode !== 'first-person');
         }
         
         // Reset pitch when entering first-person
@@ -216,28 +219,32 @@ export class CameraController {
     updateFollowMode(heroPos, deltaTime) {
         // Calculate ideal camera position behind hero
         const heroRotation = this.hero.rotation;
-        
+
+        // Adjust follow height based on mount state
+        const followHeight = this.hero.mounted ? this.followHeight : this.followHeight - 2;
+
         const idealOffset = new THREE.Vector3(
             -Math.sin(heroRotation) * this.followDistance,
-            this.followHeight,
+            followHeight,
             -Math.cos(heroRotation) * this.followDistance
         );
-        
+
         const idealPosition = heroPos.clone().add(idealOffset);
-        
+
         // Smoothly interpolate camera position
         const lerpFactor = 1 - Math.exp(-this.followLerpSpeed * deltaTime);
         this.camera.position.lerp(idealPosition, lerpFactor);
-        
-        // Look at hero
+
+        // Look at hero - adjust target height based on mount state
+        const targetYOffset = this.hero.mounted ? 1.5 : 1.0;
         this.controls.target.copy(heroPos);
-        this.controls.target.y += 1.5; // Look at upper body
+        this.controls.target.y += targetYOffset;
     }
     
     updateFirstPersonMode(heroPos) {
-        // Position camera at hero's eye level
+        // Position camera at hero's eye level (varies by mount state)
         const eyePos = heroPos.clone();
-        eyePos.y += this.firstPersonHeight;
+        eyePos.y += this.hero.getEyeHeight();
         
         // Set camera position at eye level
         this.camera.position.copy(eyePos);

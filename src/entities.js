@@ -299,6 +299,14 @@ export class Hero extends Entity {
     }
 
     /**
+     * Get eye height based on mount state
+     * Used by camera controller for first-person view
+     */
+    getEyeHeight() {
+        return this.mounted ? 2.3 : 1.6;
+    }
+
+    /**
      * Dismount from the horse - instant
      */
     dismount() {
