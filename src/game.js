@@ -5,8 +5,7 @@ import { FPSCounter } from './utils/ui/fps-counter.js';
 import { TouchControls } from './utils/ui/touch-controls.js';
 import { CameraController } from './camera.js';
 import { ItemSpawner } from './items.js';
-import { Arrow } from './combat.js';
-import { MobSpawner, Explosion } from './mobs.js';
+import { MobSpawner } from './mobs.js';
 import { SpawnPointManager } from './world/spawnpointmanager.js';
 import { AtmosphereController } from './atmosphere/atmospherecontroller.js';
 import { InputController } from './inputcontroller.js';
@@ -15,6 +14,7 @@ import { PerformanceMonitor } from './utils/ui/performance-monitor.js';
 import { LoadingOverlay } from './utils/ui/loading-overlay.js';
 import { TerrainLoadingIndicator } from './utils/ui/terrain-loading-indicator.js';
 import { settingsManager } from './settings.js';
+import { CombatManager } from './combat/combatmanager.js';
 
 export class Game {
     constructor(worldData = null) {
@@ -66,12 +66,11 @@ export class Game {
         
         this.entities = [];
         this.playerEntities = [];
-        this.arrows = [];
-        this.explosions = [];
         this.torches = [];
-        
+
         this.mobSpawner = null;
         this.itemSpawner = null;
+        this.combatManager = null;
 
         // Player resources
         this.resources = {
@@ -275,6 +274,53 @@ export class Game {
 
         // Initialize camera controller with terrain provider for collision
         this.cameraController = new CameraController(this.camera, this.hero, this.world);
+
+        // Initialize combat manager
+        this.combatManager = new CombatManager(
+            this.scene,
+            this.hero,
+            this.mobSpawner,
+            this.world
+        );
+
+        // Wire combat callbacks
+        this.combatManager.onHeroDamage = (amount, source) => {
+            const color = source === 'explosion' ? '#FF6600' : '#FF0000';
+            const opacity = source === 'explosion' ? 0.5 : 0.3;
+            this.flashScreen(color, opacity);
+        };
+
+        this.combatManager.onFloatingNumber = (position, value, type, label) => {
+            if (this.itemSpawner) {
+                this.itemSpawner.showFloatingNumber(position, value, type, label);
+            }
+        };
+
+        this.combatManager.onLootCollected = (type, amount, position) => {
+            if (this.resources.hasOwnProperty(type)) {
+                this.resources[type] += amount;
+
+                if (this.itemSpawner) {
+                    const names = {
+                        gold: 'Gold',
+                        wood: 'Wood',
+                        diamond: 'Diamond',
+                        iron: 'Iron',
+                        coal: 'Coal'
+                    };
+                    this.itemSpawner.showFloatingNumber(
+                        position,
+                        amount,
+                        'resource',
+                        names[type]
+                    );
+                }
+            }
+        };
+
+        this.combatManager.onCraterRequested = (position, radius) => {
+            this.createExplosionCrater(position, radius);
+        };
     }
 
     findSpawnPoint(startX = 0, startZ = 0) {
@@ -309,14 +355,12 @@ export class Game {
             const point = intersects[0].point;
 
             const arrowData = this.hero.shootArrow(point);
-            if (arrowData) {
-                const arrow = new Arrow(
-                    this.scene,
+            if (arrowData && this.combatManager) {
+                this.combatManager.spawnPlayerArrow(
                     arrowData.start,
                     arrowData.target,
                     arrowData.damage
                 );
-                this.arrows.push(arrow);
             }
         }
     }
@@ -567,38 +611,7 @@ export class Game {
 
         this.entities = this.entities.filter(e => e.health > 0);
         this.playerEntities = this.playerEntities.filter(e => e.health > 0);
-        
-        // Update arrows
-        const hostileMobs = this.mobSpawner ? this.mobSpawner.getHostileMobs() : [];
-        const allEnemyTargets = hostileMobs;
-        
-        this.arrows = this.arrows.filter(arrow => {
-            if (arrow.isEnemyArrow) {
-                const result = arrow.update(deltaTime, this.world, []);
-                
-                if (!arrow.hit && !arrow.stuck) {
-                    const distToPlayer = arrow.position.distanceTo(this.hero.position);
-                    if (distToPlayer < 1.5) {
-                        this.hero.takeDamage(arrow.damage);
-                        this.flashScreen('#FF0000', 0.3);
-                        if (this.itemSpawner) {
-                            this.itemSpawner.showFloatingNumber(
-                                this.hero.position.clone(),
-                                arrow.damage,
-                                'damage'
-                            );
-                        }
-                        arrow.hit = true;
-                        arrow.destroy();
-                        return false;
-                    }
-                }
-                return result;
-            } else {
-                return arrow.update(deltaTime, this.world, allEnemyTargets);
-            }
-        });
-        
+
         // Update spawn point manager cooldowns
         if (this.spawnPointManager) {
             this.spawnPointManager.update(deltaTime);
@@ -607,135 +620,13 @@ export class Game {
         // Update mob spawner
         if (this.mobSpawner) {
             this.mobSpawner.update(deltaTime, this.hero.position, WATER_LEVEL, this.itemSpawner);
-            
-            // Spawn skeleton arrows
-            const skeletonArrows = this.mobSpawner.getSkeletonArrows();
-            skeletonArrows.forEach(arrowData => {
-                const arrow = new Arrow(
-                    this.scene,
-                    arrowData.start,
-                    arrowData.target,
-                    arrowData.damage
-                );
-                arrow.isEnemyArrow = true;
-                this.arrows.push(arrow);
-            });
-            
-            // Check melee attacks
-            const mobDamage = this.mobSpawner.checkAttacks(this.hero.position);
-            if (mobDamage > 0) {
-                this.hero.takeDamage(mobDamage);
-                this.flashScreen('#FF0000', 0.3);
-                
-                if (this.itemSpawner) {
-                    this.itemSpawner.showFloatingNumber(
-                        this.hero.position.clone(),
-                        mobDamage,
-                        'damage'
-                    );
-                }
-            }
-            
-            // XP from killed mobs
-            hostileMobs.forEach(mob => {
-                if (mob.dead && mob.xpValue > 0 && mob.killedByPlayer && !mob.xpAwarded) {
-                    mob.xpAwarded = true;
-                    if (this.itemSpawner) {
-                        this.itemSpawner.showFloatingNumber(
-                            mob.position.clone(),
-                            mob.xpValue,
-                            'xp'
-                        );
-                    }
-                }
-            });
-            
-            // Collect loot
-            const droppedLoot = this.mobSpawner.getDroppedLoot();
-            droppedLoot.forEach(loot => {
-                Object.entries(loot.inventory).forEach(([type, amount]) => {
-                    if (amount > 0 && this.resources.hasOwnProperty(type)) {
-                        this.resources[type] += amount;
-                        
-                        if (this.itemSpawner) {
-                            const names = {
-                                gold: 'Gold',
-                                wood: 'Wood', 
-                                diamond: 'Diamond',
-                                iron: 'Iron',
-                                coal: 'Coal'
-                            };
-                            this.itemSpawner.showFloatingNumber(
-                                loot.position,
-                                amount,
-                                'resource',
-                                names[type]
-                            );
-                        }
-                    }
-                });
-            });
-            
-            // Handle explosions
-            const explosions = this.mobSpawner.getExplosions();
-            explosions.forEach(explosionData => {
-                const explosion = new Explosion(
-                    this.scene,
-                    explosionData.position,
-                    explosionData.radius
-                );
-                this.explosions.push(explosion);
-                
-                // Damage player
-                const distToPlayer = explosionData.position.distanceTo(this.hero.position);
-                if (distToPlayer < explosionData.radius) {
-                    const damageFactor = 1 - (distToPlayer / explosionData.radius);
-                    const damage = Math.floor(explosionData.damage * damageFactor);
-                    if (damage > 0) {
-                        this.hero.takeDamage(damage);
-                        this.flashScreen('#FF6600', 0.5);
-                        if (this.itemSpawner) {
-                            this.itemSpawner.showFloatingNumber(
-                                this.hero.position.clone(),
-                                damage,
-                                'damage'
-                            );
-                        }
-                    }
-                }
-                
-                // Damage other mobs
-                if (this.mobSpawner) {
-                    this.mobSpawner.mobs.forEach(mob => {
-                        if (mob.dead) return;
-                        const distToMob = explosionData.position.distanceTo(mob.position);
-                        if (distToMob < explosionData.radius) {
-                            const damageFactor = 1 - (distToMob / explosionData.radius);
-                            const damage = Math.floor(explosionData.damage * damageFactor);
-                            if (damage > 0) {
-                                mob.takeDamage(damage);
-                                if (this.itemSpawner) {
-                                    this.itemSpawner.showFloatingNumber(
-                                        mob.position.clone(),
-                                        damage,
-                                        'damage'
-                                    );
-                                }
-                            }
-                        }
-                    });
-                }
-                
-                // Destroy blocks
-                this.createExplosionCrater(explosionData.position, explosionData.radius);
-            });
         }
-        
-        // Update explosion effects
-        this.explosions = this.explosions.filter(explosion => 
-            explosion.update(deltaTime)
-        );
-        
+
+        // Update combat system (arrows, explosions, damage, loot)
+        if (this.combatManager) {
+            this.combatManager.update(deltaTime);
+        }
+
         // Update item spawner
         if (this.itemSpawner) {
             this.itemSpawner.update(deltaTime, this.hero.position);
@@ -955,7 +846,7 @@ export class Game {
                 workerStats: this.world ? this.world.getWorkerStats() : null,
                 mobs: this.mobSpawner ? this.mobSpawner.mobs.length : 0,
                 entities: this.entities.length,
-                arrows: this.arrows.length
+                arrows: this.combatManager ? this.combatManager.getArrowCount() : 0
             };
             this.performanceMonitor.update(this.renderer, gameStats);
         }
