@@ -767,24 +767,25 @@ export class Game {
             this.mobSpawner.update(deltaTime, this.hero.position, WATER_LEVEL, this.itemSpawner);
         }
 
+        // Check if any arrows hit TNT blocks BEFORE combat updates
+        // (TNT sits on ground, so we need to check before arrows get stuck in terrain)
+        if (this.combatManager && this.tntManager) {
+            for (const arrow of this.combatManager.arrows) {
+                if (!arrow.hit && !arrow.stuck) {
+                    const hit = this.tntManager.checkAttackHit(arrow.position, 1.5);
+                    if (hit) {
+                        arrow.hit = true;
+                        arrow.destroy();
+                    }
+                }
+            }
+            // Remove arrows that hit TNT
+            this.combatManager.arrows = this.combatManager.arrows.filter(a => !a.hit);
+        }
+
         // Update combat system (arrows, explosions, damage, loot)
         if (this.combatManager) {
             this.combatManager.update(deltaTime);
-
-            // Check if any arrows hit TNT blocks
-            if (this.tntManager) {
-                for (const arrow of this.combatManager.arrows) {
-                    if (!arrow.hit && !arrow.stuck) {
-                        const hit = this.tntManager.checkAttackHit(arrow.position, 1.0);
-                        if (hit) {
-                            arrow.hit = true;
-                            arrow.destroy();
-                        }
-                    }
-                }
-                // Clean up destroyed arrows
-                this.combatManager.arrows = this.combatManager.arrows.filter(a => !a.hit || !a.destroyed);
-            }
         }
 
         // Update TNT blocks (fuse timers, detonations)
