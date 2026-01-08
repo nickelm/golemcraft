@@ -493,7 +493,7 @@ export class Game {
     }
 
     /**
-     * Right-drag: Change hero orientation (and camera in first-person)
+     * Right-drag: Change hero orientation (and camera pitch in both modes)
      */
     handleRightDrag(deltaX, deltaY) {
         if (this.cameraController) {
@@ -501,9 +501,11 @@ export class Game {
                 // First-person: control camera yaw + pitch
                 this.cameraController.handleLook(deltaX, deltaY);
             } else {
-                // Follow mode: rotate hero (camera follows)
+                // Follow mode: rotate hero (yaw) + camera pitch
                 const sensitivity = 0.003;
                 this.hero.rotation -= deltaX * sensitivity;
+                // Also adjust camera pitch (polar angle) with vertical movement
+                this.cameraController.handleLook(0, deltaY);
             }
         }
     }
