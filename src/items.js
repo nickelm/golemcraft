@@ -45,13 +45,21 @@ export const RESOURCE_TYPES = {
         maxValue: 5,
         shape: 'ore' 
     },
-    food: { 
-        name: 'Food', 
+    food: {
+        name: 'Food',
         color: 0xFF0000,
         emissive: 0xFF6666,
         minValue: 10,
         maxValue: 30,  // HP restored
-        shape: 'apple' 
+        shape: 'apple'
+    },
+    tnt: {
+        name: 'TNT',
+        color: 0xFF0000,
+        emissive: 0xAA0000,
+        minValue: 1,
+        maxValue: 1,  // Always 1 TNT per pickup
+        shape: 'tnt'  // Custom shape
     }
 };
 
@@ -124,7 +132,12 @@ export class Item {
                 // Sphere (apple/food)
                 geometry = new THREE.SphereGeometry(0.28, 10, 10);
                 break;
-                
+
+            case 'tnt':
+                // Red cube for TNT
+                geometry = new THREE.BoxGeometry(0.4, 0.4, 0.4);
+                break;
+
             default:
                 geometry = new THREE.BoxGeometry(0.4, 0.4, 0.4);
         }
@@ -331,7 +344,8 @@ export class ItemSpawner {
             coal: 15,
             iron: 10,
             food: 10,
-            diamond: 2
+            diamond: 2,
+            tnt: 5  // Rare explosive
         };
     }
     
@@ -455,6 +469,9 @@ export class ItemSpawner {
                 } else if (itemName === 'Coal') {
                     text = `+${value} ${itemName}`;
                     color = '#FFFFFF';  // White (black text won't show)
+                } else if (itemName === 'TNT') {
+                    text = `+${value} ${itemName}`;
+                    color = '#FF0000';  // Red
                 } else {
                     text = itemName ? `+${value} ${itemName}` : `+${value}`;
                     color = '#FFD700';

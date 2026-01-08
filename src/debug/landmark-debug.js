@@ -510,6 +510,46 @@ export class LandmarkDebugRenderer {
     }
 
     /**
+     * Draw TNT blocks from the TNT manager
+     * @param {TNTManager} tntManager - The TNT manager instance
+     * @returns {number} Count of TNT blocks drawn
+     */
+    drawTNTBlocks(tntManager) {
+        if (!this.enabled || !tntManager) return 0;
+
+        let tntCount = 0;
+
+        for (const [key, tnt] of tntManager.tntBlocks) {
+            if (tnt.detonated) continue;
+
+            // Draw wireframe box around TNT (red if triggered, orange otherwise)
+            const color = tnt.triggered ? 0xff0000 : 0xff6600;
+            const bounds = {
+                minX: tnt.position.x,
+                minY: tnt.position.y,
+                minZ: tnt.position.z,
+                maxX: tnt.position.x + 1,
+                maxY: tnt.position.y + 1,
+                maxZ: tnt.position.z + 1
+            };
+            this.drawBox(bounds, color);
+
+            // Draw point at center
+            this.drawPoint(
+                tnt.position.x + 0.5,
+                tnt.position.y + 0.5,
+                tnt.position.z + 0.5,
+                tnt.triggered ? 0xff0000 : 0xff6600,
+                0.25
+            );
+
+            tntCount++;
+        }
+
+        return tntCount;
+    }
+
+    /**
      * Update overlay with terrain/landmark info
      * @param {Object} info - Display information
      */
@@ -576,6 +616,16 @@ export class LandmarkDebugRenderer {
         if (info.insideLandmark !== undefined) {
             const color = info.insideLandmark ? '#0f0' : '#888';
             html += `<div style="color: ${color};">Inside landmark: ${info.insideLandmark ? 'YES' : 'no'}</div>`;
+        }
+
+        // TNT info
+        if (info.tntCount !== undefined && info.tntCount > 0) {
+            html += '<div style="border-top: 1px solid #444; margin-top: 6px; padding-top: 6px;">';
+            html += `<div style="color: #f60;">TNT blocks: ${info.tntCount}</div>`;
+            if (info.tntInventory !== undefined) {
+                html += `<div style="color: #aaa; font-size: 11px;">In inventory: ${info.tntInventory}</div>`;
+            }
+            html += '</div>';
         }
 
         this.overlay.innerHTML = html;
