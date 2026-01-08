@@ -76,3 +76,46 @@ export function validateRegistry() {
            layerCount === NORMAL_PATHS.length &&
            layerCount === 8;
 }
+
+// Legacy atlas tile index → texture array layer index mapping
+// This bridges the old SURFACE_TILE_INDICES system with the new texture arrays
+export const ATLAS_TILE_TO_LAYER = {
+    0: 0,  // grass → grass
+    1: 4,  // stone → rock
+    2: 5,  // snow → snow
+    3: 2,  // dirt → dirt
+    5: 3,  // sand → sand
+    6: 6,  // ice → ice
+    // Note: 4 (water) not used in splatting, 7 (mayan_stone) needs mapping decision
+};
+
+/**
+ * Convert legacy atlas tile index to texture array layer index
+ * @param {number} tileIndex - Atlas tile index (0-99)
+ * @returns {number} Texture array layer index (0-7), or 0 if unmapped
+ */
+export function tileIndexToLayer(tileIndex) {
+    return ATLAS_TILE_TO_LAYER[tileIndex] ?? 0;
+}
+
+// Default tint colors for each texture layer (RGB in linear space, 0-1 range)
+// These provide subtle artistic control over terrain appearance
+export const DEFAULT_TINT_COLORS = [
+    [1.0, 1.0, 1.0],      // Layer 0: grass (neutral white)
+    [1.0, 1.0, 1.0],      // Layer 1: forest_floor (neutral white)
+    [0.95, 0.9, 0.85],    // Layer 2: dirt (slight warm brown tint)
+    [1.0, 0.98, 0.92],    // Layer 3: sand (slight warm yellow tint)
+    [0.92, 0.92, 0.95],   // Layer 4: rock (slight cool grey tint)
+    [1.0, 1.0, 1.0],      // Layer 5: snow (neutral white, already bright)
+    [0.9, 0.95, 1.0],     // Layer 6: ice (slight cool blue tint)
+    [0.95, 0.95, 0.92]    // Layer 7: pebbles (slight warm grey tint)
+];
+
+/**
+ * Get default tint color for a texture layer
+ * @param {number} layerIndex - Texture array layer index (0-7)
+ * @returns {Array<number>} RGB color [r, g, b] in linear space (0-1)
+ */
+export function getDefaultTintColor(layerIndex) {
+    return DEFAULT_TINT_COLORS[layerIndex] ?? [1.0, 1.0, 1.0];
+}

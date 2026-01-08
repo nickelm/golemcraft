@@ -52,18 +52,33 @@ export class WorldManager {
         this.textureBlending = options.textureBlending || 'high';
         this.drawDistance = options.drawDistance || 'far';
 
+        // Texture arrays (for desktop shader)
+        this.diffuseArray = options.diffuseArray || null;
+        this.normalArray = options.normalArray || null;
+        this.useTextureArrays = options.useTextureArrays || false;
+
         // Legacy isMobile detection - now derived from textureBlending
         this.isMobile = this.textureBlending !== 'high';
 
         this.initialized = false;
 
-        console.log(`Creating world: seed=${seed}, id=${worldId}, textureBlending=${this.textureBlending}`);
+        console.log(`Creating world: seed=${seed}, id=${worldId}, textureBlending=${this.textureBlending}, useTextureArrays=${this.useTextureArrays}`);
 
         // Block modifications - tracked locally and synced to worker
         this.destroyedBlocks = new Set();
 
-        // Create chunked terrain renderer (no longer needs TerrainGenerator reference)
-        this.chunkedTerrain = new ChunkedTerrain(this.scene, null, terrainTexture, this.textureBlending);
+        // Create chunked terrain renderer (pass texture array options)
+        this.chunkedTerrain = new ChunkedTerrain(
+            this.scene,
+            null,
+            terrainTexture,
+            this.textureBlending,
+            {
+                diffuseArray: this.diffuseArray,
+                normalArray: this.normalArray,
+                useTextureArrays: this.useTextureArrays
+            }
+        );
 
         // Create object generator (mesh factory only - positions come from worker)
         this.objectGenerator = new ObjectGenerator(seed);

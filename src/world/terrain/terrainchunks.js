@@ -5,12 +5,14 @@ import {
     terrainSplatFragmentShader,
     terrainSplatFragmentShaderMobile,
     terrainSplatVertexShaderLowPower,
-    terrainSplatFragmentShaderLowPower
+    terrainSplatFragmentShaderLowPower,
+    terrainSplatFragmentShaderTextureArray
 } from '../../shaders/terrainsplat.js';
 import {
     voxelLambertVertexShader,
     voxelLambertFragmentShader
 } from '../../shaders/voxellambert.js';
+import { DEFAULT_TINT_COLORS } from './textureregistry.js';
 
 /**
  * ChunkedTerrain - Optimized terrain with merged geometry per chunk
@@ -107,16 +109,28 @@ export class ChunkedTerrain {
      * @param {Object} terrain
      * @param {THREE.Texture} terrainTexture
      * @param {string} textureBlending - 'high' | 'medium' | 'low' (texture quality tier)
+     * @param {Object} textureArrayOptions - Options for texture arrays (desktop shader)
      */
-    constructor(scene, terrain, terrainTexture, textureBlending = 'high') {
+    constructor(scene, terrain, terrainTexture, textureBlending = 'high', textureArrayOptions = {}) {
         this.scene = scene;
         this.terrain = terrain;
         this.terrainTexture = terrainTexture;
         this.textureBlending = textureBlending;
         this.chunks = new Map();
 
+        // Texture array options (for desktop shader)
+        this.diffuseArray = textureArrayOptions.diffuseArray || null;
+        this.normalArray = textureArrayOptions.normalArray || null;
+        this.useTextureArrays = textureArrayOptions.useTextureArrays || false;
+
         // Create splatting material for surface mesh (smooth terrain with biome blending)
-        this.surfaceMaterial = this.createSplatMaterial(terrainTexture, textureBlending);
+        this.surfaceMaterial = this.createSplatMaterial(
+            terrainTexture,
+            textureBlending,
+            this.diffuseArray,
+            this.normalArray,
+            this.useTextureArrays
+        );
 
         // Custom voxel shader material - matches terrain splatting shader lighting exactly
         // This ensures consistent brightness/saturation between heightfield and voxel terrain
@@ -149,9 +163,12 @@ export class ChunkedTerrain {
      * Create the texture splatting/dithering ShaderMaterial for smooth terrain
      * @param {THREE.Texture} terrainTexture - The terrain atlas texture
      * @param {string} textureBlending - 'high' | 'medium' | 'low'
+     * @param {THREE.DataArrayTexture} diffuseArray - Diffuse texture array (desktop)
+     * @param {THREE.DataArrayTexture} normalArray - Normal texture array (desktop)
+     * @param {boolean} useTextureArrays - Whether to use texture arrays
      * @returns {THREE.ShaderMaterial}
      */
-    createSplatMaterial(terrainTexture, textureBlending) {
+    createSplatMaterial(terrainTexture, textureBlending, diffuseArray, normalArray, useTextureArrays) {
         let vertexShader, fragmentShader;
 
         switch (textureBlending) {
@@ -169,20 +186,51 @@ export class ChunkedTerrain {
             default:
                 // 4-texture blending
                 vertexShader = terrainSplatVertexShader;
-                fragmentShader = terrainSplatFragmentShader;
+                // Use texture array shader if available, otherwise fall back to atlas
+                if (useTextureArrays && diffuseArray && normalArray) {
+                    fragmentShader = terrainSplatFragmentShaderTextureArray;
+                } else {
+                    fragmentShader = terrainSplatFragmentShader;
+                }
                 break;
         }
 
-        return new THREE.ShaderMaterial({
-            uniforms: THREE.UniformsUtils.merge([
-                THREE.UniformsLib.common,
+        // Build uniforms based on shader variant
+        let uniforms;
+        if (useTextureArrays && diffuseArray && normalArray && textureBlending === 'high') {
+            // Texture array shader: exclude THREE.UniformsLib.common to avoid 'map' uniform conflict
+            uniforms = THREE.UniformsUtils.merge([
                 THREE.UniformsLib.lights,
                 THREE.UniformsLib.fog,
                 THREE.UniformsLib.shadowmap,
                 {
-                    uAtlas: { value: terrainTexture }
+                    // Minimal common uniforms (diffuse/opacity) without 'map'
+                    diffuse: { value: new THREE.Color(0xffffff) },
+                    opacity: { value: 1.0 },
+                    // Texture array uniforms
+                    uDiffuseArray: { value: diffuseArray },
+                    uNormalArray: { value: normalArray },
+                    uTintColors: { value: DEFAULT_TINT_COLORS.map(c => new THREE.Vector3(c[0], c[1], c[2])) },
+                    uTileScale: { value: 0.5 }  // Lower scale = larger texture appearance (world units per texture repeat)
                 }
-            ]),
+            ]);
+            console.log('✅ Using texture array shader (desktop, high quality)');
+        } else {
+            // Atlas shader: use standard uniforms including 'map'
+            const baseUniforms = THREE.UniformsUtils.merge([
+                THREE.UniformsLib.common,
+                THREE.UniformsLib.lights,
+                THREE.UniformsLib.fog,
+                THREE.UniformsLib.shadowmap
+            ]);
+            uniforms = { ...baseUniforms, uAtlas: { value: terrainTexture } };
+            if (textureBlending === 'high') {
+                console.log('⚠️ Texture arrays not loaded, falling back to atlas shader');
+            }
+        }
+
+        const material = new THREE.ShaderMaterial({
+            uniforms: uniforms,
             vertexShader: vertexShader,
             fragmentShader: fragmentShader,
             lights: true,
@@ -190,6 +238,15 @@ export class ChunkedTerrain {
             vertexColors: true,
             side: THREE.FrontSide
         });
+
+        // Add polygon offset to prevent z-fighting between surface and voxel meshes
+        if (useTextureArrays && diffuseArray && normalArray && textureBlending === 'high') {
+            material.polygonOffset = true;
+            material.polygonOffsetFactor = 1;
+            material.polygonOffsetUnits = 1;
+        }
+
+        return material;
     }
 
     /**

@@ -500,3 +500,167 @@ void main() {
     #include <fog_fragment>
 }
 `;
+
+/**
+ * Fragment Shader - Desktop Texture Array version (PBR textures with normal mapping)
+ *
+ * Uses texture arrays instead of atlas sampling for higher quality:
+ * - Diffuse array: 1024×1024×8 sRGB textures
+ * - Normal array: 512×512×8 linear normal maps
+ * - Per-layer tint colors for artistic control
+ * - Normal mapping with view-space transformation
+ *
+ * Blends 4 layers per fragment based on vertex weights.
+ * Tile indices are CONSTANT per quad (no interpolation artifacts).
+ */
+export const terrainSplatFragmentShaderTextureArray = /* glsl */ `
+#include <common>
+#include <packing>
+#include <fog_pars_fragment>
+#include <bsdfs>
+#include <lights_pars_begin>
+#include <shadowmap_pars_fragment>
+#include <shadowmask_pars_fragment>
+
+uniform sampler2DArray uDiffuseArray;
+uniform sampler2DArray uNormalArray;
+uniform vec3 uTintColors[8];
+uniform float uTileScale;
+
+varying vec4 vTileIndices;
+varying vec4 vBlendWeights;
+varying vec3 vVertexColor;
+varying vec2 vLocalUV;
+varying vec3 vNormal;
+varying vec3 vViewPosition;
+
+// Helper: Sample and tint a diffuse layer
+vec4 sampleDiffuseLayer(float layerIndex, vec2 uv) {
+    vec4 color = texture(uDiffuseArray, vec3(uv * uTileScale, layerIndex));
+    int idx = int(layerIndex);
+    if (idx >= 0 && idx < 8) {
+        color.rgb *= uTintColors[idx];
+    }
+    return color;
+}
+
+// Helper: Sample a normal map layer and convert from tangent to view space
+// Normal maps are stored as RGB where (0.5, 0.5, 1.0) = straight up
+vec3 sampleNormalLayer(float layerIndex, vec2 uv) {
+    vec3 normalMap = texture(uNormalArray, vec3(uv * uTileScale, layerIndex)).rgb;
+
+    // Convert from [0,1] to [-1,1] range
+    normalMap = normalMap * 2.0 - 1.0;
+
+    // For now, use simple approximation: blend with geometric normal
+    // Proper implementation would require tangent space calculation
+    // Since terrain is mostly vertical, we can approximate:
+    vec3 geometricNormal = normalize(vNormal);
+
+    // Simple perturbation approach (works for relatively flat terrain)
+    // We treat the normal map's XY as perturbations in view space
+    vec3 perturbedNormal = geometricNormal;
+    perturbedNormal.xy += normalMap.xy * 0.3;  // Scale down perturbation strength
+
+    return normalize(perturbedNormal);
+}
+
+void main() {
+    // Sample all 4 diffuse layers
+    vec4 c0 = sampleDiffuseLayer(vTileIndices.x, vLocalUV);
+    vec4 c1 = sampleDiffuseLayer(vTileIndices.y, vLocalUV);
+    vec4 c2 = sampleDiffuseLayer(vTileIndices.z, vLocalUV);
+    vec4 c3 = sampleDiffuseLayer(vTileIndices.w, vLocalUV);
+
+    // Blend diffuse colors
+    vec4 blendedColor =
+        c0 * vBlendWeights.x +
+        c1 * vBlendWeights.y +
+        c2 * vBlendWeights.z +
+        c3 * vBlendWeights.w;
+
+    // Sample and blend normal maps
+    vec3 n0 = sampleNormalLayer(vTileIndices.x, vLocalUV);
+    vec3 n1 = sampleNormalLayer(vTileIndices.y, vLocalUV);
+    vec3 n2 = sampleNormalLayer(vTileIndices.z, vLocalUV);
+    vec3 n3 = sampleNormalLayer(vTileIndices.w, vLocalUV);
+
+    // Blend normals
+    vec3 blendedNormal =
+        n0 * vBlendWeights.x +
+        n1 * vBlendWeights.y +
+        n2 * vBlendWeights.z +
+        n3 * vBlendWeights.w;
+
+    vec3 normal = normalize(blendedNormal);
+
+    // Vertex color represents AO and interior darkness (0.0-1.0)
+    // This affects ambient/environmental light, but NOT point lights (torches)
+    float aoFactor = vVertexColor.r;
+
+    // Ambient light (affected by AO/interior darkness)
+    vec3 ambientIrradiance = ambientLightColor * aoFactor;
+
+    // Directional lights (affected by AO/interior darkness - they represent sky light)
+    #if NUM_DIR_LIGHTS > 0
+        for (int i = 0; i < NUM_DIR_LIGHTS; i++) {
+            vec3 lightDir = directionalLights[i].direction;
+            float NdotL = max(dot(normal, lightDir), 0.0);
+
+            // Apply shadow
+            #ifdef USE_SHADOWMAP
+                float shadow = getShadowMask();
+                NdotL *= shadow;
+            #endif
+
+            ambientIrradiance += directionalLights[i].color * NdotL * aoFactor;
+        }
+    #endif
+
+    // Hemisphere light (affected by AO/interior darkness - represents sky)
+    #if NUM_HEMI_LIGHTS > 0
+        for (int i = 0; i < NUM_HEMI_LIGHTS; i++) {
+            float dotNL = dot(normal, hemisphereLights[i].direction);
+            float hemiWeight = 0.5 * dotNL + 0.5;
+            ambientIrradiance += mix(hemisphereLights[i].groundColor, hemisphereLights[i].skyColor, hemiWeight) * aoFactor;
+        }
+    #endif
+
+    // Point lights (NOT affected by AO - torches illuminate dark spaces)
+    vec3 pointIrradiance = vec3(0.0);
+    #if NUM_POINT_LIGHTS > 0
+        for (int i = 0; i < NUM_POINT_LIGHTS; i++) {
+            vec3 lightVec = pointLights[i].position - vViewPosition;
+            float distance = length(lightVec);
+            vec3 lightDir = normalize(lightVec);
+
+            float NdotL = max(dot(normal, lightDir), 0.0);
+
+            // Distance attenuation
+            float decay = pointLights[i].decay;
+            float distanceFalloff = 1.0;
+            if (pointLights[i].distance > 0.0) {
+                distanceFalloff = pow(saturate(-distance / pointLights[i].distance + 1.0), decay);
+            }
+
+            // Add ambient fill light (25% of point light reaches all surfaces regardless of normal)
+            // This simulates light bouncing in enclosed spaces
+            float ambientFill = 0.25;
+            float directional = NdotL * (1.0 - ambientFill);
+            pointIrradiance += pointLights[i].color * (directional + ambientFill) * distanceFalloff;
+        }
+    #endif
+
+    // Combine: ambient (darkened by AO) + point lights (full brightness)
+    vec3 irradiance = ambientIrradiance + pointIrradiance;
+
+    // Clamp irradiance to prevent overbright surfaces
+    irradiance = min(irradiance, vec3(1.0));
+
+    blendedColor.rgb *= irradiance;
+
+    gl_FragColor = blendedColor;
+
+    #include <fog_fragment>
+}
+`;

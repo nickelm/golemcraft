@@ -156,17 +156,23 @@ export class Game {
         this.accumulator = 0;
         this.maxAccumulator = 0.2; // Cap at 200ms (prevents spiral of death at <5 FPS)
 
-        // Load terrain texture
+        // Load terrain atlas (legacy, for mobile/low-power shaders)
         const textureLoader = new THREE.TextureLoader();
-        this.terrainTexture = textureLoader.load('./terrain-atlas.png', async () => {
+        this.terrainTexture = textureLoader.load('./terrain-atlas.png');
+        this.terrainTexture.magFilter = THREE.NearestFilter;
+        this.terrainTexture.minFilter = THREE.NearestFilter;
+        this.terrainTexture.generateMipmaps = false;
+
+        // Load texture arrays for desktop shader
+        this.diffuseArray = null;
+        this.normalArray = null;
+        this.textureArraysReady = false;
+
+        this._loadTextureArrays().then(async () => {
             await this.init();
             this.animate();
         });
 
-        this.terrainTexture.magFilter = THREE.NearestFilter;
-        this.terrainTexture.minFilter = THREE.NearestFilter;
-        this.terrainTexture.generateMipmaps = false;
-        
         // Window resize handler
         window.addEventListener('resize', () => {
             this.camera.aspect = window.innerWidth / window.innerHeight;
@@ -204,7 +210,11 @@ export class Game {
             this.worldId,
             {
                 textureBlending: this.textureBlending,
-                drawDistance: this.drawDistance
+                drawDistance: this.drawDistance,
+                // Pass texture arrays for desktop shader
+                diffuseArray: this.diffuseArray,
+                normalArray: this.normalArray,
+                useTextureArrays: this.textureArraysReady
             }
         );
 
@@ -993,5 +1003,37 @@ export class Game {
         }
         
         this.renderer.render(this.scene, this.camera);
+    }
+
+    /**
+     * Load texture arrays for desktop shader (diffuse + normal maps)
+     * @private
+     */
+    async _loadTextureArrays() {
+        try {
+            const { TextureArrayLoader } = await import('./loaders/texturearrayloader.js');
+            const { DIFFUSE_PATHS, NORMAL_PATHS } = await import('./world/terrain/textureregistry.js');
+
+            console.log('Loading texture arrays for desktop shader...');
+
+            const arrayLoader = new TextureArrayLoader();
+
+            // Load both arrays in parallel
+            [this.diffuseArray, this.normalArray] = await Promise.all([
+                arrayLoader.loadDiffuseArray(DIFFUSE_PATHS, (progress) => {
+                    console.log(`Diffuse textures: ${progress.loaded}/${progress.total}`);
+                }),
+                arrayLoader.loadNormalArray(NORMAL_PATHS, (progress) => {
+                    console.log(`Normal maps: ${progress.loaded}/${progress.total}`);
+                })
+            ]);
+
+            this.textureArraysReady = true;
+            console.log('✅ Texture arrays loaded successfully');
+        } catch (error) {
+            console.error('❌ Failed to load texture arrays:', error);
+            console.error('⚠️ Falling back to atlas shader');
+            this.textureArraysReady = false;
+        }
     }
 }
