@@ -985,15 +985,6 @@ function generateVoxelMesh(terrainProvider, voxelMask, chunkX, chunkZ, heightfie
     const opaqueData = { positions: [], normals: [], uvs: [], colors: [], indices: [] };
     const LANDMARK_MAX_HEIGHT = 20;
 
-    // Debug: Count voxel cells for this chunk
-    let voxelCellCount = 0;
-    for (let i = 0; i < voxelMask.length; i++) {
-        if (voxelMask[i] === 1) voxelCellCount++;
-    }
-    if (voxelCellCount > 0) {
-        console.log(`[VOXEL MESH] Chunk (${chunkX},${chunkZ}): ${voxelCellCount} voxel cells`);
-    }
-
     // Helper to check if a cell (by local coords) is a hole cell
     const isHoleAt = (lx, lz) => {
         if (!heightfieldHoleMask) return false;
@@ -1053,11 +1044,6 @@ function generateVoxelMesh(terrainProvider, voxelMask, chunkX, chunkZ, heightfie
                 if (!blockType) continue;
                 if (blockType === 'water' || blockType === 'water_full') continue;
 
-                // Debug: Log TNT blocks (used for rocky outcrop testing)
-                if (blockType === 'tnt') {
-                    console.log(`[VOXEL MESH] Found TNT block at (${x},${y},${z})`);
-                }
-                
                 const blockUvs = getBlockUVs(blockType);
                 
                 for (const [faceName, face] of Object.entries(FACES)) {

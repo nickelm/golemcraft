@@ -60,9 +60,9 @@ export const LANDMARK_TYPES = {
     rockyOutcrop: {
         name: 'Rocky Outcrop',
         biomes: ['plains', 'mountains', 'desert', 'snow', 'jungle'],
-        rarity: 1.0,               // DEBUG: Always spawn for testing
-        minHeight: 1,              // DEBUG: Allow at any height
-        maxHeight: 100,
+        rarity: 0.6,               // Moderately common natural feature
+        minHeight: 5,
+        maxHeight: 40,
         baseSize: 10,              // Max footprint size for spacing
         generator: generateRockyOutcrop
     }
@@ -100,7 +100,6 @@ const DIRECTION_VECTORS = {
  * Generate a landmark structure
  */
 export function generateLandmarkStructure(typeName, config, centerX, baseY, centerZ, hashFn, gridX, gridZ, entranceDirection) {
-    console.log(`[LANDMARK GENERATOR] Creating ${typeName} at (${centerX}, ${baseY}, ${centerZ}) grid (${gridX}, ${gridZ})`);
     if (config.generator) {
         return config.generator(config, centerX, baseY, centerZ, hashFn, gridX, gridZ, entranceDirection);
     }
@@ -714,18 +713,7 @@ function generateForestHut(config, centerX, baseY, centerZ, hashFn, gridX, gridZ
  * - Large (15%): 3 spheres, radius 3-5
  */
 function generateRockyOutcrop(config, centerX, baseY, centerZ, hashFn, gridX, gridZ) {
-    console.log(`[ROCKY OUTCROP] Generating at (${centerX}, ${baseY}, ${centerZ}) grid (${gridX}, ${gridZ})`);
     const volume = new VoxelVolume();
-
-    // DEBUG: Add a visible test pillar above the outcrop location
-    // This should be visible even if spheres fail
-    fillBox(
-        volume,
-        centerX - 1, baseY, centerZ - 1,
-        centerX + 2, baseY + 10, centerZ + 2,
-        'tnt', VoxelState.SOLID
-    );
-    console.log(`[ROCKY OUTCROP] DEBUG: Added test pillar, volume size = ${volume.size}`);
 
     // Determine size class using seeded random
     const sizeRoll = hashFn(gridX, gridZ, 11111);
@@ -734,30 +722,28 @@ function generateRockyOutcrop(config, centerX, baseY, centerZ, hashFn, gridX, gr
     let minRadius, maxRadius;
     let sizeClass;
 
-    // DEBUG: Always generate large outcrops for visibility testing
     if (sizeRoll < 0.50) {
         // Small: 50% chance, 1 sphere
         numSpheres = 1;
-        minRadius = 4;  // DEBUG: Increased from 2
-        maxRadius = 5;  // DEBUG: Increased from 3
+        minRadius = 2;
+        maxRadius = 3;
         sizeClass = 'small';
     } else if (sizeRoll < 0.85) {
         // Medium: 35% chance, 2 spheres
         numSpheres = 2;
-        minRadius = 4;  // DEBUG: Increased from 2
-        maxRadius = 6;  // DEBUG: Increased from 4
+        minRadius = 2;
+        maxRadius = 4;
         sizeClass = 'medium';
     } else {
         // Large: 15% chance, 3 spheres
         numSpheres = 3;
-        minRadius = 5;  // DEBUG: Increased from 3
-        maxRadius = 7;  // DEBUG: Increased from 5
+        minRadius = 3;
+        maxRadius = 5;
         sizeClass = 'large';
     }
 
-    // Select block type based on biome (passed implicitly via landmark system context)
-    // DEBUG: Use TNT (red) for visibility testing instead of stone
-    const blockType = 'tnt';  // DEBUG: Changed from 'stone' for visibility
+    // Use stone block type for natural rock appearance
+    const blockType = 'stone';
 
     // Generate sphere placements
     const spheres = [];
@@ -802,12 +788,8 @@ function generateRockyOutcrop(config, centerX, baseY, centerZ, hashFn, gridX, gr
         });
     }
 
-    // Verify VoxelVolume is detected correctly
-    console.log(`[ROCKY OUTCROP] volume.set.length=${volume.set?.length}, typeof set=${typeof volume.set}`);
-
     // Generate voxels for each sphere
     for (const sphere of spheres) {
-        console.log(`[ROCKY OUTCROP] fillSphere at (${sphere.cx}, ${sphere.cy}, ${sphere.cz}) radius=${sphere.radius}`);
         fillSphere(
             volume,
             sphere.cx,
@@ -817,13 +799,11 @@ function generateRockyOutcrop(config, centerX, baseY, centerZ, hashFn, gridX, gr
             blockType,
             VoxelState.SOLID
         );
-        console.log(`[ROCKY OUTCROP] Volume now has ${volume.size} voxels`);
     }
 
     // Blend volume into blocks map
     const blocks = new Map();
     const brightnessOverrides = volume.blendIntoWorld(blocks, 0, 0, 0, null);
-    console.log(`[ROCKY OUTCROP] After blendIntoWorld: blocks.size=${blocks.size}`);
 
     // Calculate bounds (AABB containing all spheres plus padding)
     let minX = Infinity, maxX = -Infinity;
@@ -878,9 +858,6 @@ function generateRockyOutcrop(config, centerX, baseY, centerZ, hashFn, gridX, gr
             rotation: 0
         }
     ];
-
-    console.log(`[ROCKY OUTCROP] Generated: ${sizeClass}, ${spheres.length} spheres, ${blocks.size} blocks, ${heightfieldHoles.size} holes`);
-    console.log(`[ROCKY OUTCROP] Bounds: (${bounds.minX},${bounds.minY},${bounds.minZ}) to (${bounds.maxX},${bounds.maxY},${bounds.maxZ})`);
 
     return {
         type: 'rockyOutcrop',

@@ -165,11 +165,6 @@ export class WorkerLandmarkSystem {
         const typeName = passingTypes[typeIndex];
         const typeConfig = LANDMARK_TYPES[typeName];
 
-        // Debug logging for rocky outcrop selection
-        if (passingTypes.includes('rockyOutcrop')) {
-            console.log(`[LANDMARK] Grid (${gridX},${gridZ}): biome=${biome}, passing=${passingTypes.join(',')}, selected=${typeName}`);
-        }
-        
         // Special handling for cave landmarks (require cliff face)
         if (typeConfig.minSlope !== undefined) {
             // Search multiple positions in grid cell for suitable cliff
@@ -349,10 +344,6 @@ export class WorkerLandmarkSystem {
 
         if (landmark) {
             this.indexLandmarkByChunks(landmark);
-            // Debug logging for rocky outcrops
-            if (landmark.type === 'rockyOutcrop') {
-                console.log(`[INDEXED] rockyOutcrop at (${landmark.centerX}, ${landmark.baseY}, ${landmark.centerZ}), blocks.size=${landmark.blocks?.size || 0}`);
-            }
         }
 
         return landmark;
@@ -413,15 +404,7 @@ export class WorkerLandmarkSystem {
      */
     getLandmarksForChunk(chunkX, chunkZ) {
         this.ensureLandmarksForChunk(chunkX, chunkZ);
-        const landmarks = this.chunkLandmarkIndex.get(`${chunkX},${chunkZ}`) || [];
-
-        // Debug: Log when rocky outcrop is retrieved
-        const rockyOutcrops = landmarks.filter(l => l.type === 'rockyOutcrop');
-        if (rockyOutcrops.length > 0) {
-            console.log(`[GET LANDMARKS] Chunk (${chunkX},${chunkZ}): found ${rockyOutcrops.length} rockyOutcrop(s), blocks=${rockyOutcrops[0].blocks?.size || 0}`);
-        }
-
-        return landmarks;
+        return this.chunkLandmarkIndex.get(`${chunkX},${chunkZ}`) || [];
     }
     
     /**
@@ -460,14 +443,6 @@ export class WorkerLandmarkSystem {
         const key = `${x},${y},${z}`;
 
         for (const landmark of landmarks) {
-            // Debug logging for rocky outcrops
-            if (landmark.type === 'rockyOutcrop') {
-                const hasBlock = landmark.blocks && landmark.blocks.has(key);
-                if (hasBlock) {
-                    console.log(`[BLOCK FOUND] rockyOutcrop at ${key}: ${landmark.blocks.get(key)}`);
-                }
-            }
-
             // Check for solid blocks first
             if (landmark.blocks && landmark.blocks.has(key)) {
                 return landmark.blocks.get(key);
@@ -520,10 +495,6 @@ export class WorkerLandmarkSystem {
             const checkBounds = landmark.voxelBounds || landmark.bounds;
             if (x >= checkBounds.minX && x <= checkBounds.maxX &&
                 z >= checkBounds.minZ && z <= checkBounds.maxZ) {
-                // Debug: Log when rocky outcrop is detected
-                if (landmark.type === 'rockyOutcrop') {
-                    console.log(`[IS INSIDE LANDMARK] rockyOutcrop at (${x},${z}) - bounds (${checkBounds.minX},${checkBounds.minZ}) to (${checkBounds.maxX},${checkBounds.maxZ})`);
-                }
                 return true;
             }
         }
