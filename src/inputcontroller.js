@@ -42,6 +42,9 @@ export class InputController {
         // Left-drag state
         this.isLeftDragging = false;
 
+        // Pointer lock snag fix: skip first movement after lock is acquired
+        this.pointerLockJustAcquired = false;
+
         this.setupEventListeners();
     }
     
@@ -99,6 +102,11 @@ export class InputController {
 
             // Handle right-click drag for rotation using pointer lock
             if (this.isRightDragging && document.pointerLockElement) {
+                // Skip first movement event after pointer lock acquired (prevents snag)
+                if (this.pointerLockJustAcquired) {
+                    this.pointerLockJustAcquired = false;
+                    return;
+                }
                 const deltaX = e.movementX;
                 const deltaY = e.movementY;
                 if (this.onRightDrag) {
@@ -166,6 +174,14 @@ export class InputController {
         // Prevent context menu on right-click
         window.addEventListener('contextmenu', (e) => {
             e.preventDefault();
+        });
+
+        // Pointer lock change detection - set flag to skip first movement event
+        document.addEventListener('pointerlockchange', () => {
+            if (document.pointerLockElement) {
+                // Lock was just acquired - flag to skip first movement
+                this.pointerLockJustAcquired = true;
+            }
         });
     }
     
