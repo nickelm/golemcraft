@@ -21,18 +21,21 @@ export class LandmarkDebugRenderer {
         this.pointMarkers = [];
         this.arrows = [];
         this.wireframeBoxes = [];
+        this.wireframeSpheres = [];
         this.coordinateFrames = [];
 
         // Pool sizes
         this.maxPoints = 50;
         this.maxArrows = 50;
         this.maxBoxes = 20;
+        this.maxSpheres = 30;
         this.maxFrames = 10;
 
         // Active marker counts
         this.activePoints = 0;
         this.activeArrows = 0;
         this.activeBoxes = 0;
+        this.activeSpheres = 0;
         this.activeFrames = 0;
 
         // HTML overlay for info display
@@ -45,6 +48,7 @@ export class LandmarkDebugRenderer {
         this.createPointMarkerPool();
         this.createArrowPool();
         this.createWireframeBoxPool();
+        this.createWireframeSpherePool();
         this.createCoordinateFramePool();
         this.createOverlay();
     }
@@ -125,6 +129,24 @@ export class LandmarkDebugRenderer {
             wireframe.renderOrder = 999;
             this.scene.add(wireframe);
             this.wireframeBoxes.push(wireframe);
+        }
+    }
+
+    createWireframeSpherePool() {
+        // Unit sphere wireframe, scaled per use
+        const unitSphere = new THREE.SphereGeometry(1, 12, 8);
+        const edges = new THREE.EdgesGeometry(unitSphere);
+
+        for (let i = 0; i < this.maxSpheres; i++) {
+            const material = new THREE.LineBasicMaterial({
+                color: 0x00ffff,
+                depthTest: false
+            });
+            const wireframe = new THREE.LineSegments(edges.clone(), material);
+            wireframe.visible = false;
+            wireframe.renderOrder = 999;
+            this.scene.add(wireframe);
+            this.wireframeSpheres.push(wireframe);
         }
     }
 
@@ -220,6 +242,9 @@ export class LandmarkDebugRenderer {
         for (let i = 0; i < this.activeBoxes; i++) {
             this.wireframeBoxes[i].visible = false;
         }
+        for (let i = 0; i < this.activeSpheres; i++) {
+            this.wireframeSpheres[i].visible = false;
+        }
         for (let i = 0; i < this.activeFrames; i++) {
             this.coordinateFrames[i].visible = false;
         }
@@ -228,6 +253,7 @@ export class LandmarkDebugRenderer {
         this.activePoints = 0;
         this.activeArrows = 0;
         this.activeBoxes = 0;
+        this.activeSpheres = 0;
         this.activeFrames = 0;
     }
 
@@ -331,6 +357,25 @@ export class LandmarkDebugRenderer {
         box.scale.set(sx, sy, sz);
         box.material.color.setHex(color);
         box.visible = true;
+    }
+
+    /**
+     * Draw a wireframe sphere
+     * @param {number} cx - Center X coordinate
+     * @param {number} cy - Center Y coordinate
+     * @param {number} cz - Center Z coordinate
+     * @param {number} radius - Sphere radius
+     * @param {number} color - Hex color (default: 0x00ffff cyan)
+     */
+    drawSphere(cx, cy, cz, radius, color = 0x00ffff) {
+        if (!this.enabled) return;
+        if (this.activeSpheres >= this.maxSpheres) return;
+
+        const sphere = this.wireframeSpheres[this.activeSpheres++];
+        sphere.position.set(cx, cy, cz);
+        sphere.scale.setScalar(radius);
+        sphere.material.color.setHex(color);
+        sphere.visible = true;
     }
 
     /**
@@ -504,6 +549,14 @@ export class LandmarkDebugRenderer {
             if (landmark.voxelBounds) {
                 this.drawBox(landmark.voxelBounds, 0x00ff00);
             }
+
+            // Draw rocky outcrop specific debug visualization
+            if (landmark.type === 'rockyOutcrop' && landmark.spheres) {
+                // Draw cyan wireframe spheres for each sphere in the outcrop
+                for (const sphere of landmark.spheres) {
+                    this.drawSphere(sphere.cx, sphere.cy, sphere.cz, sphere.radius, 0x00ffff);
+                }
+            }
         }
 
         return landmarks;  // Return for overlay info
@@ -607,7 +660,19 @@ export class LandmarkDebugRenderer {
                     Math.pow((landmark.bounds.minX + landmark.bounds.maxX) / 2 - info.playerPos.x, 2) +
                     Math.pow((landmark.bounds.minZ + landmark.bounds.maxZ) / 2 - info.playerPos.z, 2)
                 ).toFixed(0) : '?';
-                html += `<div style="color: #aaa; font-size: 11px;">- ${type} (${dist}m)</div>`;
+
+                // Format type with size class for rocky outcrops
+                let typeDisplay = type;
+                if (type === 'rockyOutcrop' && landmark.sizeClass) {
+                    typeDisplay = `Rocky Outcrop (${landmark.sizeClass})`;
+                }
+
+                html += `<div style="color: #aaa; font-size: 11px;">- ${typeDisplay} (${dist}m)</div>`;
+
+                // Show hole count for rocky outcrops
+                if (type === 'rockyOutcrop' && landmark.holeCount !== undefined) {
+                    html += `<div style="color: #888; font-size: 10px; margin-left: 10px;">Holes: ${landmark.holeCount}</div>`;
+                }
             }
             html += '</div>';
         }
@@ -644,6 +709,7 @@ export class LandmarkDebugRenderer {
             this.pointMarkers.forEach(m => m.visible = false);
             this.arrows.forEach(a => a.visible = false);
             this.wireframeBoxes.forEach(b => b.visible = false);
+            this.wireframeSpheres.forEach(s => s.visible = false);
             this.coordinateFrames.forEach(f => f.visible = false);
         }
 
@@ -695,6 +761,13 @@ export class LandmarkDebugRenderer {
             b.material.dispose();
         });
 
+        // Dispose wireframe spheres
+        this.wireframeSpheres.forEach(s => {
+            this.scene.remove(s);
+            s.geometry.dispose();
+            s.material.dispose();
+        });
+
         // Dispose coordinate frames
         this.coordinateFrames.forEach(f => {
             this.scene.remove(f);
@@ -708,6 +781,7 @@ export class LandmarkDebugRenderer {
         this.pointMarkers = [];
         this.arrows = [];
         this.wireframeBoxes = [];
+        this.wireframeSpheres = [];
         this.coordinateFrames = [];
     }
 }

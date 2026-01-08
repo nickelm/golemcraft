@@ -504,15 +504,58 @@ export class WorkerLandmarkSystem {
 
     /**
      * Check if heightfield should be skipped at this position
-     * Currently always returns false - caves are under the heightfield, not replacing it
+     * Returns true if any landmark has a heightfield hole at this position
      * @param {number} x - World X
      * @param {number} z - World Z
-     * @returns {boolean} Always false for now
+     * @returns {boolean} True if heightfield should be skipped
      */
     shouldSkipHeightfield(x, z) {
-        // Caves are under the smooth heightfield terrain, not replacing it
-        // The heightfield renders above, cave interiors are carved below
+        const chunkX = Math.floor(x / CHUNK_SIZE);
+        const chunkZ = Math.floor(z / CHUNK_SIZE);
+        const landmarks = this.getLandmarksForChunk(chunkX, chunkZ);
+
+        for (const landmark of landmarks) {
+            if (!landmark.heightfieldHoles) continue;
+
+            // Check if position is in the holes set
+            const holeKey = `${x},${z}`;
+            if (landmark.heightfieldHoles.has(holeKey)) {
+                return true;
+            }
+        }
+
         return false;
+    }
+
+    /**
+     * Get all heightfield holes for landmarks affecting a chunk
+     * Returns array of {lx, lz} objects in chunk-local coordinates
+     * @param {number} chunkX - Chunk X index
+     * @param {number} chunkZ - Chunk Z index
+     * @returns {Array<{lx: number, lz: number}>} Array of hole positions
+     */
+    getHeightfieldHolesForChunk(chunkX, chunkZ) {
+        const holes = [];
+        const landmarks = this.getLandmarksForChunk(chunkX, chunkZ);
+        const worldMinX = chunkX * CHUNK_SIZE;
+        const worldMinZ = chunkZ * CHUNK_SIZE;
+
+        for (const landmark of landmarks) {
+            if (!landmark.heightfieldHoles) continue;
+
+            for (const holeKey of landmark.heightfieldHoles) {
+                const [wx, wz] = holeKey.split(',').map(Number);
+                const lx = wx - worldMinX;
+                const lz = wz - worldMinZ;
+
+                // Only include holes within this chunk
+                if (lx >= 0 && lx < CHUNK_SIZE && lz >= 0 && lz < CHUNK_SIZE) {
+                    holes.push({ lx, lz });
+                }
+            }
+        }
+
+        return holes;
     }
 
     /**
@@ -642,44 +685,55 @@ export class WorkerLandmarkSystem {
     getLandmarkMetadataForChunk(chunkX, chunkZ) {
         const landmarks = this.getLandmarksForChunk(chunkX, chunkZ);
 
-        return landmarks.map(landmark => ({
-            type: landmark.type,
-            // Unique ID for deduplication on main thread
-            id: `${landmark.bounds.minX},${landmark.bounds.minZ}`,
-            bounds: {
-                minX: landmark.bounds.minX,
-                maxX: landmark.bounds.maxX,
-                minY: landmark.bounds.minY,
-                maxY: landmark.bounds.maxY,
-                minZ: landmark.bounds.minZ,
-                maxZ: landmark.bounds.maxZ
-            },
-            voxelBounds: landmark.voxelBounds ? {
-                minX: landmark.voxelBounds.minX,
-                maxX: landmark.voxelBounds.maxX,
-                minY: landmark.voxelBounds.minY,
-                maxY: landmark.voxelBounds.maxY,
-                minZ: landmark.voxelBounds.minZ,
-                maxZ: landmark.voxelBounds.maxZ
-            } : null,
-            clearingBounds: landmark.clearingBounds ? {
-                minX: landmark.clearingBounds.minX,
-                maxX: landmark.clearingBounds.maxX,
-                minY: landmark.clearingBounds.minY,
-                maxY: landmark.clearingBounds.maxY,
-                minZ: landmark.clearingBounds.minZ,
-                maxZ: landmark.clearingBounds.maxZ
-            } : null,
-            chambers: landmark.chambers ? landmark.chambers.map(c => ({
-                minX: c.minX,
-                maxX: c.maxX,
-                minY: c.minY,
-                maxY: c.maxY,
-                minZ: c.minZ,
-                maxZ: c.maxZ
-            })) : null,
-            clearingPadding: landmark.clearingPadding ?? 2
-        }));
+        return landmarks.map(landmark => {
+            const metadata = {
+                type: landmark.type,
+                // Unique ID for deduplication on main thread
+                id: `${landmark.bounds.minX},${landmark.bounds.minZ}`,
+                bounds: {
+                    minX: landmark.bounds.minX,
+                    maxX: landmark.bounds.maxX,
+                    minY: landmark.bounds.minY,
+                    maxY: landmark.bounds.maxY,
+                    minZ: landmark.bounds.minZ,
+                    maxZ: landmark.bounds.maxZ
+                },
+                voxelBounds: landmark.voxelBounds ? {
+                    minX: landmark.voxelBounds.minX,
+                    maxX: landmark.voxelBounds.maxX,
+                    minY: landmark.voxelBounds.minY,
+                    maxY: landmark.voxelBounds.maxY,
+                    minZ: landmark.voxelBounds.minZ,
+                    maxZ: landmark.voxelBounds.maxZ
+                } : null,
+                clearingBounds: landmark.clearingBounds ? {
+                    minX: landmark.clearingBounds.minX,
+                    maxX: landmark.clearingBounds.maxX,
+                    minY: landmark.clearingBounds.minY,
+                    maxY: landmark.clearingBounds.maxY,
+                    minZ: landmark.clearingBounds.minZ,
+                    maxZ: landmark.clearingBounds.maxZ
+                } : null,
+                chambers: landmark.chambers ? landmark.chambers.map(c => ({
+                    minX: c.minX,
+                    maxX: c.maxX,
+                    minY: c.minY,
+                    maxY: c.maxY,
+                    minZ: c.minZ,
+                    maxZ: c.maxZ
+                })) : null,
+                clearingPadding: landmark.clearingPadding ?? 2
+            };
+
+            // Include rocky outcrop specific data for debug visualization
+            if (landmark.type === 'rockyOutcrop' && landmark.metadata) {
+                metadata.sizeClass = landmark.metadata.sizeClass;
+                metadata.spheres = landmark.metadata.spheres;
+                metadata.holeCount = landmark.metadata.holeCount;
+            }
+
+            return metadata;
+        });
     }
 
     /**
