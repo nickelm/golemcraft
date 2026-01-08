@@ -480,8 +480,6 @@ function doGenerateChunk(data) {
 let terrainProvider = null;
 let useDithering = false;
 
-console.log('===== TERRAIN WORKER LOADED - Rocky outcrop support enabled =====');
-
 self.onmessage = function(e) {
     const { type, data } = e.data;
 
