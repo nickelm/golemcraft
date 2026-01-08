@@ -100,6 +100,7 @@ const DIRECTION_VECTORS = {
  * Generate a landmark structure
  */
 export function generateLandmarkStructure(typeName, config, centerX, baseY, centerZ, hashFn, gridX, gridZ, entranceDirection) {
+    console.log(`[LANDMARK GENERATOR] Creating ${typeName} at (${centerX}, ${baseY}, ${centerZ}) grid (${gridX}, ${gridZ})`);
     if (config.generator) {
         return config.generator(config, centerX, baseY, centerZ, hashFn, gridX, gridZ, entranceDirection);
     }
@@ -715,6 +716,16 @@ function generateForestHut(config, centerX, baseY, centerZ, hashFn, gridX, gridZ
 function generateRockyOutcrop(config, centerX, baseY, centerZ, hashFn, gridX, gridZ) {
     console.log(`[ROCKY OUTCROP] Generating at (${centerX}, ${baseY}, ${centerZ}) grid (${gridX}, ${gridZ})`);
     const volume = new VoxelVolume();
+
+    // DEBUG: Add a visible test pillar above the outcrop location
+    // This should be visible even if spheres fail
+    fillBox(
+        volume,
+        centerX - 1, baseY, centerZ - 1,
+        centerX + 2, baseY + 10, centerZ + 2,
+        'tnt', VoxelState.SOLID
+    );
+    console.log(`[ROCKY OUTCROP] DEBUG: Added test pillar, volume size = ${volume.size}`);
 
     // Determine size class using seeded random
     const sizeRoll = hashFn(gridX, gridZ, 11111);

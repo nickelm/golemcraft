@@ -520,6 +520,10 @@ export class WorkerLandmarkSystem {
             const checkBounds = landmark.voxelBounds || landmark.bounds;
             if (x >= checkBounds.minX && x <= checkBounds.maxX &&
                 z >= checkBounds.minZ && z <= checkBounds.maxZ) {
+                // Debug: Log when rocky outcrop is detected
+                if (landmark.type === 'rockyOutcrop') {
+                    console.log(`[IS INSIDE LANDMARK] rockyOutcrop at (${x},${z}) - bounds (${checkBounds.minX},${checkBounds.minZ}) to (${checkBounds.maxX},${checkBounds.maxZ})`);
+                }
                 return true;
             }
         }
