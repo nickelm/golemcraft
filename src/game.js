@@ -13,6 +13,7 @@ import { DroppedTorch } from './droppedtorch.js';
 import { PerformanceMonitor } from './utils/ui/performance-monitor.js';
 import { LoadingOverlay } from './utils/ui/loading-overlay.js';
 import { TerrainLoadingIndicator } from './utils/ui/terrain-loading-indicator.js';
+import { flashScreen, pulseResourceUI } from './utils/ui/feedback.js';
 import { settingsManager } from './settings.js';
 import { CombatManager } from './combat/combatmanager.js';
 
@@ -287,7 +288,7 @@ export class Game {
         this.combatManager.onHeroDamage = (amount, source) => {
             const color = source === 'explosion' ? '#FF6600' : '#FF0000';
             const opacity = source === 'explosion' ? 0.5 : 0.3;
-            this.flashScreen(color, opacity);
+            flashScreen(color, opacity);
         };
 
         this.combatManager.onFloatingNumber = (position, value, type, label) => {
@@ -696,7 +697,7 @@ export class Game {
                 );
             }
             
-            this.flashScreen('#00FF00', 0.3);
+            flashScreen('#00FF00', 0.3);
         } else {
             if (this.resources.hasOwnProperty(item.type)) {
                 this.resources[item.type] += value;
@@ -717,43 +718,13 @@ export class Game {
                     iron: '#A0A0A0',
                     coal: '#FFFFFF'
                 };
-                this.flashScreen(flashColors[item.type] || '#FFD700', 0.2);
-                
-                this.pulseResourceUI(item.type);
+                flashScreen(flashColors[item.type] || '#FFD700', 0.2);
+
+                pulseResourceUI(item.type);
             }
         }
     }
-    
-    flashScreen(color, opacity = 0.3) {
-        const flash = document.createElement('div');
-        flash.style.cssText = `
-            position: fixed;
-            top: 0;
-            left: 0;
-            right: 0;
-            bottom: 0;
-            background: ${color};
-            opacity: ${opacity};
-            pointer-events: none;
-            z-index: 9999;
-            transition: opacity 0.3s;
-        `;
-        document.body.appendChild(flash);
-        
-        setTimeout(() => {
-            flash.style.opacity = '0';
-            setTimeout(() => flash.remove(), 300);
-        }, 100);
-    }
-    
-    pulseResourceUI(resourceType) {
-        const stats = document.getElementById('stats');
-        if (!stats) return;
-        
-        stats.classList.add('resource-pulse');
-        setTimeout(() => stats.classList.remove('resource-pulse'), 500);
-    }
-    
+
     createExplosionCrater(position, radius) {
         this.world.createExplosionCrater(position, radius);
     }
