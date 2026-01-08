@@ -465,28 +465,104 @@ export class ChunkedTerrain {
     }
 
     /**
+     * Set the worker manager reference for mesh rebuilding
+     * @param {TerrainWorkerManager} workerManager - The worker manager instance
+     */
+    setWorkerManager(workerManager) {
+        this.workerManager = workerManager;
+    }
+
+    /**
+     * Rebuild a chunk mesh on main thread from cached data
+     * Replaces existing meshes in scene with newly generated ones
+     *
+     * @param {number} chunkX - Chunk X coordinate
+     * @param {number} chunkZ - Chunk Z coordinate
+     * @returns {boolean} True if mesh was rebuilt, false if chunk not loaded
+     */
+    rebuildChunkMesh(chunkX, chunkZ) {
+        const key = `${chunkX},${chunkZ}`;
+        const existingMeshes = this.chunks.get(key);
+
+        // Can't rebuild if chunk isn't loaded or no worker manager
+        if (!existingMeshes || !this.workerManager) {
+            return false;
+        }
+
+        // Generate new meshes from cached data
+        const newMeshes = this.workerManager.rebuildChunkMesh(chunkX, chunkZ);
+        if (!newMeshes) {
+            return false;
+        }
+
+        // Remove old surface mesh
+        if (existingMeshes.surfaceMesh) {
+            this.scene.remove(existingMeshes.surfaceMesh);
+            existingMeshes.surfaceMesh.geometry.dispose();
+        }
+
+        // Remove old opaque mesh
+        if (existingMeshes.opaqueMesh) {
+            this.scene.remove(existingMeshes.opaqueMesh);
+            existingMeshes.opaqueMesh.geometry.dispose();
+        }
+
+        // Remove old water mesh
+        if (existingMeshes.waterMesh) {
+            this.scene.remove(existingMeshes.waterMesh);
+            existingMeshes.waterMesh.geometry.dispose();
+        }
+
+        // Add new meshes to scene
+        if (newMeshes.surfaceMesh) {
+            this.scene.add(newMeshes.surfaceMesh);
+        }
+        if (newMeshes.opaqueMesh) {
+            this.scene.add(newMeshes.opaqueMesh);
+        }
+        if (newMeshes.waterMesh) {
+            this.scene.add(newMeshes.waterMesh);
+        }
+
+        // Store new meshes
+        this.chunks.set(key, newMeshes);
+        return true;
+    }
+
+    /**
      * Request regeneration of a chunk at world position
-     * This should trigger worker-based regeneration
-     * TODO: Currently a stub - needs ChunkLoader reference to trigger worker regeneration
+     * Rebuilds mesh immediately using cached data (no worker round-trip)
      */
     regenerateChunkAt(x, z) {
         const chunkX = Math.floor(x / CHUNK_SIZE);
         const chunkZ = Math.floor(z / CHUNK_SIZE);
-        console.warn(`[ChunkedTerrain] regenerateChunkAt(${chunkX}, ${chunkZ}) - TODO: implement worker regeneration`);
-        // For now, just mark the chunk as needing regeneration
-        // The actual regeneration should happen via ChunkLoader -> Worker
+        this.rebuildChunkMesh(chunkX, chunkZ);
     }
 
     /**
-     * Request regeneration of chunks in a radius around world position
-     * TODO: Currently a stub - needs ChunkLoader reference to trigger worker regeneration
+     * Regenerate chunks in a radius around world position
+     * Rebuilds all affected chunk meshes immediately using cached data
+     *
+     * @param {number} x - World X coordinate (center)
+     * @param {number} z - World Z coordinate (center)
+     * @param {number} radius - Radius in world units
      */
     regenerateChunksInRadius(x, z, radius) {
         const centerChunkX = Math.floor(x / CHUNK_SIZE);
         const centerChunkZ = Math.floor(z / CHUNK_SIZE);
         const chunkRadius = Math.ceil(radius / CHUNK_SIZE) + 1;
-        console.warn(`[ChunkedTerrain] regenerateChunksInRadius(${centerChunkX}, ${centerChunkZ}, ${chunkRadius} chunks) - TODO: implement worker regeneration`);
-        // For now, just mark the chunks as needing regeneration
-        // The actual regeneration should happen via ChunkLoader -> Worker
+
+        let rebuiltCount = 0;
+        for (let dx = -chunkRadius; dx <= chunkRadius; dx++) {
+            for (let dz = -chunkRadius; dz <= chunkRadius; dz++) {
+                if (this.rebuildChunkMesh(centerChunkX + dx, centerChunkZ + dz)) {
+                    rebuiltCount++;
+                }
+            }
+        }
+
+        if (rebuiltCount > 0) {
+            console.log(`[ChunkedTerrain] Rebuilt ${rebuiltCount} chunk meshes around (${centerChunkX}, ${centerChunkZ})`);
+        }
     }
 }

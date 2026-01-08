@@ -19,8 +19,10 @@
  */
 
 import * as THREE from 'three';
-import { ChunkBlockCache } from '../world/chunkblockcache.js';
+import { ChunkBlockCache, CHUNK_SIZE } from '../world/chunkblockcache.js';
 import { LandmarkRegistry } from '../world/landmarks/landmarkregistry.js';
+import { MainThreadTerrainProvider } from '../world/terrain/mainthreadterrainprovider.js';
+import { generateSurfaceMesh, generateVoxelMesh, generateWaterMesh } from '../world/terrain/chunkdatagenerator.js';
 
 // DEBUG: Set to true to see cancellation logging
 const DEBUG_CANCELLATION = false;
@@ -255,6 +257,9 @@ export class TerrainWorkerManager {
      * @param {string} textureBlending - 'high' | 'medium' | 'low'
      */
     init(seed, textureBlending = 'high') {
+        // Store dithering mode for main thread mesh rebuilds
+        this.useDithering = textureBlending === 'low';
+
         return new Promise((resolve) => {
             this.readyResolve = resolve;
             this.worker.postMessage({
@@ -434,5 +439,62 @@ export class TerrainWorkerManager {
             processingCount: this.processingChunks.size,
             cachedChunks: this.blockCache.size
         };
+    }
+
+    /**
+     * Rebuild chunk mesh on main thread from cached data
+     * Used for immediate visual feedback after explosions without worker round-trip
+     *
+     * @param {number} chunkX - Chunk X coordinate
+     * @param {number} chunkZ - Chunk Z coordinate
+     * @returns {Object|null} Mesh data { surfaceMesh, opaqueMesh, waterMesh } or null if chunk not cached
+     */
+    rebuildChunkMesh(chunkX, chunkZ) {
+        // Get cached chunk data
+        const chunk = this.blockCache.chunks.get(`${chunkX},${chunkZ}`);
+        if (!chunk) {
+            return null;
+        }
+
+        // Create main-thread terrain provider that wraps the cache
+        const terrainProvider = new MainThreadTerrainProvider(this.blockCache);
+
+        // Build heightfield hole mask from ephemeral holes
+        const heightfieldHoleMask = this.blockCache.buildHeightfieldHoleMask(chunkX, chunkZ);
+
+        // Generate mesh geometry using existing pure functions
+        const surface = generateSurfaceMesh(
+            chunk.heightmap,
+            chunk.voxelMask,
+            heightfieldHoleMask,
+            chunk.surfaceTypes,
+            terrainProvider,
+            chunkX,
+            chunkZ,
+            this.useDithering
+        );
+
+        const { opaque } = generateVoxelMesh(
+            terrainProvider,
+            chunk.voxelMask,
+            chunkX,
+            chunkZ,
+            heightfieldHoleMask
+        );
+
+        const water = generateWaterMesh(chunk.heightmap);
+
+        // Calculate world position
+        const worldX = chunkX * CHUNK_SIZE;
+        const worldZ = chunkZ * CHUNK_SIZE;
+
+        // Create Three.js meshes using existing mesh creation methods
+        return this.createMeshesFromData({
+            surface,
+            opaque,
+            water,
+            worldX,
+            worldZ
+        });
     }
 }

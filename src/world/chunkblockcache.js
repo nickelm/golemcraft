@@ -329,6 +329,51 @@ export class ChunkBlockCache {
     }
 
     /**
+     * Build a heightfield hole mask for mesh generation
+     * Converts the Set of hole keys to a Uint8Array mask
+     * @param {number} chunkX - Chunk X coordinate
+     * @param {number} chunkZ - Chunk Z coordinate
+     * @returns {Uint8Array} Mask with 1 for holes, 0 otherwise
+     */
+    buildHeightfieldHoleMask(chunkX, chunkZ) {
+        const mask = new Uint8Array(CHUNK_SIZE * CHUNK_SIZE);
+        const holes = this.getHeightfieldHoles(chunkX, chunkZ);
+        if (holes) {
+            for (const holeKey of holes) {
+                const [lx, lz] = holeKey.split(',').map(Number);
+                if (lx >= 0 && lx < CHUNK_SIZE && lz >= 0 && lz < CHUNK_SIZE) {
+                    mask[lz * CHUNK_SIZE + lx] = 1;
+                }
+            }
+        }
+        return mask;
+    }
+
+    /**
+     * Destroy a block in the cached blockData
+     * Sets the block to air (0) for immediate mesh regeneration
+     * @param {number} worldX - World X coordinate
+     * @param {number} y - Y coordinate
+     * @param {number} worldZ - World Z coordinate
+     * @returns {boolean} True if block was destroyed, false if chunk not loaded
+     */
+    destroyBlockAt(worldX, y, worldZ) {
+        const chunk = this.getChunkAt(worldX, worldZ);
+        if (!chunk || y < 0 || y >= MAX_HEIGHT) return false;
+
+        const localX = Math.floor(worldX) - chunk.worldMinX;
+        const localZ = Math.floor(worldZ) - chunk.worldMinZ;
+
+        if (localX < 0 || localX >= CHUNK_SIZE || localZ < 0 || localZ >= CHUNK_SIZE) {
+            return false;
+        }
+
+        const index = getBlockIndex(localX, y, localZ);
+        chunk.blockData[index] = 0; // Set to air
+        return true;
+    }
+
+    /**
      * Clear heightfield holes for a chunk (called on unload)
      * @param {number} chunkX - Chunk X coordinate
      * @param {number} chunkZ - Chunk Z coordinate

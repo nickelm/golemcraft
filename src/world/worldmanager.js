@@ -109,6 +109,9 @@ export class WorldManager {
         // This enables smooth collision on heightfield terrain (voxelMask = 0)
         initHeightfieldCollision(this.chunkLoader.workerManager.blockCache);
 
+        // Wire up worker manager to chunked terrain for mesh rebuilding
+        this.chunkedTerrain.setWorkerManager(this.chunkLoader.workerManager);
+
         // Request chunks around player position
         const chunksNeeded = this.chunkLoader.requestChunksAround(playerPosition);
         console.log(`Queued ${chunksNeeded} chunks for initial load`);
@@ -263,7 +266,7 @@ export class WorldManager {
 
     /**
      * Create explosion crater
-     * Stores destroyed blocks locally and triggers worker regeneration
+     * Destroys blocks in cache for immediate mesh rebuild, then syncs to worker for persistence
      * Also marks heightfield holes where crater is visible from above
      */
     createExplosionCrater(position, radius) {
@@ -275,6 +278,9 @@ export class WorldManager {
         // Track which (x,z) cells have blocks destroyed at or near surface
         const holeCells = new Set();
 
+        // Get block cache for immediate destruction
+        const blockCache = this.chunkLoader.workerManager?.blockCache;
+
         for (let dx = -intRadius; dx <= intRadius; dx++) {
             for (let dy = -intRadius; dy <= intRadius; dy++) {
                 for (let dz = -intRadius; dz <= intRadius; dz++) {
@@ -284,8 +290,14 @@ export class WorldManager {
                         const by = py + dy;
                         const bz = pz + dz;
                         if (by > 0) {  // Bedrock at y=0 is indestructible
+                            // Add to destroyedBlocks set for persistence/worker sync
                             const key = `${bx},${by},${bz}`;
                             this.destroyedBlocks.add(key);
+
+                            // Destroy block in cache for immediate mesh rebuild
+                            if (blockCache) {
+                                blockCache.destroyBlockAt(bx, by, bz);
+                            }
 
                             // Check if this block is at or near the terrain surface
                             // Mark (x,z) as a hole cell if explosion reaches surface level
@@ -300,7 +312,6 @@ export class WorldManager {
         }
 
         // Add heightfield holes where crater is visible from above
-        const blockCache = this.chunkLoader.workerManager?.blockCache;
         if (blockCache) {
             for (const cellKey of holeCells) {
                 const [x, z] = cellKey.split(',').map(Number);
@@ -308,13 +319,20 @@ export class WorldManager {
             }
         }
 
-        // Sync to worker and trigger chunk regeneration
+        // Sync to worker for persistence (background)
         if (this.chunkLoader.workerManager) {
             this.chunkLoader.workerManager.updateDestroyedBlocks(this.destroyedBlocks);
-            // Also sync heightfield holes to worker
             this.chunkLoader.workerManager.updateHeightfieldHoles();
         }
+
+        // Rebuild chunk meshes immediately (no worker round-trip)
         this.chunkedTerrain.regenerateChunksInRadius(px, pz, intRadius + 1);
+
+        // Remove trees and other objects in explosion radius
+        if (this.objectGenerator) {
+            this.objectGenerator.removeObjectsInRadius(position, radius + 1);
+        }
+
         this.chunkLoader.saveModifiedChunks();
     }
 

@@ -979,15 +979,60 @@ function generateWaterMesh(heightmap) {
 // VOXEL MESH
 // ============================================================================
 
-function generateVoxelMesh(terrainProvider, voxelMask, chunkX, chunkZ) {
+function generateVoxelMesh(terrainProvider, voxelMask, chunkX, chunkZ, heightfieldHoleMask = null) {
     const worldMinX = chunkX * CHUNK_SIZE;
     const worldMinZ = chunkZ * CHUNK_SIZE;
     const opaqueData = { positions: [], normals: [], uvs: [], colors: [], indices: [] };
     const LANDMARK_MAX_HEIGHT = 20;
-    
+
+    // Helper to check if a cell (by local coords) is a hole cell
+    const isHoleAt = (lx, lz) => {
+        if (!heightfieldHoleMask) return false;
+        if (lx < 0 || lx >= CHUNK_SIZE || lz < 0 || lz >= CHUNK_SIZE) {
+            // For cells outside this chunk, check via terrainProvider
+            return terrainProvider.shouldSkipHeightfield?.(worldMinX + lx, worldMinZ + lz) || false;
+        }
+        return heightfieldHoleMask[lz * CHUNK_SIZE + lx] === 1;
+    };
+
+    // Helper to check if a cell is adjacent to any hole cell (for crater walls)
+    // Includes diagonal neighbors for better coverage on hillsides
+    const isAdjacentToHole = (lx, lz) => {
+        // Cardinal directions
+        if (isHoleAt(lx - 1, lz) || isHoleAt(lx + 1, lz) ||
+            isHoleAt(lx, lz - 1) || isHoleAt(lx, lz + 1)) {
+            return true;
+        }
+        // Diagonal directions
+        if (isHoleAt(lx - 1, lz - 1) || isHoleAt(lx + 1, lz - 1) ||
+            isHoleAt(lx - 1, lz + 1) || isHoleAt(lx + 1, lz + 1)) {
+            return true;
+        }
+        return false;
+    };
+
+    // Helper to check if a cell is near crater (within 2 cells) for walls on steep terrain
+    const isNearHole = (lx, lz) => {
+        for (let dx = -2; dx <= 2; dx++) {
+            for (let dz = -2; dz <= 2; dz++) {
+                if (dx === 0 && dz === 0) continue;
+                if (isHoleAt(lx + dx, lz + dz)) return true;
+            }
+        }
+        return false;
+    };
+
     for (let lz = 0; lz < CHUNK_SIZE; lz++) {
         for (let lx = 0; lx < CHUNK_SIZE; lx++) {
-            if (voxelMask[lz * CHUNK_SIZE + lx] !== 1) continue;
+            const cellIndex = lz * CHUNK_SIZE + lx;
+            // Process cells that are:
+            // 1. Voxel regions (landmarks/caves)
+            // 2. Hole cells (crater interior)
+            // 3. Near hole cells (crater walls need exposed faces, expanded for hillsides)
+            const isVoxelCell = voxelMask[cellIndex] === 1;
+            const isHoleCell = isHoleAt(lx, lz);
+            const needsCraterWalls = isNearHole(lx, lz);
+            if (!isVoxelCell && !isHoleCell && !needsCraterWalls) continue;
             
             const x = worldMinX + lx;
             const z = worldMinZ + lz;
@@ -1014,13 +1059,15 @@ function generateVoxelMesh(terrainProvider, voxelMask, chunkX, chunkZ) {
                     } else if (isBlockTransparent(neighborType)) {
                         visible = true;
                     }
-                    
-                    if (!visible && ny === 0) {
+
+                    // For voxel cells (landmarks), show faces at boundary with heightfield terrain
+                    // But NOT for crater wall cells - those should only show faces where neighbor is air
+                    if (!visible && ny === 0 && isVoxelCell) {
                         if (!terrainProvider.shouldUseVoxels(neighborX, neighborZ)) {
                             visible = true;
                         }
                     }
-                    
+
                     if (!visible) continue;
 
                     // Get authored brightness for the adjacent air space (set by voxel primitives)
@@ -1098,7 +1145,7 @@ export function generateChunkData(terrainProvider, chunkX, chunkZ, useDithering 
     const blockData = generateBlockData(terrainProvider, chunkX, chunkZ);
 
     const surface = generateSurfaceMesh(heightmap, voxelMask, heightfieldHoleMask, surfaceTypes, terrainProvider, chunkX, chunkZ, useDithering);
-    const { opaque: voxelOpaque } = generateVoxelMesh(terrainProvider, voxelMask, chunkX, chunkZ);
+    const { opaque: voxelOpaque } = generateVoxelMesh(terrainProvider, voxelMask, chunkX, chunkZ, heightfieldHoleMask);
     const water = generateWaterMesh(heightmap);
 
     return {
@@ -1162,3 +1209,6 @@ export function getTransferables(chunkData) {
 
     return transferables;
 }
+
+// Export mesh generation functions for main thread rebuild
+export { generateSurfaceMesh, generateVoxelMesh, generateWaterMesh };

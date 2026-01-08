@@ -123,6 +123,53 @@ export class ObjectGenerator {
     }
     
     /**
+     * Remove objects within a radius of a world position (e.g., explosion)
+     * Works by setting instance scale to 0 for affected objects
+     * @param {THREE.Vector3} position - Center of explosion
+     * @param {number} radius - Radius to clear
+     */
+    removeObjectsInRadius(position, radius) {
+        const radiusSq = radius * radius;
+        const matrix = new THREE.Matrix4();
+        const pos = new THREE.Vector3();
+        const rot = new THREE.Quaternion();
+        const scale = new THREE.Vector3();
+        const zeroScale = new THREE.Vector3(0, 0, 0);
+
+        // Check all chunks that might be affected
+        this.objectsByChunk.forEach((meshes) => {
+            meshes.forEach(mesh => {
+                if (!mesh || !mesh.isInstancedMesh) return;
+
+                let updated = false;
+                for (let i = 0; i < mesh.count; i++) {
+                    mesh.getMatrixAt(i, matrix);
+                    matrix.decompose(pos, rot, scale);
+
+                    // Skip already removed instances (scale 0)
+                    if (scale.x === 0) continue;
+
+                    const dx = pos.x - position.x;
+                    const dy = pos.y - position.y;
+                    const dz = pos.z - position.z;
+                    const distSq = dx * dx + dy * dy + dz * dz;
+
+                    if (distSq <= radiusSq) {
+                        // Set scale to 0 to "remove" this instance
+                        matrix.compose(pos, rot, zeroScale);
+                        mesh.setMatrixAt(i, matrix);
+                        updated = true;
+                    }
+                }
+
+                if (updated) {
+                    mesh.instanceMatrix.needsUpdate = true;
+                }
+            });
+        });
+    }
+
+    /**
      * Remove objects for an unloaded chunk
      */
     unloadChunk(chunkX, chunkZ) {
