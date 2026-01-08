@@ -599,10 +599,7 @@ export class Game {
 
         this.touchControls.update(deltaTime);
         this.handleInput(deltaTime);
-        
-        // Update world (chunk loading/unloading)
-        this.world.update(this.hero.position);
-        
+
         // Update entities
         this.entities.forEach(entity => {
             // entity.update(deltaTime, this.world.terrain, this.world.objectGenerator);
