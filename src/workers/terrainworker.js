@@ -110,10 +110,25 @@ class WorkerTerrainProvider {
         this.biomeCache = new Map();
         this.destroyedBlocks = new Set();
         this.landmarkSystem = new WorkerLandmarkSystem(this, seed);
+
+        // Ephemeral heightfield holes from explosions
+        // Map of "chunkX,chunkZ" -> Set of "lx,lz" strings
+        this.heightfieldHoles = new Map();
     }
 
     setDestroyedBlocks(blocks) {
         this.destroyedBlocks = new Set(blocks);
+    }
+
+    /**
+     * Set heightfield holes from main thread
+     * @param {Object} holesData - Object with chunkKey -> array of "lx,lz" strings
+     */
+    setHeightfieldHoles(holesData) {
+        this.heightfieldHoles.clear();
+        for (const [chunkKey, holes] of Object.entries(holesData)) {
+            this.heightfieldHoles.set(chunkKey, new Set(holes));
+        }
     }
 
     getBiome(x, z) {
@@ -290,6 +305,10 @@ class WorkerTerrainProvider {
     }
 
     getBlockType(x, y, z) {
+        // Bedrock layer at y=0 is always indestructible
+        if (y === 0) return 'bedrock';
+
+        // Destroyed blocks return null (air) - but bedrock cannot be destroyed
         if (this.destroyedBlocks.has(`${x},${y},${z}`)) return null;
 
         const landmarkBlock = this.landmarkSystem.getLandmarkBlockType(x, y, z);
@@ -350,13 +369,33 @@ class WorkerTerrainProvider {
     }
 
     /**
-     * Check if heightfield should be skipped at this position (for cave floors, etc.)
+     * Check if heightfield should be skipped at this position (for cave floors, explosions, etc.)
      * @param {number} x - World X
      * @param {number} z - World Z
      * @returns {boolean} True to skip heightfield rendering at this cell
      */
     shouldSkipHeightfield(x, z) {
-        return this.landmarkSystem.shouldSkipHeightfield(x, z);
+        // Check landmark-based holes first
+        if (this.landmarkSystem.shouldSkipHeightfield(x, z)) {
+            return true;
+        }
+
+        // Check explosion-created heightfield holes
+        const CHUNK_SIZE = 16;
+        const chunkX = Math.floor(x / CHUNK_SIZE);
+        const chunkZ = Math.floor(z / CHUNK_SIZE);
+        const chunkKey = `${chunkX},${chunkZ}`;
+
+        const holes = this.heightfieldHoles.get(chunkKey);
+        if (holes) {
+            const localX = x - chunkX * CHUNK_SIZE;
+            const localZ = z - chunkZ * CHUNK_SIZE;
+            if (holes.has(`${localX},${localZ}`)) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     prepareLandmarksForChunk(chunkX, chunkZ) {
@@ -477,6 +516,12 @@ self.onmessage = function(e) {
         case 'updateDestroyedBlocks':
             if (terrainProvider) {
                 terrainProvider.setDestroyedBlocks(data.blocks);
+            }
+            break;
+
+        case 'updateHeightfieldHoles':
+            if (terrainProvider) {
+                terrainProvider.setHeightfieldHoles(data.holes);
             }
             break;
 

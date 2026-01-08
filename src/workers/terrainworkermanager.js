@@ -409,6 +409,22 @@ export class TerrainWorkerManager {
     }
 
     /**
+     * Sync heightfield holes to worker
+     * Converts the Map of Sets to a serializable format
+     */
+    updateHeightfieldHoles() {
+        // Convert heightfieldHoles Map to serializable object
+        const holesData = {};
+        for (const [chunkKey, holeSet] of this.blockCache.heightfieldHoles) {
+            holesData[chunkKey] = Array.from(holeSet);
+        }
+        this.worker.postMessage({
+            type: 'updateHeightfieldHoles',
+            data: { holes: holesData }
+        });
+    }
+
+    /**
      * Get stats for debugging
      */
     getStats() {

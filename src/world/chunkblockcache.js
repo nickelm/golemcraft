@@ -30,7 +30,11 @@ export const BLOCK_TYPE_IDS = {
     water: 6,
     water_full: 7,
     ice: 8,
-    mayan_stone: 9
+    mayan_stone: 9,
+    cave_stone: 10,
+    cave_floor: 11,
+    bedrock: 12,
+    tnt: 13
 };
 
 // Reverse lookup: ID -> type name
@@ -268,6 +272,69 @@ export class ChunkBlockCache {
     constructor() {
         // Map of "chunkX,chunkZ" -> ChunkBlockData
         this.chunks = new Map();
+
+        // Ephemeral heightfield holes created by explosions
+        // Map of "chunkX,chunkZ" -> Set of "lx,lz" strings (local coordinates)
+        // Cleared when chunk unloads, not persisted
+        this.heightfieldHoles = new Map();
+    }
+
+    /**
+     * Add a heightfield hole at world coordinates
+     * @param {number} worldX - World X coordinate
+     * @param {number} worldZ - World Z coordinate
+     */
+    addHeightfieldHole(worldX, worldZ) {
+        const chunkX = Math.floor(worldX / CHUNK_SIZE);
+        const chunkZ = Math.floor(worldZ / CHUNK_SIZE);
+        const chunkKey = `${chunkX},${chunkZ}`;
+
+        const localX = worldX - chunkX * CHUNK_SIZE;
+        const localZ = worldZ - chunkZ * CHUNK_SIZE;
+        const holeKey = `${localX},${localZ}`;
+
+        if (!this.heightfieldHoles.has(chunkKey)) {
+            this.heightfieldHoles.set(chunkKey, new Set());
+        }
+        this.heightfieldHoles.get(chunkKey).add(holeKey);
+    }
+
+    /**
+     * Get heightfield holes for a chunk
+     * @param {number} chunkX - Chunk X coordinate
+     * @param {number} chunkZ - Chunk Z coordinate
+     * @returns {Set|null} Set of "lx,lz" hole coordinates or null
+     */
+    getHeightfieldHoles(chunkX, chunkZ) {
+        return this.heightfieldHoles.get(`${chunkX},${chunkZ}`) || null;
+    }
+
+    /**
+     * Check if a cell has a heightfield hole
+     * @param {number} worldX - World X coordinate
+     * @param {number} worldZ - World Z coordinate
+     * @returns {boolean} True if cell has a hole
+     */
+    hasHeightfieldHole(worldX, worldZ) {
+        const chunkX = Math.floor(worldX / CHUNK_SIZE);
+        const chunkZ = Math.floor(worldZ / CHUNK_SIZE);
+        const chunkKey = `${chunkX},${chunkZ}`;
+
+        const holes = this.heightfieldHoles.get(chunkKey);
+        if (!holes) return false;
+
+        const localX = worldX - chunkX * CHUNK_SIZE;
+        const localZ = worldZ - chunkZ * CHUNK_SIZE;
+        return holes.has(`${localX},${localZ}`);
+    }
+
+    /**
+     * Clear heightfield holes for a chunk (called on unload)
+     * @param {number} chunkX - Chunk X coordinate
+     * @param {number} chunkZ - Chunk Z coordinate
+     */
+    clearHeightfieldHoles(chunkX, chunkZ) {
+        this.heightfieldHoles.delete(`${chunkX},${chunkZ}`);
     }
     
     /**
@@ -283,12 +350,15 @@ export class ChunkBlockCache {
     
     /**
      * Remove terrain data for a chunk (when unloaded)
+     * Clears both chunk data and any ephemeral heightfield holes
      * @param {number} chunkX - Chunk X coordinate
      * @param {number} chunkZ - Chunk Z coordinate
      */
     removeChunk(chunkX, chunkZ) {
         const key = `${chunkX},${chunkZ}`;
         this.chunks.delete(key);
+        // Clear ephemeral heightfield holes when chunk unloads
+        this.clearHeightfieldHoles(chunkX, chunkZ);
     }
     
     /**

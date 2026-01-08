@@ -405,6 +405,49 @@ export class LandmarkDebugRenderer {
     }
 
     /**
+     * Draw heightfield holes (explosion craters) from the chunk block cache
+     * @param {ChunkBlockCache} blockCache - The block cache with heightfield holes
+     * @param {number} playerX - Player X position
+     * @param {number} playerZ - Player Z position
+     * @param {Function} getHeight - Function to get terrain height at position
+     * @param {number} radius - Search radius in chunks (default: 2)
+     * @returns {number} Count of holes drawn
+     */
+    drawHeightfieldHoles(blockCache, playerX, playerZ, getHeight, radius = 2) {
+        if (!this.enabled || !blockCache) return 0;
+
+        const CHUNK_SIZE = 16;
+        const playerChunkX = Math.floor(playerX / CHUNK_SIZE);
+        const playerChunkZ = Math.floor(playerZ / CHUNK_SIZE);
+
+        let holeCount = 0;
+
+        // Iterate nearby chunks and their holes
+        for (let dx = -radius; dx <= radius; dx++) {
+            for (let dz = -radius; dz <= radius; dz++) {
+                const chunkX = playerChunkX + dx;
+                const chunkZ = playerChunkZ + dz;
+                const holes = blockCache.getHeightfieldHoles(chunkX, chunkZ);
+
+                if (holes) {
+                    for (const holeKey of holes) {
+                        const [lx, lz] = holeKey.split(',').map(Number);
+                        const worldX = chunkX * CHUNK_SIZE + lx;
+                        const worldZ = chunkZ * CHUNK_SIZE + lz;
+                        const height = getHeight(worldX, worldZ);
+
+                        // Draw red semi-transparent point at hole location
+                        this.drawPoint(worldX + 0.5, height + 0.1, worldZ + 0.5, 0xff0000, 0.4);
+                        holeCount++;
+                    }
+                }
+            }
+        }
+
+        return holeCount;
+    }
+
+    /**
      * Draw landmarks from the landmark registry
      * @param {LandmarkRegistry} landmarkRegistry - The landmark registry instance
      * @param {number} playerX - Player X position
@@ -489,6 +532,28 @@ export class LandmarkDebugRenderer {
         }
         if (info.biome) {
             html += `<div>Biome: ${info.biome}</div>`;
+        }
+
+        // Terrain type indicator
+        if (info.terrainType) {
+            const typeColors = {
+                heightfield: '#0f0',
+                voxel: '#ff0',
+                hole: '#f00'
+            };
+            const color = typeColors[info.terrainType] || '#888';
+            html += `<div style="color: ${color};">Standing on: ${info.terrainType}</div>`;
+        }
+
+        // Heightfield holes info
+        if (info.holeCount !== undefined) {
+            const color = info.holeCount > 0 ? '#f66' : '#888';
+            html += `<div style="color: ${color};">Holes nearby: ${info.holeCount}</div>`;
+        }
+
+        // Bedrock indicator
+        if (info.nearBedrock) {
+            html += '<div style="color: #888;">Near bedrock (y=0)</div>';
         }
 
         // Landmark info

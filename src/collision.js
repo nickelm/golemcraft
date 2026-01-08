@@ -42,23 +42,36 @@ class HeightfieldCollisionProvider {
     
     /**
      * Check if a single point is on heightfield terrain (vs voxel)
+     * Returns false for voxel regions OR heightfield holes (explosion craters)
      */
     isHeightfieldAt(worldX, worldZ) {
         const { chunkX, chunkZ, localX, localZ } = this.getChunkCoords(worldX, worldZ);
         const key = `${chunkX},${chunkZ}`;
-        
+
         // Use the chunks Map directly
         const chunkData = this.cache.chunks.get(key);
         if (!chunkData || !chunkData.voxelMask) {
             return true;  // Default to heightfield if no data
         }
-        
+
         const ix = Math.floor(localX);
         const iz = Math.floor(localZ);
         const clampedX = Math.max(0, Math.min(CHUNK_SIZE - 1, ix));
         const clampedZ = Math.max(0, Math.min(CHUNK_SIZE - 1, iz));
-        
-        return chunkData.voxelMask[clampedZ * CHUNK_SIZE + clampedX] === 0;
+
+        // Check voxel mask
+        if (chunkData.voxelMask[clampedZ * CHUNK_SIZE + clampedX] === 1) {
+            return false;  // Voxel region
+        }
+
+        // Check for heightfield holes (explosion craters)
+        const floorX = Math.floor(worldX);
+        const floorZ = Math.floor(worldZ);
+        if (this.cache.hasHeightfieldHole(floorX, floorZ)) {
+            return false;  // Hole - use voxel collision
+        }
+
+        return true;  // Heightfield terrain
     }
     
     /**

@@ -65,7 +65,9 @@ export const BLOCK_TYPES = {
     ice: { tile: [6, 0] },
     mayan_stone: { tile: [7, 0] },
     cave_stone: { tile: [1, 0] },   // Placeholder: uses stone texture
-    cave_floor: { tile: [3, 0] }    // Placeholder: uses dirt texture
+    cave_floor: { tile: [3, 0] },   // Placeholder: uses dirt texture
+    bedrock: { tile: [1, 0] },      // Indestructible bottom layer (uses stone texture)
+    tnt: { tile: [8, 0] }           // Explosive block (red texture at [8,0])
 };
 
 export const BLOCK_TYPE_IDS = {
@@ -80,7 +82,9 @@ export const BLOCK_TYPE_IDS = {
     ice: 8,
     mayan_stone: 9,
     cave_stone: 10,
-    cave_floor: 11
+    cave_floor: 11,
+    bedrock: 12,
+    tnt: 13
 };
 
 // Biome ID encoding for transfer to main thread
