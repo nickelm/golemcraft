@@ -17,6 +17,7 @@ import {
     carveBox,
     carveBoxGradient,
     carveSphereRadialBrightness,
+    fillSphere,
     stairs,
     pillar
 } from '../voxel/index.js';
@@ -54,6 +55,16 @@ export const LANDMARK_TYPES = {
         roofBlockType: 'mayan_stone', // Placeholder for thatch/shingles
         foundationBlockType: 'stone', // Cobblestone-style fill
         generator: generateForestHut
+    },
+
+    rockyOutcrop: {
+        name: 'Rocky Outcrop',
+        biomes: ['plains', 'mountains', 'desert', 'snow', 'jungle'],
+        rarity: 0.6,               // Common natural formation
+        minHeight: 8,
+        maxHeight: 50,
+        baseSize: 10,              // Max footprint size for spacing
+        generator: generateRockyOutcrop
     }
     // missionCave: DISABLED - needs VoxelFrame API for proper terrain-relative placement
     // See summary in conversation for proposed API design
@@ -683,6 +694,186 @@ function generateForestHut(config, centerX, baseY, centerZ, hashFn, gridX, gridZ
                 z: centerZ
             },
             entranceDirection
+        }
+    };
+}
+
+/**
+ * Generate a Rocky Outcrop - natural rock formation protruding from terrain
+ *
+ * Structure:
+ * - 1-3 overlapping spheres creating organic boulder shapes
+ * - Primary sphere centered at terrain level
+ * - Secondary/tertiary spheres offset to create irregular shape
+ * - Heightfield holes where spheres intersect terrain
+ *
+ * Size classes:
+ * - Small (50%): 1 sphere, radius 2-3
+ * - Medium (35%): 2 spheres, radius 2-4
+ * - Large (15%): 3 spheres, radius 3-5
+ */
+function generateRockyOutcrop(config, centerX, baseY, centerZ, hashFn, gridX, gridZ) {
+    const volume = new VoxelVolume();
+
+    // Determine size class using seeded random
+    const sizeRoll = hashFn(gridX, gridZ, 11111);
+
+    let numSpheres;
+    let minRadius, maxRadius;
+    let sizeClass;
+
+    if (sizeRoll < 0.50) {
+        // Small: 50% chance, 1 sphere
+        numSpheres = 1;
+        minRadius = 2;
+        maxRadius = 3;
+        sizeClass = 'small';
+    } else if (sizeRoll < 0.85) {
+        // Medium: 35% chance, 2 spheres
+        numSpheres = 2;
+        minRadius = 2;
+        maxRadius = 4;
+        sizeClass = 'medium';
+    } else {
+        // Large: 15% chance, 3 spheres
+        numSpheres = 3;
+        minRadius = 3;
+        maxRadius = 5;
+        sizeClass = 'large';
+    }
+
+    // Select block type based on biome (passed implicitly via landmark system context)
+    // For now, use stone for all biomes (sandstone doesn't exist in the atlas)
+    const blockType = 'stone';
+
+    // Generate sphere placements
+    const spheres = [];
+
+    // Primary sphere - centered at terrain, slightly embedded
+    const primaryRadius = minRadius + hashFn(gridX, gridZ, 22222) * (maxRadius - minRadius);
+    const primarySphere = {
+        cx: centerX,
+        cy: baseY - 1,  // Embedded 1 block into terrain
+        cz: centerZ,
+        radius: Math.round(primaryRadius)
+    };
+    spheres.push(primarySphere);
+
+    // Secondary sphere (for medium and large)
+    if (numSpheres >= 2) {
+        const angle2 = hashFn(gridX, gridZ, 33333) * Math.PI * 2;
+        const dist2 = hashFn(gridX, gridZ, 44444) * primaryRadius * 0.8;
+        const secondaryRadius = primaryRadius * (0.7 + hashFn(gridX, gridZ, 55555) * 0.3);
+        const yOffset2 = (hashFn(gridX, gridZ, 66666) - 0.5) * 2;  // -1 to +1
+
+        spheres.push({
+            cx: Math.round(centerX + Math.cos(angle2) * dist2),
+            cy: Math.round(baseY - 1 + yOffset2),
+            cz: Math.round(centerZ + Math.sin(angle2) * dist2),
+            radius: Math.round(secondaryRadius)
+        });
+    }
+
+    // Tertiary sphere (for large only)
+    if (numSpheres >= 3) {
+        const angle3 = hashFn(gridX, gridZ, 77777) * Math.PI * 2;
+        const dist3 = hashFn(gridX, gridZ, 88888) * primaryRadius * 0.7;
+        const tertiaryRadius = primaryRadius * (0.6 + hashFn(gridX, gridZ, 99999) * 0.3);
+        const yOffset3 = (hashFn(gridX, gridZ, 12121) - 0.5) * 2;
+
+        spheres.push({
+            cx: Math.round(centerX + Math.cos(angle3) * dist3),
+            cy: Math.round(baseY - 1 + yOffset3),
+            cz: Math.round(centerZ + Math.sin(angle3) * dist3),
+            radius: Math.round(tertiaryRadius)
+        });
+    }
+
+    // Generate voxels for each sphere
+    for (const sphere of spheres) {
+        fillSphere(
+            volume,
+            sphere.cx,
+            sphere.cy,
+            sphere.cz,
+            sphere.radius,
+            blockType,
+            VoxelState.SOLID
+        );
+    }
+
+    // Blend volume into blocks map
+    const blocks = new Map();
+    const brightnessOverrides = volume.blendIntoWorld(blocks, 0, 0, 0, null);
+
+    // Calculate bounds (AABB containing all spheres plus padding)
+    let minX = Infinity, maxX = -Infinity;
+    let minY = Infinity, maxY = -Infinity;
+    let minZ = Infinity, maxZ = -Infinity;
+
+    for (const sphere of spheres) {
+        minX = Math.min(minX, sphere.cx - sphere.radius - 1);
+        maxX = Math.max(maxX, sphere.cx + sphere.radius + 1);
+        minY = Math.min(minY, sphere.cy - sphere.radius - 1);
+        maxY = Math.max(maxY, sphere.cy + sphere.radius + 1);
+        minZ = Math.min(minZ, sphere.cz - sphere.radius - 1);
+        maxZ = Math.max(maxZ, sphere.cz + sphere.radius + 1);
+    }
+
+    const bounds = { minX, maxX, minY, maxY, minZ, maxZ };
+
+    // Compute heightfield holes - positions where spheres exist at or below terrain level
+    // These are stored as a Set of "x,z" strings for fast lookup
+    const heightfieldHoles = new Set();
+
+    for (let x = minX; x <= maxX; x++) {
+        for (let z = minZ; z <= maxZ; z++) {
+            // Check if any sphere has a voxel at this (x,z) at or below terrain height
+            for (const sphere of spheres) {
+                // Check multiple y levels from terrain down
+                for (let y = baseY; y >= baseY - sphere.radius - 1; y--) {
+                    const dx = x - sphere.cx;
+                    const dy = y - sphere.cy;
+                    const dz = z - sphere.cz;
+                    const distSq = dx * dx + dy * dy + dz * dz;
+
+                    if (distSq <= sphere.radius * sphere.radius) {
+                        heightfieldHoles.add(`${x},${z}`);
+                        break;  // Found a hole at this x,z, no need to check more y levels
+                    }
+                }
+                // Break outer loop if we found a hole
+                if (heightfieldHoles.has(`${x},${z}`)) break;
+            }
+        }
+    }
+
+    // Clearing zone to suppress trees/rocks nearby
+    const clearings = [
+        {
+            type: 'rect',
+            centerX,
+            centerZ,
+            width: (maxX - minX) + 4,
+            depth: (maxZ - minZ) + 4,
+            rotation: 0
+        }
+    ];
+
+    return {
+        type: 'rockyOutcrop',
+        centerX,
+        centerZ,
+        baseY,
+        blocks,
+        brightnessOverrides,
+        bounds,
+        heightfieldHoles,  // Set of "x,z" strings
+        clearings,
+        metadata: {
+            sizeClass,
+            spheres,  // Array of sphere data for debug visualization
+            holeCount: heightfieldHoles.size
         }
     };
 }
