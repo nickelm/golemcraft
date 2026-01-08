@@ -16,6 +16,7 @@ import { TerrainLoadingIndicator } from './utils/ui/terrain-loading-indicator.js
 import { flashScreen, pulseResourceUI } from './utils/ui/feedback.js';
 import { settingsManager } from './settings.js';
 import { CombatManager } from './combat/combatmanager.js';
+import { TNTManager } from './world/tntmanager.js';
 
 export class Game {
     constructor(worldData = null) {
@@ -72,6 +73,7 @@ export class Game {
         this.mobSpawner = null;
         this.itemSpawner = null;
         this.combatManager = null;
+        this.tntManager = null;
 
         // Player resources
         this.resources = {
@@ -79,7 +81,8 @@ export class Game {
             wood: 0,
             diamond: 0,
             iron: 0,
-            coal: 0
+            coal: 0,
+            tnt: 0
         };
         
         // Atmosphere system (handles day/night, lighting, weather, torch)
@@ -321,7 +324,69 @@ export class Game {
 
         this.combatManager.onCraterRequested = (position, radius) => {
             this.createExplosionCrater(position, radius);
+            // Trigger nearby TNT blocks when explosions happen
+            if (this.tntManager) {
+                this.tntManager.triggerNearExplosion(position, radius);
+            }
         };
+
+        // Initialize TNT manager with explosion callback
+        this.tntManager = new TNTManager(this.scene, (position, radius, damage) => {
+            // Create crater
+            this.createExplosionCrater(position, radius);
+
+            // Create visual explosion (reuse Explosion class)
+            import('./mobs.js').then(({ Explosion }) => {
+                const explosion = new Explosion(this.scene, position, radius);
+                // Add to combat manager's explosions array for update
+                if (this.combatManager) {
+                    this.combatManager.explosions.push(explosion);
+                }
+            });
+
+            // Apply damage to hero
+            const distToPlayer = position.distanceTo(this.hero.position);
+            if (distToPlayer < radius) {
+                const damageFactor = 1 - (distToPlayer / radius);
+                const actualDamage = Math.floor(damage * damageFactor);
+                if (actualDamage > 0) {
+                    this.hero.takeDamage(actualDamage);
+                    flashScreen('#FF6600', 0.5);
+                    if (this.itemSpawner) {
+                        this.itemSpawner.showFloatingNumber(
+                            this.hero.position.clone(),
+                            actualDamage,
+                            'damage'
+                        );
+                    }
+                }
+            }
+
+            // Apply damage to mobs
+            if (this.mobSpawner) {
+                this.mobSpawner.mobs.forEach(mob => {
+                    if (mob.dead) return;
+                    const distToMob = position.distanceTo(mob.position);
+                    if (distToMob < radius) {
+                        const damageFactor = 1 - (distToMob / radius);
+                        const actualDamage = Math.floor(damage * damageFactor);
+                        if (actualDamage > 0) {
+                            mob.takeDamage(actualDamage);
+                            if (this.itemSpawner) {
+                                this.itemSpawner.showFloatingNumber(
+                                    mob.position.clone(),
+                                    actualDamage,
+                                    'damage'
+                                );
+                            }
+                        }
+                    }
+                });
+            }
+
+            // Trigger chain reactions - nearby TNT
+            this.tntManager.triggerNearExplosion(position, radius);
+        });
     }
 
     findSpawnPoint(startX = 0, startZ = 0) {
@@ -382,6 +447,21 @@ export class Game {
                     'damage'
                 );
             });
+        }
+
+        // Check if melee attack hit any TNT blocks
+        if (this.tntManager) {
+            // Calculate attack position in front of player
+            const attackDir = new THREE.Vector3(
+                Math.sin(this.hero.rotation),
+                0,
+                Math.cos(this.hero.rotation)
+            );
+            const attackPos = this.hero.position.clone()
+                .add(attackDir.multiplyScalar(1.5));
+            attackPos.y += 0.5;
+
+            this.tntManager.checkAttackHit(attackPos, 2.0);
         }
     }
     
@@ -463,6 +543,64 @@ export class Game {
         this.torches.push(torch);
     }
 
+    /**
+     * Place TNT block in front of the player
+     */
+    placeTNT() {
+        // Check if player has TNT
+        if (this.resources.tnt <= 0) {
+            return false;
+        }
+
+        // Calculate placement position (2-3 blocks in front of player)
+        const direction = new THREE.Vector3(
+            Math.sin(this.hero.rotation),
+            0,
+            Math.cos(this.hero.rotation)
+        );
+
+        const placeDistance = 2.5;
+        const placePos = this.hero.position.clone()
+            .add(direction.multiplyScalar(placeDistance));
+
+        // Get ground height at placement position
+        const groundY = this.world.getInterpolatedHeight(placePos.x, placePos.z);
+
+        // Don't place at bedrock (y <= 0)
+        if (groundY <= 0) {
+            return false;
+        }
+
+        // Don't place underwater
+        if (groundY < WATER_LEVEL) {
+            return false;
+        }
+
+        // Set Y to ground level
+        placePos.y = groundY;
+
+        // Place TNT
+        if (this.tntManager) {
+            const tnt = this.tntManager.placeTNT(placePos);
+            if (tnt) {
+                this.resources.tnt--;
+
+                // Show feedback
+                if (this.itemSpawner) {
+                    this.itemSpawner.showFloatingNumber(
+                        placePos.clone(),
+                        1,
+                        'resource',
+                        'TNT Placed'
+                    );
+                }
+                return true;
+            }
+        }
+
+        return false;
+    }
+
     async toggleLandmarkDebug() {
         if (!this.landmarkDebug) {
             // Lazy load the debug renderer
@@ -508,6 +646,9 @@ export class Game {
         // Check if player is inside a landmark
         const insideLandmark = landmarkRegistry ? landmarkRegistry.isInsideLandmark(px, pz) : false;
 
+        // Draw TNT blocks
+        const tntCount = this.landmarkDebug.drawTNTBlocks(this.tntManager);
+
         // Update info overlay
         const gradient = probe.sampleGradient(px, pz);
         const normal = probe.sampleNormal(px, pz);
@@ -521,7 +662,9 @@ export class Game {
             normal: normal,
             biome: biome,
             landmarks: landmarks || [],
-            insideLandmark: insideLandmark
+            insideLandmark: insideLandmark,
+            tntCount: tntCount,
+            tntInventory: this.resources.tnt
         });
     }
 
@@ -589,6 +732,10 @@ export class Game {
         if (this.input.isKeyJustPressed('g')) {
             this.dropTorch();
         }
+        // Place TNT with T key (single press)
+        if (this.input.isKeyJustPressed('t')) {
+            this.placeTNT();
+        }
     }
 
     update(deltaTime) {
@@ -623,6 +770,26 @@ export class Game {
         // Update combat system (arrows, explosions, damage, loot)
         if (this.combatManager) {
             this.combatManager.update(deltaTime);
+
+            // Check if any arrows hit TNT blocks
+            if (this.tntManager) {
+                for (const arrow of this.combatManager.arrows) {
+                    if (!arrow.hit && !arrow.stuck) {
+                        const hit = this.tntManager.checkAttackHit(arrow.position, 1.0);
+                        if (hit) {
+                            arrow.hit = true;
+                            arrow.destroy();
+                        }
+                    }
+                }
+                // Clean up destroyed arrows
+                this.combatManager.arrows = this.combatManager.arrows.filter(a => !a.hit || !a.destroyed);
+            }
+        }
+
+        // Update TNT blocks (fuse timers, detonations)
+        if (this.tntManager) {
+            this.tntManager.update(deltaTime);
         }
 
         // Update item spawner
@@ -667,6 +834,7 @@ export class Game {
         );
         const mobCount = this.mobSpawner ? this.mobSpawner.mobs.length : 0;
         
+        const tntCount = this.tntManager ? this.tntManager.getCount() : 0;
         stats.innerHTML = `
             Health: ${Math.max(0, Math.floor(this.hero.health))}/${this.hero.maxHealth}<br>
             Biome: ${biome}<br>
@@ -676,6 +844,7 @@ export class Game {
             Iron: ${this.resources.iron}<br>
             Coal: ${this.resources.coal}<br>
             Diamonds: ${this.resources.diamond}<br>
+            TNT: ${this.resources.tnt} (${tntCount} placed)<br>
         `;
     }
     
@@ -716,7 +885,8 @@ export class Game {
                     diamond: '#00FFFF',
                     wood: '#8B4513',
                     iron: '#A0A0A0',
-                    coal: '#FFFFFF'
+                    coal: '#FFFFFF',
+                    tnt: '#FF0000'
                 };
                 flashScreen(flashColors[item.type] || '#FFD700', 0.2);
 
