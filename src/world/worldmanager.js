@@ -264,12 +264,16 @@ export class WorldManager {
     /**
      * Create explosion crater
      * Stores destroyed blocks locally and triggers worker regeneration
+     * Also marks heightfield holes where crater is visible from above
      */
     createExplosionCrater(position, radius) {
         const intRadius = Math.ceil(radius);
         const px = Math.floor(position.x);
         const py = Math.floor(position.y);
         const pz = Math.floor(position.z);
+
+        // Track which (x,z) cells have blocks destroyed at or near surface
+        const holeCells = new Set();
 
         for (let dx = -intRadius; dx <= intRadius; dx++) {
             for (let dy = -intRadius; dy <= intRadius; dy++) {
@@ -279,18 +283,36 @@ export class WorldManager {
                         const bx = px + dx;
                         const by = py + dy;
                         const bz = pz + dz;
-                        if (by > 0) {
+                        if (by > 0) {  // Bedrock at y=0 is indestructible
                             const key = `${bx},${by},${bz}`;
                             this.destroyedBlocks.add(key);
+
+                            // Check if this block is at or near the terrain surface
+                            // Mark (x,z) as a hole cell if explosion reaches surface level
+                            const terrainHeight = this.getHeight(bx, bz);
+                            if (by >= terrainHeight - 1 && by <= terrainHeight + 1) {
+                                holeCells.add(`${bx},${bz}`);
+                            }
                         }
                     }
                 }
             }
         }
 
+        // Add heightfield holes where crater is visible from above
+        const blockCache = this.chunkLoader.workerManager?.blockCache;
+        if (blockCache) {
+            for (const cellKey of holeCells) {
+                const [x, z] = cellKey.split(',').map(Number);
+                blockCache.addHeightfieldHole(x, z);
+            }
+        }
+
         // Sync to worker and trigger chunk regeneration
         if (this.chunkLoader.workerManager) {
             this.chunkLoader.workerManager.updateDestroyedBlocks(this.destroyedBlocks);
+            // Also sync heightfield holes to worker
+            this.chunkLoader.workerManager.updateHeightfieldHoles();
         }
         this.chunkedTerrain.regenerateChunksInRadius(px, pz, intRadius + 1);
         this.chunkLoader.saveModifiedChunks();
