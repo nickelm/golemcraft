@@ -104,6 +104,78 @@ function octaveNoise2D(x, z, octaves = 4, baseFreq = 0.05, hashFn = hash) {
 }
 
 // ============================================================================
+// CLIMATE-BASED BIOME SELECTION (16-biome system)
+// ============================================================================
+
+// Biomes that receive dramatic peak height variation
+const PEAK_BIOMES = ['mountains', 'glacier', 'alpine', 'badlands', 'highlands'];
+
+/**
+ * Select biome from climate parameters using 16-biome matrix
+ * Pure function - temperature × humidity × elevation → biome name
+ *
+ * @param {string} temp - 'hot', 'temperate', or 'cold'
+ * @param {string} humidity - 'dry', 'moderate', or 'wet'
+ * @param {string} elev - 'low', 'mid', or 'high'
+ * @returns {string} Biome name
+ */
+function selectBiomeFromClimate(temp, humidity, elev) {
+    // HOT CLIMATES
+    if (temp === 'hot') {
+        if (humidity === 'dry') {
+            if (elev === 'low') return 'desert';
+            if (elev === 'mid') return 'red_desert';
+            return 'badlands';  // high
+        }
+        if (humidity === 'moderate') {
+            if (elev === 'low' || elev === 'mid') return 'savanna';
+            return 'badlands';  // high
+        }
+        // wet
+        if (elev === 'low') return 'jungle';  // Will be replaced by beach near ocean
+        if (elev === 'mid') return 'jungle';
+        return 'jungle';  // high
+    }
+
+    // TEMPERATE CLIMATES
+    if (temp === 'temperate') {
+        if (humidity === 'dry') {
+            if (elev === 'low') return 'meadow';
+            if (elev === 'mid') return 'plains';
+            return 'mountains';  // high
+        }
+        if (humidity === 'moderate') {
+            if (elev === 'low') return 'meadow';
+            if (elev === 'mid') return 'deciduous_forest';
+            return 'mountains';  // high
+        }
+        // wet
+        if (elev === 'low') return 'swamp';
+        if (elev === 'mid') return 'autumn_forest';
+        return 'deciduous_forest';  // high
+    }
+
+    // COLD CLIMATES
+    if (temp === 'cold') {
+        if (humidity === 'dry') {
+            if (elev === 'low' || elev === 'mid') return 'tundra';
+            return 'mountains';  // high
+        }
+        if (humidity === 'moderate') {
+            if (elev === 'low') return 'glacier';
+            if (elev === 'mid') return 'taiga';
+            return 'glacier';  // high
+        }
+        // wet
+        if (elev === 'low') return 'glacier';
+        if (elev === 'mid') return 'taiga';
+        return 'glacier';  // high
+    }
+
+    return 'plains';  // Fallback
+}
+
+// ============================================================================
 // WORKER TERRAIN PROVIDER
 // ============================================================================
 
@@ -142,39 +214,27 @@ class WorkerTerrainProvider {
             return this.biomeCache.get(key);
         }
 
-        const biomeNoise = octaveNoise2D(x, z, 4, 0.05, hash);
-        const tempNoise = octaveNoise2D(x, z, 4, 0.06, hash2);
-        const humidityNoise = octaveNoise2D(x, z, 3, 0.04, (x, z) => hash(x, z, 77777));
+        const biomeNoise = octaveNoise2D(x, z, 4, 0.015, hash);      // Elevation noise (unchanged)
+        const tempNoise = octaveNoise2D(x, z, 4, 0.018, hash2);      // Temperature noise (0.02 → 0.018)
+        const humidityNoise = octaveNoise2D(x, z, 3, 0.012, (x, z) => hash(x, z, 77777)); // Humidity noise (unchanged)
 
-        const remappedNoise = Math.max(0, Math.min(1, (biomeNoise - 0.08) / 0.37));
-        const remappedTemp = Math.max(0, Math.min(1, (tempNoise - 0.08) / 0.37));
-        const remappedHumidity = Math.max(0, Math.min(1, (humidityNoise - 0.08) / 0.37));
+        const elevation = Math.max(0, Math.min(1, (biomeNoise - 0.08) / 0.37));
+        const temp = Math.max(0, Math.min(1, (tempNoise - 0.08) / 0.37));
+        const humidity = Math.max(0, Math.min(1, (humidityNoise - 0.08) / 0.37));
 
         let biome;
-        if (remappedNoise < 0.15) {
+
+        // Ocean check first (below 15% elevation threshold)
+        if (elevation < 0.15) {
             biome = 'ocean';
-        } else if (remappedNoise < 0.35) {
-            if (remappedHumidity > 0.65 && remappedTemp > 0.4) {
-                biome = 'jungle';
-            } else if (remappedTemp > 0.5) {
-                biome = 'desert';
-            } else {
-                biome = 'plains';
-            }
-        } else if (remappedNoise < 0.70) {
-            if (remappedHumidity > 0.7 && remappedTemp > 0.45) {
-                biome = 'jungle';
-            } else if (remappedTemp > 0.55) {
-                biome = 'desert';
-            } else if (remappedTemp < 0.35) {
-                biome = 'snow';
-            } else {
-                biome = 'plains';
-            }
-        } else if (remappedNoise < 0.85) {
-            biome = remappedTemp < 0.3 ? 'snow' : 'mountains';
         } else {
-            biome = remappedTemp < 0.25 ? 'snow' : 'mountains';
+            // Classify climate axes into bands
+            const tempBand = temp < 0.33 ? 'cold' : (temp < 0.66 ? 'temperate' : 'hot');
+            const humidityBand = humidity < 0.33 ? 'dry' : (humidity < 0.66 ? 'moderate' : 'wet');
+            const elevBand = elevation < 0.3 ? 'low' : (elevation < 0.6 ? 'mid' : 'high');
+
+            // Select biome from 16-biome climate matrix
+            biome = selectBiomeFromClimate(tempBand, humidityBand, elevBand);
         }
 
         this.biomeCache.set(key, biome);
@@ -205,23 +265,41 @@ class WorkerTerrainProvider {
         const microDetail = octaveNoise2D(x, z, 2, 0.12, hash2) * 0.25;
         
         let height = biomeData.baseHeight + heightNoise * biomeData.heightScale + microDetail;
+        let debugLog = null;
 
-        if (biome === 'mountains') {
-            const peakNoise = octaveNoise2D(x, z, 3, 0.06);
-            if (peakNoise > 0.5) {
-                height += (peakNoise - 0.5) * 30;
+        // Apply peak variation to all high-elevation biomes (mountains, glacier, alpine, badlands, highlands)
+        if (PEAK_BIOMES.includes(biome)) {
+            const peakNoise = octaveNoise2D(x, z, 3, 0.04);  // 0.06 → 0.04 (larger, less frequent peaks)
+
+            // Use FULL range of peak noise (0-1) for dramatic height variation
+            // Increased multiplier to push peaks to 50-60 range
+            const peakBonus = peakNoise * 50;  // Max +50 blocks when peakNoise=1.0 (total max: 18+20+0.25+50=88.25 - EXCEEDS 64!)
+            height += peakBonus;
+
+            // DEBUG: Track significant peaks
+            if (peakBonus > 25) {
+                debugLog = {
+                    x, z, biome,
+                    baseHeight: biomeData.baseHeight,
+                    heightNoise: heightNoise.toFixed(3),
+                    heightScale: biomeData.heightScale,
+                    microDetail: microDetail.toFixed(3),
+                    peakNoise: peakNoise.toFixed(3),
+                    peakBonus: peakBonus.toFixed(2),
+                    heightBeforeWater: height.toFixed(2)
+                };
             }
         }
-        
+
         if (biome === 'jungle') {
             const jungleHillNoise = octaveNoise2D(x, z, 4, 0.08);
             height += jungleHillNoise * 4;
         }
-        
+
         if (biome !== 'ocean' && biome !== 'desert' && this.isRiver(x, z)) {
             height = Math.min(height, WATER_LEVEL - 1);
         }
-        
+
         if ((biome === 'plains' || biome === 'snow') && this.isLake(x, z)) {
             height = Math.min(height, WATER_LEVEL - 2);
         }
@@ -230,9 +308,27 @@ class WorkerTerrainProvider {
             height = Math.min(height, WATER_LEVEL - 2);
         }
 
+        if (debugLog) {
+            debugLog.heightAfterWater = height.toFixed(2);
+        }
+
         height = this.smoothBiomeTransitionContinuous(x, z, height);
-        
-        const finalHeight = Math.max(1.0, height);
+
+        if (debugLog) {
+            debugLog.heightAfterSmoothing = height.toFixed(2);
+        }
+
+        // Clamp to safe maximum (leave 1 block margin below 64)
+        const finalHeight = Math.max(1.0, Math.min(63.0, height));
+
+        if (debugLog) {
+            debugLog.finalHeight = finalHeight.toFixed(2);
+            if (height > 63.0) {
+                debugLog.CLAMPED = `${height.toFixed(2)} → 63.0`;
+            }
+            console.log('[MOUNTAIN PEAK DEBUG]', JSON.stringify(debugLog, null, 2));
+        }
+
         this.continuousHeightCache.set(key, finalHeight);
         return finalHeight;
     }
@@ -249,11 +345,89 @@ class WorkerTerrainProvider {
         this.heightCache.set(key, finalHeight);
         return finalHeight;
     }
-    
+
+    /**
+     * Check if position is within 5 blocks of ocean horizontally
+     * Samples in square pattern for efficiency
+     * @param {number} x - World X coordinate
+     * @param {number} z - World Z coordinate
+     * @returns {boolean} True if within beach distance of ocean
+     */
+    isNearOcean(x, z) {
+        const BEACH_RADIUS = 5;
+        const SAMPLE_STEP = 2;  // Sample every 2 blocks for efficiency
+
+        // Quick check: if this cell is ocean, it's not a beach
+        if (this.getBiome(x, z) === 'ocean') return false;
+
+        // Sample in expanding squares
+        for (let r = SAMPLE_STEP; r <= BEACH_RADIUS; r += SAMPLE_STEP) {
+            // Check cardinal directions
+            if (this.getBiome(x + r, z) === 'ocean') return true;
+            if (this.getBiome(x - r, z) === 'ocean') return true;
+            if (this.getBiome(x, z + r) === 'ocean') return true;
+            if (this.getBiome(x, z - r) === 'ocean') return true;
+
+            // Check diagonals
+            if (this.getBiome(x + r, z + r) === 'ocean') return true;
+            if (this.getBiome(x - r, z + r) === 'ocean') return true;
+            if (this.getBiome(x + r, z - r) === 'ocean') return true;
+            if (this.getBiome(x - r, z - r) === 'ocean') return true;
+        }
+
+        return false;
+    }
+
+    /**
+     * Determine if snow cap should render at this height/biome
+     * Uses biome-dependent thresholds for realistic snow distribution
+     * @param {string} biome - Biome name
+     * @param {number} height - Height at position
+     * @returns {boolean} True if snow should render
+     */
+    shouldShowSnowCap(biome, height) {
+        // Biomes that already use snow/ice texture don't need snow caps
+        const snowBasedBiomes = ['snow', 'tundra', 'glacier'];
+        if (snowBasedBiomes.includes(biome)) return false;
+
+        // High-elevation and cold biomes show snow above biome-specific thresholds
+        const snowCapBiomes = {
+            'mountains': 22,           // Original threshold
+            'alpine': 20,              // Lower threshold (always snowy)
+            'highlands': 24,           // Higher threshold (partial snow)
+            'taiga': 18,               // Lower threshold (snowy peaks)
+            'deciduous_forest': 25     // Very high threshold (rare snow)
+        };
+
+        const threshold = snowCapBiomes[biome];
+        return threshold !== undefined && height > threshold;
+    }
+
     smoothBiomeTransitionContinuous(x, z, height) {
+        const currentBiome = this.getBiome(x, z);
         const radius = 3;
-        let totalHeight = height;
-        let count = 1;
+
+        // Check if neighbors are same biome
+        let sameBiome = true;
+        for (let dx = -radius; dx <= radius; dx += radius) {
+            for (let dz = -radius; dz <= radius; dz += radius) {
+                if (dx === 0 && dz === 0) continue;
+                if (this.getBiome(x + dx, z + dz) !== currentBiome) {
+                    sameBiome = false;
+                    break;
+                }
+            }
+            if (!sameBiome) break;
+        }
+
+        // If all neighbors are same biome, skip smoothing to preserve peaks
+        if (sameBiome) {
+            return height;
+        }
+
+        // Only smooth at biome boundaries, using weighted blend
+        let totalHeight = height * 4;  // Give current height more weight
+        let count = 4;
 
         for (let dx = -radius; dx <= radius; dx += radius) {
             for (let dz = -radius; dz <= radius; dz += radius) {
@@ -263,19 +437,19 @@ class WorkerTerrainProvider {
                 const neighborData = BIOMES[neighborBiome];
                 const neighborNoise = octaveNoise2D(x + dx, z + dz, 5, 0.03);
                 let neighborHeight = neighborData.baseHeight + neighborNoise * neighborData.heightScale;
-                
-                if (neighborBiome === 'mountains') {
-                    const peakNoise = octaveNoise2D(x + dx, z + dz, 3, 0.06);
-                    if (peakNoise > 0.5) {
-                        neighborHeight += (peakNoise - 0.5) * 30;
-                    }
+
+                // Apply peak variation to neighbors in high-elevation biomes
+                if (PEAK_BIOMES.includes(neighborBiome)) {
+                    const peakNoise = octaveNoise2D(x + dx, z + dz, 3, 0.04);  // Match updated params
+                    const peakBonus = peakNoise * 50;                            // Match updated params
+                    neighborHeight += peakBonus;
                 }
-                
+
                 if (neighborBiome === 'jungle') {
                     const jungleHillNoise = octaveNoise2D(x + dx, z + dz, 4, 0.08);
                     neighborHeight += jungleHillNoise * 4;
                 }
-                
+
                 totalHeight += neighborHeight;
                 count++;
             }
@@ -337,10 +511,19 @@ class WorkerTerrainProvider {
         }
 
         if (y === height) {
+            // Beach override: Replace surface with beach sand near ocean
+            if (biome !== 'ocean' && height >= WATER_LEVEL && height <= WATER_LEVEL + 3) {
+                if (this.isNearOcean(x, z)) {
+                    return 'sand';  // Beach sand texture
+                }
+            }
+
             if (height < WATER_LEVEL) return getUnderwaterTexture(biome);
             if (height <= WATER_LEVEL + 2 && biome !== 'desert' && biome !== 'snow' && biome !== 'beach') return 'sand';
-            if (biome === 'mountains' && height > 22) return 'snow';
-            if (biome === 'alpine' && height > 22) return 'snow';
+
+            // Snow cap logic with biome-dependent thresholds
+            if (this.shouldShowSnowCap(biome, height)) return 'snow';
+
             return getSurfaceTexture(biome);
         }
 
@@ -356,10 +539,19 @@ class WorkerTerrainProvider {
         const height = this.getHeight(x, z);
         const biome = this.getBiome(x, z);
 
+        // Beach override: Replace surface with beach sand near ocean
+        if (biome !== 'ocean' && height >= WATER_LEVEL && height <= WATER_LEVEL + 3) {
+            if (this.isNearOcean(x, z)) {
+                return 'sand';  // Beach sand texture
+            }
+        }
+
         if (height < WATER_LEVEL) return getUnderwaterTexture(biome);
         if (height <= WATER_LEVEL + 2 && biome !== 'desert' && biome !== 'snow' && biome !== 'beach') return 'sand';
-        if (biome === 'mountains' && height > 22) return 'snow';
-        if (biome === 'alpine' && height > 22) return 'snow';
+
+        // Snow cap logic with biome-dependent thresholds
+        if (this.shouldShowSnowCap(biome, height)) return 'snow';
+
         return getSurfaceTexture(biome);
     }
 

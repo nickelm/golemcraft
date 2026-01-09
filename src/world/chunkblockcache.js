@@ -42,24 +42,54 @@ export const BLOCK_TYPE_NAMES = Object.fromEntries(
     Object.entries(BLOCK_TYPE_IDS).map(([name, id]) => [id, name])
 );
 
-// Biome ID encoding (matches chunkdatagenerator.js)
+// Biome ID encoding (matches chunkdatagenerator.js) - expanded to 21 biomes
 export const BIOME_IDS = {
     ocean: 0,
-    plains: 1,
-    desert: 2,
-    jungle: 3,
-    snow: 4,
-    mountains: 5
+    beach: 1,
+    plains: 2,
+    savanna: 3,
+    taiga: 4,
+    jungle: 5,
+    rainforest: 6,
+    swamp: 7,
+    desert: 8,
+    red_desert: 9,
+    badlands: 10,
+    snow: 11,
+    tundra: 12,
+    alpine: 13,
+    mountains: 14,
+    highlands: 15,
+    volcanic: 16,
+    meadow: 17,
+    deciduous_forest: 18,
+    autumn_forest: 19,
+    glacier: 20
 };
 
 // Reverse lookup: ID -> biome name
 export const BIOME_NAMES = {
     0: 'ocean',
-    1: 'plains',
-    2: 'desert',
-    3: 'jungle',
-    4: 'snow',
-    5: 'mountains'
+    1: 'beach',
+    2: 'plains',
+    3: 'savanna',
+    4: 'taiga',
+    5: 'jungle',
+    6: 'rainforest',
+    7: 'swamp',
+    8: 'desert',
+    9: 'red_desert',
+    10: 'badlands',
+    11: 'snow',
+    12: 'tundra',
+    13: 'alpine',
+    14: 'mountains',
+    15: 'highlands',
+    16: 'volcanic',
+    17: 'meadow',
+    18: 'deciduous_forest',
+    19: 'autumn_forest',
+    20: 'glacier'
 };
 
 /**

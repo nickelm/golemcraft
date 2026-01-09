@@ -269,6 +269,72 @@ export const BIOMES = {
         objectDensities: { boulder: 0.025, rock: 0.02 },
         mobs: ['zombie', 'skeleton', 'creeper'],
         spawnWeights: { zombie: 35, skeleton: 30, creeper: 20 }
+    },
+
+    // NEW BIOMES (Spec 11 Revision - Climate Matrix)
+    red_desert: {
+        name: 'Red Desert',
+        baseHeight: 8,
+        heightScale: 7,
+        terrain: { primary: 'sand', tint: [1.8, 1.0, 0.65] },  // Bright red-orange sand
+        subsurface: { primary: 'sand', tint: [1.2, 0.6, 0.4] },  // Deeper red subsurface
+        underwater: { primary: 'sand', tint: [1.0, 0.7, 0.5] },
+        objects: ['rock'],
+        objectDensities: { rock: 0.02 },
+        mobs: ['zombie', 'creeper'],
+        spawnWeights: { zombie: 30, creeper: 20 }
+    },
+
+    meadow: {
+        name: 'Meadow',
+        baseHeight: 7,
+        heightScale: 3,
+        terrain: { primary: 'grass', tint: [1.4, 1.8, 1.0] },  // Bright yellow-green grass
+        subsurface: { primary: 'dirt', tint: [1.0, 0.95, 0.85] },
+        underwater: { primary: 'sand', tint: [1.0, 1.0, 1.0] },
+        objects: ['grass', 'rock'],
+        objectDensities: { grass: 0, rock: 0.008 },  // Sparse, open terrain
+        mobs: ['cow', 'pig', 'chicken'],
+        spawnWeights: { cow: 35, pig: 30, chicken: 45 }
+    },
+
+    deciduous_forest: {
+        name: 'Deciduous Forest',
+        baseHeight: 14,
+        heightScale: 10,
+        terrain: { primary: 'forest_floor', tint: [0.95, 1.6, 0.85] },  // Bright green forest floor
+        subsurface: { primary: 'dirt', tint: [0.85, 0.75, 0.6] },
+        underwater: { primary: 'sand', tint: [1.0, 1.0, 1.0] },
+        objects: ['tree', 'rock'],
+        objectDensities: { tree: 0.1, rock: 0.015 },  // Dense forest
+        mobs: ['zombie', 'skeleton', 'cow'],
+        spawnWeights: { zombie: 30, skeleton: 25, cow: 20 }
+    },
+
+    autumn_forest: {
+        name: 'Autumn Forest',
+        baseHeight: 10,
+        heightScale: 7,
+        terrain: { primary: 'forest_floor', tint: [1.7, 1.2, 0.7] },  // Bright orange-red autumn colors
+        subsurface: { primary: 'dirt', tint: [0.8, 0.7, 0.55] },
+        underwater: { primary: 'sand', tint: [1.0, 1.0, 1.0] },
+        objects: ['tree', 'rock'],
+        objectDensities: { tree: 0.09, rock: 0.01 },
+        mobs: ['zombie', 'chicken', 'pig'],
+        spawnWeights: { zombie: 30, chicken: 35, pig: 25 }
+    },
+
+    glacier: {
+        name: 'Glacier',
+        baseHeight: 16,
+        heightScale: 18,
+        terrain: { primary: 'ice', tint: [1.8, 2.0, 2.2] },  // Bright blue-white ice
+        subsurface: { primary: 'ice', tint: [1.5, 1.7, 2.0] },  // Ice subsurface
+        underwater: { primary: 'ice', tint: [1.3, 1.5, 1.8] },
+        objects: ['boulder', 'rock'],
+        objectDensities: { boulder: 0.02, rock: 0.015 },
+        mobs: ['skeleton'],
+        spawnWeights: { skeleton: 35 }
     }
 };
 
