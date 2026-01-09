@@ -4,6 +4,7 @@ import {
     terrainSplatVertexShader,
     terrainSplatFragmentShader,
     terrainSplatFragmentShaderMobile,
+    terrainSplatFragmentShaderMobileTextureArray,
     terrainSplatVertexShaderLowPower,
     terrainSplatFragmentShaderLowPower,
     terrainSplatFragmentShaderTextureArray
@@ -149,9 +150,17 @@ export class ChunkedTerrain {
         if (textureBlending === 'low') {
             console.log('Using custom Lambert shaders + dithered tiles (low)');
         } else if (textureBlending === 'medium') {
-            console.log('Using custom Lambert shaders + 2-texture splatting (medium)');
+            if (this.useTextureArrays && this.diffuseArray) {
+                console.log('Using custom Lambert shaders + 2-texture texture arrays (medium)');
+            } else {
+                console.log('Using custom Lambert shaders + 2-texture atlas (medium)');
+            }
         } else {
-            console.log('Using custom Lambert shaders + 4-texture splatting (high)');
+            if (this.useTextureArrays && this.diffuseArray && this.normalArray) {
+                console.log('Using custom Lambert shaders + 4-texture texture arrays with normals (high)');
+            } else {
+                console.log('Using custom Lambert shaders + 4-texture atlas (high)');
+            }
         }
 
         // Stats
@@ -180,7 +189,12 @@ export class ChunkedTerrain {
             case 'medium':
                 // 2-texture blending
                 vertexShader = terrainSplatVertexShader;
-                fragmentShader = terrainSplatFragmentShaderMobile;
+                // Use texture array shader if available, otherwise fall back to atlas
+                if (useTextureArrays && diffuseArray) {
+                    fragmentShader = terrainSplatFragmentShaderMobileTextureArray;
+                } else {
+                    fragmentShader = terrainSplatFragmentShaderMobile;
+                }
                 break;
             case 'high':
             default:
@@ -197,24 +211,58 @@ export class ChunkedTerrain {
 
         // Build uniforms based on shader variant
         let uniforms;
-        if (useTextureArrays && diffuseArray && normalArray && textureBlending === 'high') {
-            // Texture array shader: exclude THREE.UniformsLib.common to avoid 'map' uniform conflict
-            uniforms = THREE.UniformsUtils.merge([
-                THREE.UniformsLib.lights,
-                THREE.UniformsLib.fog,
-                THREE.UniformsLib.shadowmap,
-                {
-                    // Minimal common uniforms (diffuse/opacity) without 'map'
-                    diffuse: { value: new THREE.Color(0xffffff) },
-                    opacity: { value: 1.0 },
-                    // Texture array uniforms
-                    uDiffuseArray: { value: diffuseArray },
-                    uNormalArray: { value: normalArray },
-                    uTintColors: { value: DEFAULT_TINT_COLORS.map(c => new THREE.Vector3(c[0], c[1], c[2])) },
-                    uTileScale: { value: 0.5 }  // Lower scale = larger texture appearance (world units per texture repeat)
-                }
-            ]);
-            console.log('✅ Using texture array shader (desktop, high quality)');
+        if (useTextureArrays && diffuseArray && (textureBlending === 'high' || textureBlending === 'medium')) {
+            // Texture array shader (desktop OR mobile)
+            // Exclude THREE.UniformsLib.common to avoid 'map' uniform conflict
+            const baseArrayUniforms = {
+                // Minimal common uniforms (diffuse/opacity) without 'map'
+                diffuse: { value: new THREE.Color(0xffffff) },
+                opacity: { value: 1.0 },
+                // Texture array uniforms (shared by desktop and mobile)
+                uDiffuseArray: { value: diffuseArray },
+                uTintColors: { value: DEFAULT_TINT_COLORS.map(c => new THREE.Vector3(c[0], c[1], c[2])) },
+                uTileScale: { value: 1.0 }  // 1.0 = one texture repeat per world unit (correct for 1m² PolyHaven textures)
+            };
+
+            if (textureBlending === 'high' && normalArray) {
+                // Desktop shader: add normal mapping uniforms
+                uniforms = THREE.UniformsUtils.merge([
+                    THREE.UniformsLib.lights,
+                    THREE.UniformsLib.fog,
+                    THREE.UniformsLib.shadowmap,
+                    {
+                        ...baseArrayUniforms,
+                        uNormalArray: { value: normalArray },
+                        uDebugNormals: { value: false },
+                        uEnableNormalMapping: { value: true }
+                    }
+                ]);
+                console.log('✅ Using texture array shader (desktop, high quality)');
+                console.log('📊 Texture array details:', {
+                    diffuseArray: !!uniforms.uDiffuseArray.value,
+                    normalArray: !!uniforms.uNormalArray.value,
+                    diffuseSize: uniforms.uDiffuseArray.value?.image?.width + 'x' + uniforms.uDiffuseArray.value?.image?.height,
+                    normalSize: uniforms.uNormalArray.value?.image?.width + 'x' + uniforms.uNormalArray.value?.image?.height,
+                    layers: uniforms.uDiffuseArray.value?.image?.depth,
+                    tileScale: uniforms.uTileScale.value,
+                    debugMode: uniforms.uDebugNormals.value
+                });
+            } else {
+                // Mobile shader: no normal mapping uniforms
+                uniforms = THREE.UniformsUtils.merge([
+                    THREE.UniformsLib.lights,
+                    THREE.UniformsLib.fog,
+                    THREE.UniformsLib.shadowmap,
+                    baseArrayUniforms
+                ]);
+                console.log('✅ Using texture array shader (mobile, 2-texture blend)');
+                console.log('📊 Texture array details:', {
+                    diffuseArray: !!uniforms.uDiffuseArray.value,
+                    diffuseSize: uniforms.uDiffuseArray.value?.image?.width + 'x' + uniforms.uDiffuseArray.value?.image?.height,
+                    layers: uniforms.uDiffuseArray.value?.image?.depth,
+                    tileScale: uniforms.uTileScale.value
+                });
+            }
         } else {
             // Atlas shader: use standard uniforms including 'map'
             const baseUniforms = THREE.UniformsUtils.merge([
@@ -224,7 +272,7 @@ export class ChunkedTerrain {
                 THREE.UniformsLib.shadowmap
             ]);
             uniforms = { ...baseUniforms, uAtlas: { value: terrainTexture } };
-            if (textureBlending === 'high') {
+            if (textureBlending === 'high' || textureBlending === 'medium') {
                 console.log('⚠️ Texture arrays not loaded, falling back to atlas shader');
             }
         }
@@ -240,7 +288,7 @@ export class ChunkedTerrain {
         });
 
         // Add polygon offset to prevent z-fighting between surface and voxel meshes
-        if (useTextureArrays && diffuseArray && normalArray && textureBlending === 'high') {
+        if (useTextureArrays && diffuseArray && (textureBlending === 'high' || textureBlending === 'medium')) {
             material.polygonOffset = true;
             material.polygonOffsetFactor = 1;
             material.polygonOffsetUnits = 1;
@@ -620,6 +668,26 @@ export class ChunkedTerrain {
 
         if (rebuiltCount > 0) {
             console.log(`[ChunkedTerrain] Rebuilt ${rebuiltCount} chunk meshes around (${centerChunkX}, ${centerChunkZ})`);
+        }
+    }
+
+    /**
+     * Toggle normal map debug visualization
+     * @param {boolean} enabled - True to show raw normal map RGB
+     */
+    setDebugNormals(enabled) {
+        if (this.surfaceMaterial?.uniforms?.uDebugNormals) {
+            this.surfaceMaterial.uniforms.uDebugNormals.value = enabled;
+        }
+    }
+
+    /**
+     * Toggle normal mapping on/off
+     * @param {boolean} enabled - True to enable normal mapping
+     */
+    setNormalMappingEnabled(enabled) {
+        if (this.surfaceMaterial?.uniforms?.uEnableNormalMapping) {
+            this.surfaceMaterial.uniforms.uEnableNormalMapping.value = enabled;
         }
     }
 }

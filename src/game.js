@@ -117,6 +117,10 @@ export class Game {
         this.showPerformanceMonitor = this.showPerformanceSetting;
         this.performanceMonitor.element.style.display = this.showPerformanceMonitor ? 'block' : 'none';
 
+        // Debug flags
+        this.debugNormals = false;
+        this.normalMappingEnabled = true;
+
         // Toggle performance monitor with P key
         window.addEventListener('keydown', (e) => {
             if (e.key === 'p' || e.key === 'P') {
@@ -125,6 +129,18 @@ export class Game {
                     this.showPerformanceMonitor ? 'block' : 'none';
                 // Update setting
                 settingsManager.set('showPerformance', this.showPerformanceMonitor);
+            }
+            // Toggle normal map debug with N key
+            if (e.key === 'n' || e.key === 'N') {
+                this.debugNormals = !this.debugNormals;
+                this.world?.chunkedTerrain?.setDebugNormals(this.debugNormals);
+                console.log('🔍 Normal map debug:', this.debugNormals ? 'ON' : 'OFF');
+            }
+            // Toggle normal mapping with M key
+            if (e.key === 'm' || e.key === 'M') {
+                this.normalMappingEnabled = !this.normalMappingEnabled;
+                this.world?.chunkedTerrain?.setNormalMappingEnabled(this.normalMappingEnabled);
+                console.log('🗺️ Normal mapping:', this.normalMappingEnabled ? 'ON' : 'OFF');
             }
             // Toggle landmark debug with F3 key
             if (e.key === 'F3') {
