@@ -1,19 +1,20 @@
 /**
- * Terrain Visualizer - 2D grayscale map of noise layers
+ * Terrain Visualizer - 2D color map of noise layers
  *
  * Imports worldgen.js to visualize terrain parameters in real-time.
  * Single source of truth - no duplicated generation logic.
  */
 
 import { getTerrainParams } from './world/terrain/worldgen.js';
+import { getColorForMode } from './tools/mapvisualizer/colors.js';
 
 // Mode descriptions for UI
 const MODE_DESCRIPTIONS = {
-    continental: 'Land/ocean distribution (black = ocean, white = highlands)',
-    temperature: 'Climate zones (black = cold, white = hot)',
-    humidity: 'Precipitation (black = arid, white = humid)',
-    erosion: 'Valley detail (black = eroded valleys, white = uneroded peaks)',
-    ridgeness: 'Mountain ridges (black = valleys, white = sharp ridges)'
+    continental: 'Land/ocean distribution (blue = ocean, green = plains, brown = hills, white = peaks)',
+    temperature: 'Climate zones (blue = cold, white = temperate, red = hot)',
+    humidity: 'Precipitation (yellow = arid, green = moderate, cyan = humid)',
+    erosion: 'Valley detail (dark gray = valleys, light gray = peaks)',
+    ridgeness: 'Mountain ridges (black = valleys, brown = slopes, white = ridges)'
 };
 
 // Map mode names to getTerrainParams property names
@@ -188,8 +189,6 @@ class TerrainVisualizer {
         const imageData = this.ctx.createImageData(width, height);
         const data = imageData.data;
 
-        const paramName = MODE_PARAM_MAP[this.mode];
-
         // Render each pixel
         for (let py = 0; py < height; py++) {
             for (let px = 0; px < width; px++) {
@@ -199,17 +198,16 @@ class TerrainVisualizer {
 
                 // Sample terrain parameters
                 const params = getTerrainParams(worldX, worldZ, this.seed);
-                const value = params[paramName];
 
-                // Map [0, 1] to grayscale [0, 255]
-                const gray = Math.floor(value * 255);
+                // Get color for this mode
+                const rgb = getColorForMode(params, this.mode);
 
                 // Set pixel in image data (RGBA format)
                 const index = (py * width + px) * 4;
-                data[index] = gray;     // R
-                data[index + 1] = gray; // G
-                data[index + 2] = gray; // B
-                data[index + 3] = 255;  // A
+                data[index] = rgb[0];     // R
+                data[index + 1] = rgb[1]; // G
+                data[index + 2] = rgb[2]; // B
+                data[index + 3] = 255;    // A
             }
         }
 
