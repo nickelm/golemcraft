@@ -147,3 +147,17 @@ See TODO file for current bugs and planned features.
 **Adding a shader**:
 1. Create `.glsl` or `.vert`/`.frag` files in `src/shaders/`
 2. Import via Vite's raw loader or shader chunk system
+
+## Terrain Visualizer Project
+
+A 2D terrain prototyping tool that shares terrain generation code with the game and later becomes the in-game map.
+- Multi-noise composition (ridged, domain-warped, erosion parameter)
+- Integration with Verdania world design
+- Biome distribution system
+
+**Key Files (once implemented):**
+- `src/world/terrain/worldgen.js` - Single source of truth for terrain sampling
+- `src/utils/math/noise.js` - Extended noise functions (ridged, warped)
+- `src/tools/mapvisualizer/` - 2D visualizer tool
+
+**Principle:** `worldgen.js` is imported by both the visualizer and `terrainworker.js`. Changes to terrain generation happen in one place.
