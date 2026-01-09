@@ -46,6 +46,16 @@ const RIDGENESS_GRADIENT = [
   { value: 1.0, color: [255, 255, 255] }    // Sharp ridges (white)
 ];
 
+const ELEVATION_GRADIENT = [
+  { value: 0.0, color: [20, 50, 120] },      // Deep underwater (< 0)
+  { value: 0.095, color: [30, 80, 160] },    // Underwater (0-6)
+  { value: 0.19, color: [80, 160, 60] },     // Lowland (6-12)
+  { value: 0.317, color: [140, 180, 60] },   // Upland (12-20)
+  { value: 0.555, color: [160, 120, 60] },   // Highland (20-35)
+  { value: 0.794, color: [140, 140, 140] },  // Mountain (35-50)
+  { value: 1.0, color: [250, 250, 250] }     // Peak (> 50)
+];
+
 // Biome colors - discrete mapping for biome visualization
 const BIOME_COLORS = {
   // Water biomes
@@ -90,7 +100,8 @@ const MODE_GRADIENTS = {
   temperature: TEMPERATURE_GRADIENT,
   humidity: HUMIDITY_GRADIENT,
   erosion: EROSION_GRADIENT,
-  ridgeness: RIDGENESS_GRADIENT
+  ridgeness: RIDGENESS_GRADIENT,
+  elevation: ELEVATION_GRADIENT
 };
 
 // Map mode names to parameter names
@@ -99,7 +110,8 @@ const MODE_PARAMS = {
   temperature: 'temperature',
   humidity: 'humidity',
   erosion: 'erosion',
-  ridgeness: 'ridgeness'
+  ridgeness: 'ridgeness',
+  elevation: 'height'
 };
 
 /**
@@ -143,18 +155,97 @@ function sampleGradient(value, gradient) {
 }
 
 /**
+ * Calculate hillshade brightness multiplier from terrain normals
+ * @param {number} heightCenter - Height at center pixel
+ * @param {number} heightLeft - Height 1 unit to the left
+ * @param {number} heightRight - Height 1 unit to the right
+ * @param {number} heightUp - Height 1 unit up (z-1)
+ * @param {number} heightDown - Height 1 unit down (z+1)
+ * @returns {number} Brightness multiplier [0.6, 1.4]
+ */
+function calculateHillshade(heightCenter, heightLeft, heightRight, heightUp, heightDown) {
+  // Compute gradients in world space
+  const dx = heightRight - heightLeft;
+  const dz = heightDown - heightUp;
+
+  // Surface normal (approximate, unnormalized is fine for dot product)
+  const nx = -dx;
+  const ny = 2; // vertical scale factor
+  const nz = -dz;
+
+  // Normalize
+  const len = Math.sqrt(nx * nx + ny * ny + nz * nz);
+  const normalX = nx / len;
+  const normalY = ny / len;
+  const normalZ = nz / len;
+
+  // Light direction: northwest, 45° elevation
+  const lightX = 0.7;
+  const lightY = 0.7;
+  const lightZ = -0.3;
+
+  // Normalize light (already close to unit length)
+  const lightLen = Math.sqrt(lightX * lightX + lightY * lightY + lightZ * lightZ);
+  const lx = lightX / lightLen;
+  const ly = lightY / lightLen;
+  const lz = lightZ / lightLen;
+
+  // Dot product for diffuse shading
+  const shade = normalX * lx + normalY * ly + normalZ * lz;
+
+  // Map [-1, 1] → [0.6, 1.4] for subtle shading
+  return 0.6 + (shade + 1) * 0.4;
+}
+
+/**
  * Get RGB color for a given mode and terrain parameters
  * @param {Object} params - Terrain parameters from getTerrainParams
  * @param {string} mode - Visualization mode name
+ * @param {Object} neighbors - Optional neighbor heights for hillshade (left, right, up, down)
  * @returns {Array} RGB color [r, g, b] in range [0, 255]
  */
-export function getColorForMode(params, mode) {
+export function getColorForMode(params, mode, neighbors = null) {
   // Special case: biome mode uses discrete colors
   if (mode === 'biome') {
     const biomeName = params.biome;
     return BIOME_COLORS[biomeName] || [128, 128, 128]; // Gray fallback for unknown biomes
   }
 
+  // Special case: elevation mode with hillshade
+  if (mode === 'elevation' && neighbors) {
+    const height = params.height;
+
+    // Normalize height [1, 63] → [0, 1]
+    const normalizedHeight = (height - 1) / 62;
+
+    // Sample base color from elevation gradient
+    const baseColor = sampleGradient(normalizedHeight, ELEVATION_GRADIENT);
+
+    // Calculate hillshade if neighbors provided
+    const shade = calculateHillshade(
+      height,
+      neighbors.left,
+      neighbors.right,
+      neighbors.up,
+      neighbors.down
+    );
+
+    // Apply hillshade to base color
+    const r = Math.min(255, Math.max(0, Math.floor(baseColor[0] * shade)));
+    const g = Math.min(255, Math.max(0, Math.floor(baseColor[1] * shade)));
+    const b = Math.min(255, Math.max(0, Math.floor(baseColor[2] * shade)));
+
+    return [r, g, b];
+  }
+
+  // Fallback for elevation without neighbors (shouldn't happen)
+  if (mode === 'elevation') {
+    const height = params.height;
+    const normalizedHeight = (height - 1) / 62;
+    return sampleGradient(normalizedHeight, ELEVATION_GRADIENT);
+  }
+
+  // Standard gradient modes
   const gradient = MODE_GRADIENTS[mode];
   const paramName = MODE_PARAMS[mode];
 

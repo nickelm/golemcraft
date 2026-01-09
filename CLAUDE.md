@@ -161,3 +161,36 @@ A 2D terrain prototyping tool that shares terrain generation code with the game 
 - `src/tools/mapvisualizer/` - 2D visualizer tool
 
 **Principle:** `worldgen.js` is imported by both the visualizer and `terrainworker.js`. Changes to terrain generation happen in one place.
+
+**## TODO Practices**
+
+**In-code TODOs for implementation concerns:**
+Insert explicit, scoped TODO comments directly in source files for:
+- Missing or incomplete implementations
+- Assumptions made without explicit confirmation
+- Magic numbers or thresholds needing tuning
+- Uncertainty about which system is authoritative (e.g., terrainworker.js vs biomesystem.js)
+- Intentionally deferred work
+
+Use categories: `TODO(design)`, `TODO(perf)`, `TODO(assumption)`, `TODO(bug)`
+
+Example:
+```javascript
+// TODO(assumption): Using heightScale 6 to match biomesystem.js—verify this is correct
+// TODO(design): Should water have collision? Currently treating as non-solid.
+```
+
+**External documentation for design concerns:**
+Keep in Claude.ai project (not in code):
+- World structure and zone planning
+- Quest and narrative design
+- Biome themes and cultural references
+- Major architectural decisions and rationale
+
+**The TODO file:**
+Use for tracking completed work (DONE sections) and high-level milestone planning. Not for granular implementation tasks—those belong in code.
+
+**Script to list TODOs:**
+```bash
+grep -rn "TODO" src/ --include="*.js" | grep -v node_modules
+```

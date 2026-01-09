@@ -16,7 +16,8 @@ const MODE_DESCRIPTIONS = {
     humidity: 'Precipitation (yellow = arid, green = moderate, cyan = humid)',
     erosion: 'Valley detail (dark gray = valleys, light gray = peaks)',
     ridgeness: 'Mountain ridges (black = valleys, brown = slopes, white = ridges)',
-    biome: 'Biome distribution (colored regions show biome types)'
+    biome: 'Biome distribution (colored regions show biome types)',
+    elevation: 'Terrain elevation with hillshade (blue = ocean, green = lowland, brown = highland, gray = mountain, white = peak)'
 };
 
 // Map mode names to getTerrainParams property names
@@ -26,7 +27,8 @@ const MODE_PARAM_MAP = {
     humidity: 'humidity',
     erosion: 'erosion',
     ridgeness: 'ridgeness',
-    biome: 'biome'
+    biome: 'biome',
+    elevation: 'height'
 };
 
 class TerrainVisualizer {
@@ -113,6 +115,9 @@ class TerrainVisualizer {
                     break;
                 case '6':
                     this.setMode('biome');
+                    break;
+                case '7':
+                    this.setMode('elevation');
                     break;
                 case 'd':
                 case 'D':
@@ -235,8 +240,27 @@ class TerrainVisualizer {
                 // Sample terrain parameters
                 const params = getTerrainParams(worldX, worldZ, this.seed, this.currentTemplate);
 
-                // Get color for this mode
-                const rgb = getColorForMode(params, this.mode);
+                let rgb;
+
+                // For elevation mode, sample neighbors for hillshade
+                if (this.mode === 'elevation') {
+                    const leftParams = getTerrainParams(worldX - 1, worldZ, this.seed, this.currentTemplate);
+                    const rightParams = getTerrainParams(worldX + 1, worldZ, this.seed, this.currentTemplate);
+                    const upParams = getTerrainParams(worldX, worldZ - 1, this.seed, this.currentTemplate);
+                    const downParams = getTerrainParams(worldX, worldZ + 1, this.seed, this.currentTemplate);
+
+                    const neighbors = {
+                        left: leftParams.height,
+                        right: rightParams.height,
+                        up: upParams.height,
+                        down: downParams.height
+                    };
+
+                    rgb = getColorForMode(params, this.mode, neighbors);
+                } else {
+                    // Standard modes
+                    rgb = getColorForMode(params, this.mode);
+                }
 
                 // Set pixel in image data (RGBA format)
                 const index = (py * width + px) * 4;
@@ -291,5 +315,5 @@ window.addEventListener('DOMContentLoaded', () => {
     window.visualizer = visualizer;
 
     console.log('Terrain Visualizer initialized');
-    console.log('Controls: Arrow keys = pan, +/- = zoom, 1-6 = switch mode, D/V = switch template');
+    console.log('Controls: Arrow keys = pan, +/- = zoom, 1-7 = switch mode, D/V = switch template');
 });
