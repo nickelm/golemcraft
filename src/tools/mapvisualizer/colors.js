@@ -46,6 +46,44 @@ const RIDGENESS_GRADIENT = [
   { value: 1.0, color: [255, 255, 255] }    // Sharp ridges (white)
 ];
 
+// Biome colors - discrete mapping for biome visualization
+const BIOME_COLORS = {
+  // Water biomes
+  ocean: [30, 80, 160],
+  beach: [220, 200, 120],
+
+  // Temperate biomes
+  plains: [77, 204, 64],
+  savanna: [200, 190, 110],
+  taiga: [89, 102, 89],
+
+  // Forest biomes
+  jungle: [51, 102, 38],
+  rainforest: [64, 170, 80],
+  swamp: [80, 110, 80],
+
+  // Dry biomes
+  desert: [242, 217, 128],
+  badlands: [200, 100, 70],
+
+  // Cold biomes
+  snow: [240, 250, 255],
+  tundra: [242, 250, 255],
+  alpine: [240, 220, 230],
+
+  // Mountain biomes
+  mountains: [153, 153, 153],
+  highlands: [200, 190, 180],
+  volcanic: [165, 90, 65],
+
+  // Climate matrix biomes
+  red_desert: [230, 128, 83],
+  meadow: [180, 230, 128],
+  deciduous_forest: [120, 200, 108],
+  autumn_forest: [217, 153, 89],
+  glacier: [204, 230, 250]
+};
+
 // Map mode names to gradients
 const MODE_GRADIENTS = {
   continental: CONTINENTAL_GRADIENT,
@@ -111,6 +149,12 @@ function sampleGradient(value, gradient) {
  * @returns {Array} RGB color [r, g, b] in range [0, 255]
  */
 export function getColorForMode(params, mode) {
+  // Special case: biome mode uses discrete colors
+  if (mode === 'biome') {
+    const biomeName = params.biome;
+    return BIOME_COLORS[biomeName] || [128, 128, 128]; // Gray fallback for unknown biomes
+  }
+
   const gradient = MODE_GRADIENTS[mode];
   const paramName = MODE_PARAMS[mode];
 

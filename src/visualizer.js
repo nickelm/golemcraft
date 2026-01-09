@@ -6,6 +6,7 @@
  */
 
 import { getTerrainParams } from './world/terrain/worldgen.js';
+import { DEFAULT_TEMPLATE, VERDANIA_TEMPLATE } from './world/terrain/templates.js';
 import { getColorForMode } from './tools/mapvisualizer/colors.js';
 
 // Mode descriptions for UI
@@ -14,7 +15,8 @@ const MODE_DESCRIPTIONS = {
     temperature: 'Climate zones (blue = cold, white = temperate, red = hot)',
     humidity: 'Precipitation (yellow = arid, green = moderate, cyan = humid)',
     erosion: 'Valley detail (dark gray = valleys, light gray = peaks)',
-    ridgeness: 'Mountain ridges (black = valleys, brown = slopes, white = ridges)'
+    ridgeness: 'Mountain ridges (black = valleys, brown = slopes, white = ridges)',
+    biome: 'Biome distribution (colored regions show biome types)'
 };
 
 // Map mode names to getTerrainParams property names
@@ -23,7 +25,8 @@ const MODE_PARAM_MAP = {
     temperature: 'temperature',
     humidity: 'humidity',
     erosion: 'erosion',
-    ridgeness: 'ridgeness'
+    ridgeness: 'ridgeness',
+    biome: 'biome'
 };
 
 class TerrainVisualizer {
@@ -35,8 +38,10 @@ class TerrainVisualizer {
         this.seed = seed;
         this.viewX = 0;
         this.viewZ = 0;
-        this.zoom = 2.0;  // Pixels per world block
+        this.zoom = 0.3;  // Pixels per world block
         this.mode = 'continental';
+        this.currentTemplate = DEFAULT_TEMPLATE;
+        this.currentTemplateName = 'Default';
 
         // Mouse tracking for value display
         this.mouseWorldX = 0;
@@ -106,6 +111,19 @@ class TerrainVisualizer {
                 case '5':
                     this.setMode('ridgeness');
                     break;
+                case '6':
+                    this.setMode('biome');
+                    break;
+                case 'd':
+                case 'D':
+                    this.setTemplate('default');
+                    console.log('Switched to DEFAULT template');
+                    break;
+                case 'v':
+                case 'V':
+                    this.setTemplate('verdania');
+                    console.log('Switched to VERDANIA template');
+                    break;
             }
         });
 
@@ -129,7 +147,7 @@ class TerrainVisualizer {
             this.mouseWorldZ = this.viewZ + (canvasY - halfHeight) / this.zoom;
 
             // Sample the value at mouse position
-            const params = getTerrainParams(this.mouseWorldX, this.mouseWorldZ, this.seed);
+            const params = getTerrainParams(this.mouseWorldX, this.mouseWorldZ, this.seed, this.currentTemplate);
             const paramName = MODE_PARAM_MAP[this.mode];
             this.mouseValue = params[paramName];
 
@@ -165,15 +183,33 @@ class TerrainVisualizer {
         this.render();
     }
 
+    setTemplate(templateOrName) {
+        if (typeof templateOrName === 'string') {
+            this.currentTemplate = templateOrName === 'verdania' ? VERDANIA_TEMPLATE : DEFAULT_TEMPLATE;
+            this.currentTemplateName = templateOrName === 'verdania' ? 'Verdania' : 'Default';
+        } else {
+            this.currentTemplate = templateOrName;
+            this.currentTemplateName = templateOrName === VERDANIA_TEMPLATE ? 'Verdania' : 'Default';
+        }
+        this.updateInfoDisplay();
+        this.render();
+    }
+
     updateInfoDisplay() {
         document.getElementById('pos-display').textContent =
             `${Math.round(this.viewX)}, ${Math.round(this.viewZ)}`;
         document.getElementById('zoom-display').textContent =
             this.zoom.toFixed(1);
+        document.getElementById('template-display').textContent =
+            this.currentTemplateName;
 
         if (this.mouseValue !== null) {
-            document.getElementById('value-display').textContent =
-                this.mouseValue.toFixed(3);
+            if (typeof this.mouseValue === 'string') {
+                document.getElementById('value-display').textContent = this.mouseValue;
+            } else {
+                document.getElementById('value-display').textContent =
+                    this.mouseValue.toFixed(3);
+            }
         }
     }
 
@@ -197,7 +233,7 @@ class TerrainVisualizer {
                 const worldZ = this.viewZ + (py - halfHeight) / this.zoom;
 
                 // Sample terrain parameters
-                const params = getTerrainParams(worldX, worldZ, this.seed);
+                const params = getTerrainParams(worldX, worldZ, this.seed, this.currentTemplate);
 
                 // Get color for this mode
                 const rgb = getColorForMode(params, this.mode);
@@ -245,9 +281,15 @@ window.addEventListener('DOMContentLoaded', () => {
         visualizer.setMode(e.target.value);
     });
 
+    // Template selection
+    const templateSelect = document.getElementById('template-select');
+    templateSelect.addEventListener('change', (e) => {
+        visualizer.setTemplate(e.target.value);
+    });
+
     // Make visualizer globally accessible for debugging
     window.visualizer = visualizer;
 
     console.log('Terrain Visualizer initialized');
-    console.log('Controls: Arrow keys = pan, +/- = zoom, 1-5 = switch mode');
+    console.log('Controls: Arrow keys = pan, +/- = zoom, 1-6 = switch mode, D/V = switch template');
 });

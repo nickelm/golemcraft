@@ -9,6 +9,8 @@
  */
 
 import { hash, octaveNoise2D, ridgedNoise2D, warpedNoise2D } from '../../utils/math/noise.js';
+import { DEFAULT_TEMPLATE, getTemplateModifiers } from './templates.js';
+import { getBiomeConfig } from './biomesystem.js';
 
 /**
  * World generation parameters
@@ -63,6 +65,7 @@ export function deriveSeed(worldSeed, salt) {
  * @param {number} x - World X coordinate
  * @param {number} z - World Z coordinate
  * @param {number} seed - World seed
+ * @param {Object} template - Continent template (optional, defaults to DEFAULT_TEMPLATE)
  * @returns {number} Continentalness [0, 1]:
  *   0.0-0.2: Deep ocean
  *   0.2-0.4: Shallow ocean / coast
@@ -70,17 +73,22 @@ export function deriveSeed(worldSeed, salt) {
  *   0.6-0.8: Midlands
  *   0.8-1.0: Highlands / continental interior
  */
-export function sampleContinentalness(x, z, seed) {
+export function sampleContinentalness(x, z, seed, template = DEFAULT_TEMPLATE) {
     const derivedSeed = deriveSeed(seed, 'continentalness');
     const boundHash = (x, z) => hash(x, z, derivedSeed);
 
-    return warpedNoise2D(
+    // Get base continentalness from noise
+    const base = warpedNoise2D(
         x, z,
         WORLD_PARAMS.continental.octaves,
         WORLD_PARAMS.continental.frequency,
         WORLD_PARAMS.continental.warpStrength,
         boundHash
     );
+
+    // Apply template modifiers (bay carving, radial falloff)
+    const modifiers = getTemplateModifiers(x, z, template);
+    return base * modifiers.continentalnessMultiplier;
 }
 
 /**
@@ -90,15 +98,17 @@ export function sampleContinentalness(x, z, seed) {
  * @param {number} x - World X coordinate
  * @param {number} z - World Z coordinate
  * @param {number} seed - World seed
+ * @param {Object} template - Continent template (optional, not used for temperature)
  * @returns {number} Temperature [0, 1]:
  *   0.0-0.3: Cold (arctic/alpine)
  *   0.3-0.7: Temperate
  *   0.7-1.0: Hot (tropical/desert)
  */
-export function sampleTemperature(x, z, seed) {
+export function sampleTemperature(x, z, seed, template = DEFAULT_TEMPLATE) {
     const derivedSeed = deriveSeed(seed, 'temperature');
     const boundHash = (x, z) => hash(x, z, derivedSeed);
 
+    // Templates don't modify temperature (climate is independent of continent shape)
     return octaveNoise2D(
         x, z,
         WORLD_PARAMS.temperature.octaves,
@@ -114,15 +124,17 @@ export function sampleTemperature(x, z, seed) {
  * @param {number} x - World X coordinate
  * @param {number} z - World Z coordinate
  * @param {number} seed - World seed
+ * @param {Object} template - Continent template (optional, not used for humidity)
  * @returns {number} Humidity [0, 1]:
  *   0.0-0.3: Arid (desert/badlands)
  *   0.3-0.7: Moderate
  *   0.7-1.0: Humid (rainforest/swamp)
  */
-export function sampleHumidity(x, z, seed) {
+export function sampleHumidity(x, z, seed, template = DEFAULT_TEMPLATE) {
     const derivedSeed = deriveSeed(seed, 'humidity');
     const boundHash = (x, z) => hash(x, z, derivedSeed);
 
+    // Templates don't modify humidity (climate is independent of continent shape)
     return octaveNoise2D(
         x, z,
         WORLD_PARAMS.humidity.octaves,
@@ -138,21 +150,27 @@ export function sampleHumidity(x, z, seed) {
  * @param {number} x - World X coordinate
  * @param {number} z - World Z coordinate
  * @param {number} seed - World seed
+ * @param {Object} template - Continent template (optional, defaults to DEFAULT_TEMPLATE)
  * @returns {number} Erosion [0, 1]:
  *   0.0: Heavily eroded (valleys, riverbeds)
  *   0.5: Moderate erosion
  *   1.0: Uneroded (peaks, plateaus)
  */
-export function sampleErosion(x, z, seed) {
+export function sampleErosion(x, z, seed, template = DEFAULT_TEMPLATE) {
     const derivedSeed = deriveSeed(seed, 'erosion');
     const boundHash = (x, z) => hash(x, z, derivedSeed);
 
-    return octaveNoise2D(
+    // Get base erosion from noise
+    const base = octaveNoise2D(
         x, z,
         WORLD_PARAMS.erosion.octaves,
         WORLD_PARAMS.erosion.frequency,
         boundHash
     );
+
+    // Apply template modifiers (flattening effect)
+    const modifiers = getTemplateModifiers(x, z, template);
+    return base * modifiers.elevationMultiplier;
 }
 
 /**
@@ -162,15 +180,17 @@ export function sampleErosion(x, z, seed) {
  * @param {number} x - World X coordinate
  * @param {number} z - World Z coordinate
  * @param {number} seed - World seed
+ * @param {Object} template - Continent template (optional, not used directly - see sampleMountainHeight)
  * @returns {number} Ridgeness [0, 1]:
  *   0.0: Valley / flat terrain
  *   0.5: Slopes
  *   1.0: Sharp ridges / peaks
  */
-export function sampleRidgeness(x, z, seed) {
+export function sampleRidgeness(x, z, seed, template = DEFAULT_TEMPLATE) {
     const derivedSeed = deriveSeed(seed, 'ridgeness');
     const boundHash = (x, z) => hash(x, z, derivedSeed);
 
+    // Templates don't modify ridgeness directly (see sampleMountainHeight for template effects)
     return ridgedNoise2D(
         x, z,
         WORLD_PARAMS.ridgeness.octaves,
@@ -182,24 +202,207 @@ export function sampleRidgeness(x, z, seed) {
 }
 
 /**
+ * Sample mountain height contribution from templates
+ * Provides additional height from mountain spines and boosted regions.
+ *
+ * @param {number} x - World X coordinate
+ * @param {number} z - World Z coordinate
+ * @param {number} seed - World seed
+ * @param {Object} template - Continent template (optional, defaults to DEFAULT_TEMPLATE)
+ * @returns {number} Mountain height multiplier [0, 1]:
+ *   Returns ridgeness weighted by template's mountainBoost and ridgeWeight.
+ *   Multiply by scale factor (e.g., 50) when applying to terrain height.
+ */
+export function sampleMountainHeight(x, z, seed, template = DEFAULT_TEMPLATE) {
+    // Get template modifiers
+    const modifiers = getTemplateModifiers(x, z, template);
+
+    // Get ridge noise
+    const ridge = sampleRidgeness(x, z, seed, template);
+
+    // Return weighted ridge contribution
+    return ridge * modifiers.ridgeWeight * modifiers.mountainBoost;
+}
+
+/**
+ * Select biome from climate parameters using 3x3 climate matrix
+ *
+ * @param {string} temp - Temperature band: 'cold', 'temperate', or 'hot'
+ * @param {string} humidity - Humidity band: 'dry', 'moderate', or 'wet'
+ * @param {string} elev - Elevation band: 'low', 'mid', or 'high'
+ * @returns {string} Biome name
+ */
+function selectBiomeFromClimate(temp, humidity, elev) {
+    // HOT CLIMATES
+    if (temp === 'hot') {
+        if (humidity === 'dry') {
+            if (elev === 'low') return 'desert';
+            if (elev === 'mid') return 'red_desert';
+            return 'badlands';  // high
+        }
+        if (humidity === 'moderate') {
+            if (elev === 'low' || elev === 'mid') return 'savanna';
+            return 'badlands';  // high
+        }
+        // wet
+        if (elev === 'low') return 'jungle';  // Will be replaced by beach near ocean
+        if (elev === 'mid') return 'jungle';
+        return 'jungle';  // high
+    }
+
+    // TEMPERATE CLIMATES
+    if (temp === 'temperate') {
+        if (humidity === 'dry') {
+            if (elev === 'low') return 'meadow';
+            if (elev === 'mid') return 'plains';
+            return 'mountains';  // high
+        }
+        if (humidity === 'moderate') {
+            if (elev === 'low') return 'meadow';
+            if (elev === 'mid') return 'deciduous_forest';
+            return 'mountains';  // high
+        }
+        // wet
+        if (elev === 'low') return 'swamp';
+        if (elev === 'mid') return 'autumn_forest';
+        return 'deciduous_forest';  // high
+    }
+
+    // COLD CLIMATES
+    if (temp === 'cold') {
+        if (humidity === 'dry') {
+            if (elev === 'low' || elev === 'mid') return 'tundra';
+            return 'mountains';  // high
+        }
+        if (humidity === 'moderate') {
+            if (elev === 'low') return 'glacier';
+            if (elev === 'mid') return 'taiga';
+            return 'glacier';  // high
+        }
+        // wet
+        if (elev === 'low') return 'glacier';
+        if (elev === 'mid') return 'taiga';
+        return 'glacier';  // high
+    }
+
+    return 'plains';  // Fallback
+}
+
+/**
+ * Determine biome at world position using climate classification
+ *
+ * @param {number} x - World X coordinate
+ * @param {number} z - World Z coordinate
+ * @param {number} seed - World seed
+ * @param {Object} template - Continent template (optional, defaults to DEFAULT_TEMPLATE)
+ * @returns {string} Biome name (e.g., 'plains', 'ocean', 'mountains')
+ */
+export function getBiomeAt(x, z, seed, template = DEFAULT_TEMPLATE) {
+    // Sample terrain parameters with template modifiers
+    const continental = sampleContinentalness(x, z, seed, template);
+    const temperature = sampleTemperature(x, z, seed, template);
+    const humidity = sampleHumidity(x, z, seed, template);
+
+    // Ocean check (below 15% continentalness threshold)
+    // This means bay areas will naturally become ocean biomes
+    if (continental < 0.15) {
+        return 'ocean';
+    }
+
+    // Classify into climate bands
+    const tempBand = temperature < 0.33 ? 'cold' : (temperature < 0.66 ? 'temperate' : 'hot');
+    const humidityBand = humidity < 0.33 ? 'dry' : (humidity < 0.66 ? 'moderate' : 'wet');
+
+    // Elevation band from modified continentalness
+    // Templates affect biome distribution (bay → ocean, spine → mountains)
+    const elevBand = continental < 0.3 ? 'low' : (continental < 0.6 ? 'mid' : 'high');
+
+    // Use climate matrix for biome lookup
+    return selectBiomeFromClimate(tempBand, humidityBand, elevBand);
+}
+
+/**
+ * Calculate terrain height at world position
+ *
+ * @param {number} x - World X coordinate
+ * @param {number} z - World Z coordinate
+ * @param {number} seed - World seed
+ * @param {Object} template - Continent template (optional, defaults to DEFAULT_TEMPLATE)
+ * @returns {number} Height in blocks [1, 63]
+ */
+export function getHeightAt(x, z, seed, template = DEFAULT_TEMPLATE) {
+    // Get biome for base height/scale
+    const biome = getBiomeAt(x, z, seed, template);
+    const biomeConfig = getBiomeConfig(biome);
+
+    // Domain warping for organic terrain (match terrainworker.js)
+    const warpSeed = deriveSeed(seed, 'warp');
+    const warpHash = (x, z) => hash(x, z, warpSeed);
+    const warpStrength = 2.5;
+    const warpX = octaveNoise2D(x + 500, z, 2, 0.015, warpHash) * warpStrength;
+    const warpZ = octaveNoise2D(x, z + 500, 2, 0.015, warpHash) * warpStrength;
+
+    // Main height noise with warping
+    const heightNoiseSeed = deriveSeed(seed, 'height');
+    const heightHash = (x, z) => hash(x, z, heightNoiseSeed);
+    const heightNoise = octaveNoise2D(x + warpX, z + warpZ, 5, 0.03, heightHash);
+
+    // Micro-detail
+    const detailSeed = deriveSeed(seed, 'detail');
+    const detailHash = (x, z) => hash(x, z, detailSeed);
+    const microDetail = octaveNoise2D(x, z, 2, 0.12, detailHash) * 0.25;
+
+    // Get template modifiers
+    const modifiers = getTemplateModifiers(x, z, template);
+
+    // Apply elevation multiplier to detail noise
+    const modifiedDetail = microDetail * modifiers.elevationMultiplier;
+
+    // Base height calculation
+    let height = biomeConfig.baseHeight + heightNoise * biomeConfig.heightScale + modifiedDetail;
+
+    // Add mountain height contribution (from spines and boosted regions)
+    const mountainHeight = sampleMountainHeight(x, z, seed, template);
+    height += mountainHeight * 50; // Scale factor to match terrainworker.js peak bonus
+
+    // Peak boost for high-elevation biomes (match terrainworker.js logic)
+    const PEAK_BIOMES = ['mountains', 'glacier', 'alpine', 'badlands', 'highlands'];
+    if (PEAK_BIOMES.includes(biome)) {
+        const peakSeed = deriveSeed(seed, 'peaks');
+        const peakHash = (x, z) => hash(x, z, peakSeed);
+        const peakNoise = octaveNoise2D(x, z, 3, 0.04, peakHash);
+        const peakBonus = peakNoise * 50;
+        height += peakBonus;
+    }
+
+    // Final clamp to valid range
+    return Math.max(1.0, Math.min(63.0, height));
+}
+
+/**
  * Sample all terrain parameters at world position
  *
  * @param {number} x - World X coordinate
  * @param {number} z - World Z coordinate
  * @param {number} seed - World seed
+ * @param {Object} template - Continent template (optional, defaults to DEFAULT_TEMPLATE)
  * @returns {Object} Terrain parameters:
  *   - continental: Land/ocean distribution [0, 1]
  *   - temperature: Climate temperature [0, 1]
  *   - humidity: Precipitation/moisture [0, 1]
  *   - erosion: Valley/erosion detail [0, 1]
  *   - ridgeness: Mountain ridge formation [0, 1]
+ *   - biome: Biome name (string)
+ *   - height: Terrain height in blocks [1, 63]
  */
-export function getTerrainParams(x, z, seed) {
+export function getTerrainParams(x, z, seed, template = DEFAULT_TEMPLATE) {
     return {
-        continental: sampleContinentalness(x, z, seed),
-        temperature: sampleTemperature(x, z, seed),
-        humidity: sampleHumidity(x, z, seed),
-        erosion: sampleErosion(x, z, seed),
-        ridgeness: sampleRidgeness(x, z, seed)
+        continental: sampleContinentalness(x, z, seed, template),
+        temperature: sampleTemperature(x, z, seed, template),
+        humidity: sampleHumidity(x, z, seed, template),
+        erosion: sampleErosion(x, z, seed, template),
+        ridgeness: sampleRidgeness(x, z, seed, template),
+        biome: getBiomeAt(x, z, seed, template),
+        height: getHeightAt(x, z, seed, template)
     };
 }

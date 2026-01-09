@@ -114,6 +114,13 @@
             <input type="number" id="seed-input" value="12345" step="1">
         </div>
         <div class="control-row">
+            <label for="template-select">Template:</label>
+            <select id="template-select">
+                <option value="default">Default</option>
+                <option value="verdania">Verdania</option>
+            </select>
+        </div>
+        <div class="control-row">
             <label for="mode-select">Mode:</label>
             <select id="mode-select">
                 <option value="continental">Continentalness</option>
@@ -121,6 +128,7 @@
                 <option value="humidity">Humidity</option>
                 <option value="erosion">Erosion</option>
                 <option value="ridgeness">Ridgeness</option>
+                <option value="biome">Biome</option>
             </select>
         </div>
         <div class="mode-desc" id="mode-description">
@@ -131,13 +139,15 @@
     <div id="info">
         <div>Position: <span id="pos-display">0, 0</span></div>
         <div>Zoom: <span id="zoom-display">2.0</span>x</div>
+        <div>Template: <span id="template-display">Default</span></div>
         <div>Value: <span id="value-display">-</span></div>
     </div>
 
     <div id="instructions">
         <strong>Arrow keys:</strong> Pan view<br>
         <strong>+/- or Mouse wheel:</strong> Zoom<br>
-        <strong>1-5:</strong> Switch mode (1=Continental, 2=Temp, 3=Humidity, 4=Erosion, 5=Ridge)
+        <strong>1-6:</strong> Switch mode (1=Continental, 2=Temp, 3=Humidity, 4=Erosion, 5=Ridge, 6=Biome)<br>
+        <strong>D/V:</strong> Switch template (D=Default, V=Verdania)
     </div>
 
     <script type="module" src="/src/visualizer.js"></script>
