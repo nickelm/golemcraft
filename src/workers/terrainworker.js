@@ -45,7 +45,12 @@
  */
 
 import { generateChunkData, getTransferables, CHUNK_SIZE, WATER_LEVEL } from '../world/terrain/chunkdatagenerator.js';
-import { BIOMES } from '../world/terrain/biomesystem.js';
+import {
+    BIOMES,
+    getSurfaceTexture,
+    getSubsurfaceTexture,
+    getUnderwaterTexture
+} from '../world/terrain/biomesystem.js';
 import { WorkerLandmarkSystem } from '../world/landmarks/workerlandmarksystem.js';
 import { generateSpawnPoints } from './spawnpointgenerator.js';
 import { generateObjectInstances } from './objectspawner.js';
@@ -332,15 +337,16 @@ class WorkerTerrainProvider {
         }
 
         if (y === height) {
-            if (height < WATER_LEVEL) return biomeData.underwater || 'sand';
-            if (height <= WATER_LEVEL + 2 && biome !== 'desert' && biome !== 'snow') return 'sand';
+            if (height < WATER_LEVEL) return getUnderwaterTexture(biome);
+            if (height <= WATER_LEVEL + 2 && biome !== 'desert' && biome !== 'snow' && biome !== 'beach') return 'sand';
             if (biome === 'mountains' && height > 22) return 'snow';
-            return biomeData.surface;
+            if (biome === 'alpine' && height > 22) return 'snow';
+            return getSurfaceTexture(biome);
         }
 
         if (y >= height - 3) {
-            if (height <= WATER_LEVEL + 2 && biome !== 'snow') return 'sand';
-            return biomeData.subsurface || 'dirt';
+            if (height <= WATER_LEVEL + 2 && biome !== 'snow' && biome !== 'tundra') return 'sand';
+            return getSubsurfaceTexture(biome);
         }
 
         return 'stone';
@@ -349,12 +355,12 @@ class WorkerTerrainProvider {
     getSurfaceBlockType(x, z) {
         const height = this.getHeight(x, z);
         const biome = this.getBiome(x, z);
-        const biomeData = BIOMES[biome];
 
-        if (height < WATER_LEVEL) return biomeData.underwater || 'sand';
-        if (height <= WATER_LEVEL + 2 && biome !== 'desert' && biome !== 'snow') return 'sand';
+        if (height < WATER_LEVEL) return getUnderwaterTexture(biome);
+        if (height <= WATER_LEVEL + 2 && biome !== 'desert' && biome !== 'snow' && biome !== 'beach') return 'sand';
         if (biome === 'mountains' && height > 22) return 'snow';
-        return biomeData.surface;
+        if (biome === 'alpine' && height > 22) return 'snow';
+        return getSurfaceTexture(biome);
     }
 
     /**

@@ -19,6 +19,7 @@
  * Vertex Shader - shared by desktop and mobile
  *
  * Tile indices and blend weights are constant per quad (all 4 vertices same).
+ * Tints vary per vertex for smooth biome transitions.
  * Only the UV varies (0-1 across the quad) for texture sampling.
  * This prevents tile index interpolation artifacts.
  */
@@ -30,9 +31,17 @@ export const terrainSplatVertexShader = /* glsl */ `
 
 attribute vec4 aTileIndices;
 attribute vec4 aBlendWeights;
+attribute vec3 aBlendTint0;
+attribute vec3 aBlendTint1;
+attribute vec3 aBlendTint2;
+attribute vec3 aBlendTint3;
 
 varying vec4 vTileIndices;
 varying vec4 vBlendWeights;
+varying vec3 vBlendTint0;
+varying vec3 vBlendTint1;
+varying vec3 vBlendTint2;
+varying vec3 vBlendTint3;
 varying vec3 vVertexColor;
 varying vec2 vLocalUV;
 varying vec3 vNormal;
@@ -42,6 +51,12 @@ void main() {
     // Pass tile indices and weights (constant per quad, no interpolation issues)
     vTileIndices = aTileIndices;
     vBlendWeights = aBlendWeights;
+
+    // Pass tints (interpolated per vertex for smooth transitions)
+    vBlendTint0 = aBlendTint0;
+    vBlendTint1 = aBlendTint1;
+    vBlendTint2 = aBlendTint2;
+    vBlendTint3 = aBlendTint3;
 
     #include <color_vertex>
     vVertexColor = vColor;  // AO from vertex colors
@@ -371,6 +386,158 @@ void main() {
 `;
 
 /**
+ * Vertex Shader - Low-power Texture Array version (single tile per quad)
+ *
+ * Identical to low-power atlas version, but works with texture arrays.
+ * Receives a single pre-selected tile index and tint per vertex.
+ */
+export const terrainSplatVertexShaderLowPowerTextureArray = /* glsl */ `
+#include <common>
+#include <color_pars_vertex>
+#include <fog_pars_vertex>
+
+attribute float aSelectedTile;
+attribute vec3 aSelectedTint;
+
+varying float vSelectedTile;
+varying vec3 vSelectedTint;
+varying vec3 vVertexColor;
+varying vec2 vLocalUV;
+varying vec3 vNormal;
+varying vec3 vViewPosition;
+
+void main() {
+    // Pass single tile index and tint (constant per quad)
+    vSelectedTile = aSelectedTile;
+    vSelectedTint = aSelectedTint;
+
+    #include <color_vertex>
+    vVertexColor = vColor;  // AO from vertex colors
+
+    // Pass local UV (0-1 within quad) for texture sampling
+    vLocalUV = uv;
+
+    // Normal in view space for lighting
+    vNormal = normalize(normalMatrix * normal);
+
+    // Model-view transform
+    vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
+    vViewPosition = mvPosition.xyz;
+
+    gl_Position = projectionMatrix * mvPosition;
+
+    #include <fog_vertex>
+}
+`;
+
+/**
+ * Fragment Shader - Low-power Texture Array version (single texture, no blending)
+ *
+ * Maximum performance texture array version that samples ONE texture per fragment.
+ * Uses texture arrays instead of atlas for higher resolution (1024×1024 vs 64×64).
+ * Supports per-vertex tinting for per-biome color variation.
+ * No normal mapping - uses geometric normals only.
+ *
+ * The tile is pre-selected during mesh generation using weighted dithering,
+ * creating a stippled/8-bit transition effect at biome boundaries.
+ */
+export const terrainSplatFragmentShaderLowPowerTextureArray = /* glsl */ `
+#include <common>
+#include <packing>
+#include <fog_pars_fragment>
+#include <bsdfs>
+#include <lights_pars_begin>
+
+uniform sampler2DArray uDiffuseArray;
+uniform float uTileScale;
+
+varying float vSelectedTile;
+varying vec3 vSelectedTint;
+varying vec3 vVertexColor;
+varying vec2 vLocalUV;
+varying vec3 vNormal;
+varying vec3 vViewPosition;
+
+// Helper: Sample and tint a diffuse layer with per-vertex tint
+// Uses multiplicative tinting - tint values > 1.0 will brighten, < 1.0 will darken
+vec4 sampleDiffuseLayer(float layerIndex, vec2 uv, vec3 tint) {
+    vec4 color = texture(uDiffuseArray, vec3(uv * uTileScale, layerIndex));
+    color.rgb *= tint;  // Direct multiplication - allows brightening with tint > 1.0
+    return color;
+}
+
+void main() {
+    // SINGLE texture lookup - maximum performance
+    vec4 color = sampleDiffuseLayer(vSelectedTile, vLocalUV, vSelectedTint);
+
+    // Lambert lighting
+    vec3 normal = normalize(vNormal);
+
+    // Vertex color represents AO and interior darkness (0.0-1.0)
+    // This affects ambient/environmental light, but NOT point lights (torches)
+    float aoFactor = vVertexColor.r;
+
+    // Ambient light (affected by AO/interior darkness)
+    vec3 ambientIrradiance = ambientLightColor * aoFactor;
+
+    // Directional lights (affected by AO/interior darkness)
+    #if NUM_DIR_LIGHTS > 0
+        for (int i = 0; i < NUM_DIR_LIGHTS; i++) {
+            vec3 lightDir = directionalLights[i].direction;
+            float NdotL = max(dot(normal, lightDir), 0.0);
+            ambientIrradiance += directionalLights[i].color * NdotL * aoFactor;
+        }
+    #endif
+
+    // Hemisphere light (affected by AO/interior darkness)
+    #if NUM_HEMI_LIGHTS > 0
+        for (int i = 0; i < NUM_HEMI_LIGHTS; i++) {
+            float dotNL = dot(normal, hemisphereLights[i].direction);
+            float hemiWeight = 0.5 * dotNL + 0.5;
+            ambientIrradiance += mix(hemisphereLights[i].groundColor, hemisphereLights[i].skyColor, hemiWeight) * aoFactor;
+        }
+    #endif
+
+    // Point lights (NOT affected by AO - torches illuminate dark spaces)
+    vec3 pointIrradiance = vec3(0.0);
+    #if NUM_POINT_LIGHTS > 0
+        for (int i = 0; i < NUM_POINT_LIGHTS; i++) {
+            vec3 lightVec = pointLights[i].position - vViewPosition;
+            float distance = length(lightVec);
+            vec3 lightDir = normalize(lightVec);
+
+            float NdotL = max(dot(normal, lightDir), 0.0);
+
+            // Distance attenuation
+            float decay = pointLights[i].decay;
+            float distanceFalloff = 1.0;
+            if (pointLights[i].distance > 0.0) {
+                distanceFalloff = pow(saturate(-distance / pointLights[i].distance + 1.0), decay);
+            }
+
+            // Add ambient fill light (25% of point light reaches all surfaces regardless of normal)
+            // This simulates light bouncing in enclosed spaces
+            float ambientFill = 0.25;
+            float directional = NdotL * (1.0 - ambientFill);
+            pointIrradiance += pointLights[i].color * (directional + ambientFill) * distanceFalloff;
+        }
+    #endif
+
+    // Combine: ambient (darkened by AO) + point lights (full brightness)
+    vec3 irradiance = ambientIrradiance + pointIrradiance;
+
+    // Clamp irradiance to prevent overbright surfaces
+    irradiance = min(irradiance, vec3(1.0));
+
+    color.rgb *= irradiance;
+
+    gl_FragColor = color;
+
+    #include <fog_fragment>
+}
+`;
+
+/**
  * Fragment Shader - Mobile version (2 texture blending)
  *
  * Simplified version that only blends 2 textures for better mobile performance.
@@ -506,13 +673,14 @@ void main() {
  *
  * Simplified mobile version using texture arrays instead of atlas:
  * - Diffuse array: 1024×1024×8 sRGB textures
- * - Per-layer tint colors for artistic control
+ * - Per-vertex tint colors for per-biome tinting
  * - 2-layer blending for mobile performance (vs 4 on desktop)
  * - NO normal mapping (geometric normals only)
  * - Lambert lighting matching mobile atlas shader
  *
  * Blends 2 layers per fragment based on vertex weights.
  * Tile indices are CONSTANT per quad (no interpolation artifacts).
+ * Tints vary per vertex for smooth biome transitions.
  */
 export const terrainSplatFragmentShaderMobileTextureArray = /* glsl */ `
 #include <common>
@@ -524,30 +692,31 @@ export const terrainSplatFragmentShaderMobileTextureArray = /* glsl */ `
 #include <shadowmask_pars_fragment>
 
 uniform sampler2DArray uDiffuseArray;
-uniform vec3 uTintColors[8];
 uniform float uTileScale;
 
 varying vec4 vTileIndices;
 varying vec4 vBlendWeights;
+varying vec3 vBlendTint0;
+varying vec3 vBlendTint1;
+varying vec3 vBlendTint2;
+varying vec3 vBlendTint3;
 varying vec3 vVertexColor;
 varying vec2 vLocalUV;
 varying vec3 vNormal;
 varying vec3 vViewPosition;
 
-// Helper: Sample and tint a diffuse layer
-vec4 sampleDiffuseLayer(float layerIndex, vec2 uv) {
+// Helper: Sample and tint a diffuse layer with per-vertex tint
+// Uses multiplicative tinting - tint values > 1.0 will brighten, < 1.0 will darken
+vec4 sampleDiffuseLayer(float layerIndex, vec2 uv, vec3 tint) {
     vec4 color = texture(uDiffuseArray, vec3(uv * uTileScale, layerIndex));
-    int idx = int(layerIndex);
-    if (idx >= 0 && idx < 8) {
-        color.rgb *= uTintColors[idx];
-    }
+    color.rgb *= tint;  // Direct multiplication - allows brightening with tint > 1.0
     return color;
 }
 
 void main() {
-    // Sample only 2 layers for mobile performance
-    vec4 c0 = sampleDiffuseLayer(vTileIndices.x, vLocalUV);
-    vec4 c1 = sampleDiffuseLayer(vTileIndices.y, vLocalUV);
+    // Sample only 2 layers for mobile performance with per-vertex tints
+    vec4 c0 = sampleDiffuseLayer(vTileIndices.x, vLocalUV, vBlendTint0);
+    vec4 c1 = sampleDiffuseLayer(vTileIndices.y, vLocalUV, vBlendTint1);
 
     // Renormalize weights for 2-texture blend
     float totalWeight = vBlendWeights.x + vBlendWeights.y;
@@ -636,11 +805,12 @@ void main() {
  * Uses texture arrays instead of atlas sampling for higher quality:
  * - Diffuse array: 1024×1024×8 sRGB textures
  * - Normal array: 512×512×8 linear normal maps
- * - Per-layer tint colors for artistic control
+ * - Per-vertex tint colors for per-biome tinting
  * - Normal mapping with view-space transformation
  *
  * Blends 4 layers per fragment based on vertex weights.
  * Tile indices are CONSTANT per quad (no interpolation artifacts).
+ * Tints vary per vertex for smooth biome transitions.
  */
 export const terrainSplatFragmentShaderTextureArray = /* glsl */ `
 #include <common>
@@ -653,25 +823,26 @@ export const terrainSplatFragmentShaderTextureArray = /* glsl */ `
 
 uniform sampler2DArray uDiffuseArray;
 uniform sampler2DArray uNormalArray;
-uniform vec3 uTintColors[8];
 uniform float uTileScale;
 uniform bool uDebugNormals;
 uniform bool uEnableNormalMapping;
 
 varying vec4 vTileIndices;
 varying vec4 vBlendWeights;
+varying vec3 vBlendTint0;
+varying vec3 vBlendTint1;
+varying vec3 vBlendTint2;
+varying vec3 vBlendTint3;
 varying vec3 vVertexColor;
 varying vec2 vLocalUV;
 varying vec3 vNormal;
 varying vec3 vViewPosition;
 
-// Helper: Sample and tint a diffuse layer
-vec4 sampleDiffuseLayer(float layerIndex, vec2 uv) {
+// Helper: Sample and tint a diffuse layer with per-vertex tint
+// Uses multiplicative tinting - tint values > 1.0 will brighten, < 1.0 will darken
+vec4 sampleDiffuseLayer(float layerIndex, vec2 uv, vec3 tint) {
     vec4 color = texture(uDiffuseArray, vec3(uv * uTileScale, layerIndex));
-    int idx = int(layerIndex);
-    if (idx >= 0 && idx < 8) {
-        color.rgb *= uTintColors[idx];
-    }
+    color.rgb *= tint;  // Direct multiplication - allows brightening with tint > 1.0
     return color;
 }
 
@@ -716,11 +887,11 @@ void main() {
         return;
     }
 
-    // Sample all 4 diffuse layers
-    vec4 c0 = sampleDiffuseLayer(vTileIndices.x, vLocalUV);
-    vec4 c1 = sampleDiffuseLayer(vTileIndices.y, vLocalUV);
-    vec4 c2 = sampleDiffuseLayer(vTileIndices.z, vLocalUV);
-    vec4 c3 = sampleDiffuseLayer(vTileIndices.w, vLocalUV);
+    // Sample all 4 diffuse layers with per-vertex tints
+    vec4 c0 = sampleDiffuseLayer(vTileIndices.x, vLocalUV, vBlendTint0);
+    vec4 c1 = sampleDiffuseLayer(vTileIndices.y, vLocalUV, vBlendTint1);
+    vec4 c2 = sampleDiffuseLayer(vTileIndices.z, vLocalUV, vBlendTint2);
+    vec4 c3 = sampleDiffuseLayer(vTileIndices.w, vLocalUV, vBlendTint3);
 
     // Blend diffuse colors
     vec4 blendedColor =

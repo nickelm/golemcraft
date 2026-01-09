@@ -7,13 +7,14 @@ import {
     terrainSplatFragmentShaderMobileTextureArray,
     terrainSplatVertexShaderLowPower,
     terrainSplatFragmentShaderLowPower,
+    terrainSplatVertexShaderLowPowerTextureArray,
+    terrainSplatFragmentShaderLowPowerTextureArray,
     terrainSplatFragmentShaderTextureArray
 } from '../../shaders/terrainsplat.js';
 import {
     voxelLambertVertexShader,
     voxelLambertFragmentShader
 } from '../../shaders/voxellambert.js';
-import { DEFAULT_TINT_COLORS } from './textureregistry.js';
 
 /**
  * ChunkedTerrain - Optimized terrain with merged geometry per chunk
@@ -148,7 +149,11 @@ export class ChunkedTerrain {
         });
 
         if (textureBlending === 'low') {
-            console.log('Using custom Lambert shaders + dithered tiles (low)');
+            if (this.useTextureArrays && this.diffuseArray) {
+                console.log('Using custom Lambert shaders + dithered texture arrays (low)');
+            } else {
+                console.log('Using custom Lambert shaders + dithered atlas tiles (low)');
+            }
         } else if (textureBlending === 'medium') {
             if (this.useTextureArrays && this.diffuseArray) {
                 console.log('Using custom Lambert shaders + 2-texture texture arrays (medium)');
@@ -183,8 +188,14 @@ export class ChunkedTerrain {
         switch (textureBlending) {
             case 'low':
                 // Dithered single-texture mode
-                vertexShader = terrainSplatVertexShaderLowPower;
-                fragmentShader = terrainSplatFragmentShaderLowPower;
+                // Use texture array shader if available, otherwise fall back to atlas
+                if (useTextureArrays && diffuseArray) {
+                    vertexShader = terrainSplatVertexShaderLowPowerTextureArray;
+                    fragmentShader = terrainSplatFragmentShaderLowPowerTextureArray;
+                } else {
+                    vertexShader = terrainSplatVertexShaderLowPower;
+                    fragmentShader = terrainSplatFragmentShaderLowPower;
+                }
                 break;
             case 'medium':
                 // 2-texture blending
@@ -211,20 +222,34 @@ export class ChunkedTerrain {
 
         // Build uniforms based on shader variant
         let uniforms;
-        if (useTextureArrays && diffuseArray && (textureBlending === 'high' || textureBlending === 'medium')) {
-            // Texture array shader (desktop OR mobile)
+        if (useTextureArrays && diffuseArray && (textureBlending === 'high' || textureBlending === 'medium' || textureBlending === 'low')) {
+            // Texture array shader (desktop, mobile, OR low-power)
             // Exclude THREE.UniformsLib.common to avoid 'map' uniform conflict
             const baseArrayUniforms = {
                 // Minimal common uniforms (diffuse/opacity) without 'map'
                 diffuse: { value: new THREE.Color(0xffffff) },
                 opacity: { value: 1.0 },
-                // Texture array uniforms (shared by desktop and mobile)
+                // Texture array uniforms (shared by desktop, mobile, and low-power)
                 uDiffuseArray: { value: diffuseArray },
-                uTintColors: { value: DEFAULT_TINT_COLORS.map(c => new THREE.Vector3(c[0], c[1], c[2])) },
+                // Note: uTintColors removed - now using per-vertex tint attributes (aBlendTint0-3, aSelectedTint)
                 uTileScale: { value: 1.0 }  // 1.0 = one texture repeat per world unit (correct for 1m² PolyHaven textures)
             };
 
-            if (textureBlending === 'high' && normalArray) {
+            if (textureBlending === 'low') {
+                // Low-power texture array shader: diffuse + tinting only
+                uniforms = THREE.UniformsUtils.merge([
+                    THREE.UniformsLib.lights,
+                    THREE.UniformsLib.fog,
+                    baseArrayUniforms
+                ]);
+                console.log('✅ Using texture array shader (low-power, single texture + tinting)');
+                console.log('📊 Texture array details:', {
+                    diffuseArray: !!uniforms.uDiffuseArray.value,
+                    diffuseSize: uniforms.uDiffuseArray.value?.image?.width + 'x' + uniforms.uDiffuseArray.value?.image?.height,
+                    layers: uniforms.uDiffuseArray.value?.image?.depth,
+                    tileScale: uniforms.uTileScale.value
+                });
+            } else if (textureBlending === 'high' && normalArray) {
                 // Desktop shader: add normal mapping uniforms
                 uniforms = THREE.UniformsUtils.merge([
                     THREE.UniformsLib.lights,
@@ -288,7 +313,7 @@ export class ChunkedTerrain {
         });
 
         // Add polygon offset to prevent z-fighting between surface and voxel meshes
-        if (useTextureArrays && diffuseArray && (textureBlending === 'high' || textureBlending === 'medium')) {
+        if (useTextureArrays && diffuseArray && (textureBlending === 'high' || textureBlending === 'medium' || textureBlending === 'low')) {
             material.polygonOffset = true;
             material.polygonOffsetFactor = 1;
             material.polygonOffsetUnits = 1;

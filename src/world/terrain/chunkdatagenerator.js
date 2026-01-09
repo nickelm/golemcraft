@@ -14,8 +14,13 @@
  * 5. Texture splatting for smooth biome transitions
  */
 
-import { BIOMES } from './biomesystem.js';
+import {
+    BIOMES,
+    getSurfaceTexture,
+    getSurfaceTint
+} from './biomesystem.js';
 import { applyHeightfieldModification } from './heightfieldmodifier.js';
+import { getTextureLayer } from './textureregistry.js';
 
 // ============================================================================
 // CONSTANTS
@@ -33,14 +38,17 @@ const CELL_SIZE = 72;
 const TILE_SIZE = 64;
 const GUTTER = 4;
 
-// Mapping from surface block types to atlas tile indices for splatting shader
+// Mapping from surface block types to texture array layer indices
+// This maps texture names to their layer index in the texture array (0-7)
 const SURFACE_TILE_INDICES = {
-    grass: 0,      // [0,0] in atlas
-    stone: 1,      // [1,0]
-    snow: 2,       // [2,0]
-    dirt: 3,       // [3,0]
-    sand: 5,       // [5,0]
-    ice: 6         // [6,0]
+    grass: getTextureLayer('grass'),              // 0
+    stone: getTextureLayer('rock'),               // 4 (note: 'stone' block → 'rock' texture)
+    snow: getTextureLayer('snow'),                // 5
+    dirt: getTextureLayer('dirt'),                // 2
+    sand: getTextureLayer('sand'),                // 3
+    ice: getTextureLayer('ice'),                  // 6
+    rock: getTextureLayer('rock'),                // 4
+    forest_floor: getTextureLayer('forest_floor') // 1
 };
 
 // Texture splatting noise and height bias configuration
@@ -170,7 +178,16 @@ export function getBlockIndex(localX, y, localZ) {
 
 function getBlockUVs(blockType) {
     const blockDef = BLOCK_TYPES[blockType];
-    if (!blockDef) return { uMin: 0, uMax: 1, vMin: 0, vMax: 1 };
+    if (!blockDef) {
+        console.warn(`⚠️ Unknown block type '${blockType}', defaulting to stone`);
+        const stoneDef = BLOCK_TYPES['stone'];
+        const [col, row] = stoneDef.tile;
+        const uMin = (col * CELL_SIZE + GUTTER) / ATLAS_SIZE;
+        const uMax = (col * CELL_SIZE + GUTTER + TILE_SIZE) / ATLAS_SIZE;
+        const vMax = 1 - (row * CELL_SIZE + GUTTER) / ATLAS_SIZE;
+        const vMin = 1 - (row * CELL_SIZE + GUTTER + TILE_SIZE) / ATLAS_SIZE;
+        return { uMin, uMax, vMin, vMax };
+    }
     const [col, row] = blockDef.tile;
     const uMin = (col * CELL_SIZE + GUTTER) / ATLAS_SIZE;
     const uMax = (col * CELL_SIZE + GUTTER + TILE_SIZE) / ATLAS_SIZE;
@@ -233,8 +250,8 @@ function blendNoise(x, z, seed) {
 // ============================================================================
 
 /**
- * Compute blend weights for texture splatting at a vertex position.
- * Samples biomes in a 5x5 area around the vertex and computes weights
+ * Compute blend weights and tints for texture splatting at a vertex position.
+ * Samples biomes in a 3x3 area around the vertex and computes weights
  * based on the frequency of each surface type, with noise perturbation
  * and height-based bias for more natural transitions.
  *
@@ -243,47 +260,64 @@ function blendNoise(x, z, seed) {
  * @param {number} terrainHeight - Height at this vertex for height-based bias
  * @param {Object} terrainProvider - Provider with getBiome() and biome data access
  * @param {Object} biomes - BIOMES configuration object
- * @returns {Object} { tileIndices: [4], weights: [4] } - padded to 4 entries
+ * @returns {Object} { tileIndices: [4], weights: [4], tints: [[r,g,b], ...] } - padded to 4 entries
  */
 function computeBlendWeights(worldX, worldZ, terrainHeight, terrainProvider, biomes) {
     const SAMPLE_RADIUS = 1;  // 3x3 sample area - narrower transitions, less spotty dithering
-    const surfaceVotes = new Map();  // surfaceType -> count
+    const surfaceVotes = new Map();  // surfaceType -> { count, tintSum: [r,g,b] }
 
-    // Sample biomes in a grid around the vertex
+    // Sample biomes in a grid around the vertex and accumulate tints
     for (let dx = -SAMPLE_RADIUS; dx <= SAMPLE_RADIUS; dx++) {
         for (let dz = -SAMPLE_RADIUS; dz <= SAMPLE_RADIUS; dz++) {
             const biome = terrainProvider.getBiome(worldX + dx, worldZ + dz);
             const biomeData = biomes[biome];
             if (biomeData) {
-                const surfaceType = biomeData.surface;
-                surfaceVotes.set(surfaceType, (surfaceVotes.get(surfaceType) || 0) + 1);
+                const surfaceType = getSurfaceTexture(biome);
+                const tint = getSurfaceTint(biome);
+
+                if (!surfaceVotes.has(surfaceType)) {
+                    surfaceVotes.set(surfaceType, { count: 0, tintSum: [0, 0, 0] });
+                }
+                const entry = surfaceVotes.get(surfaceType);
+                entry.count++;
+                entry.tintSum[0] += tint[0];
+                entry.tintSum[1] += tint[1];
+                entry.tintSum[2] += tint[2];
             }
         }
     }
 
     // Sort by vote count (descending), take top 4
     const sorted = [...surfaceVotes.entries()]
-        .sort((a, b) => b[1] - a[1])
+        .sort((a, b) => b[1].count - a[1].count)
         .slice(0, 4);
 
     // Calculate total for normalization
-    const totalVotes = sorted.reduce((sum, [_, count]) => sum + count, 0);
+    const totalVotes = sorted.reduce((sum, [_, data]) => sum + data.count, 0);
 
-    // Build result arrays with base weights
+    // Build result arrays with base weights and average tints
     const tileIndices = [];
     const weights = [];
+    const tints = [];  // NEW: array of [r,g,b] arrays
     const surfaceTypes = [];  // Track surface types for height bias
 
     for (let i = 0; i < 4; i++) {
         if (i < sorted.length) {
-            const [surfaceType, count] = sorted[i];
+            const [surfaceType, data] = sorted[i];
             tileIndices.push(SURFACE_TILE_INDICES[surfaceType] ?? 0);
-            weights.push(count / totalVotes);
+            weights.push(data.count / totalVotes);
+            // Average tint for this surface type across sampled biomes
+            tints.push([
+                data.tintSum[0] / data.count,
+                data.tintSum[1] / data.count,
+                data.tintSum[2] / data.count
+            ]);
             surfaceTypes.push(surfaceType);
         } else {
-            // Pad with zeros (first tile, zero weight)
+            // Pad with zeros (first tile, zero weight, neutral tint)
             tileIndices.push(tileIndices[0] ?? 0);
             weights.push(0);
+            tints.push([1.0, 1.0, 1.0]);
             surfaceTypes.push(null);
         }
     }
@@ -330,11 +364,11 @@ function computeBlendWeights(worldX, worldZ, terrainHeight, terrainProvider, bio
         weights[0] = 1.0;
     }
 
-    return { tileIndices, weights };
+    return { tileIndices, weights, tints };  // Include tints in return value
 }
 
 /**
- * Select a single tile for a quad using noise-based dithering.
+ * Select a single tile and tint for a quad using noise-based dithering.
  * Uses deterministic hash noise to create natural-looking stippled
  * transitions at biome boundaries.
  *
@@ -346,7 +380,7 @@ function computeBlendWeights(worldX, worldZ, terrainHeight, terrainProvider, bio
  * @param {number} terrainHeight - Height at this position
  * @param {Object} terrainProvider - Provider with getBiome()
  * @param {Object} biomes - BIOMES configuration
- * @returns {number} Single tile index for this quad
+ * @returns {Object} { tileIndex: number, tint: [r,g,b] }
  */
 function computeDitheredTileSelection(worldX, worldZ, terrainHeight, terrainProvider, biomes) {
     // Get blend weights using existing function
@@ -354,12 +388,14 @@ function computeDitheredTileSelection(worldX, worldZ, terrainHeight, terrainProv
 
     // Get the two most significant tiles
     const primaryTile = blend.tileIndices[0];
+    const primaryTint = blend.tints[0];
     const secondaryTile = blend.tileIndices[1];
+    const secondaryTint = blend.tints[1];
     const secondaryWeight = blend.weights[1];
 
     // If completely dominant tile (>95% weight), skip dithering
     if (secondaryWeight < 0.05) {
-        return primaryTile;
+        return { tileIndex: primaryTile, tint: primaryTint };
     }
 
     // Use integer coordinates for hash
@@ -374,7 +410,7 @@ function computeDitheredTileSelection(worldX, worldZ, terrainHeight, terrainProv
     // If noise < secondary weight, pick secondary tile
     // This creates natural-looking stippled patterns
     if (noise < secondaryWeight) {
-        return secondaryTile;
+        return { tileIndex: secondaryTile, tint: secondaryTint };
     }
 
     // Also check third tile if it has significant weight
@@ -383,11 +419,11 @@ function computeDitheredTileSelection(worldX, worldZ, terrainHeight, terrainProv
         // Use different seed for tertiary tile check
         const noise2 = blendHash(ix, iz, 98765);
         if (noise2 < tertiaryWeight) {
-            return blend.tileIndices[2];
+            return { tileIndex: blend.tileIndices[2], tint: blend.tints[2] };
         }
     }
 
-    return primaryTile;
+    return { tileIndex: primaryTile, tint: primaryTint };
 }
 
 /**
@@ -429,6 +465,64 @@ function remapWeightsToTileOrder(vertexBlend, quadTileIndices) {
     }
 
     return remappedWeights;
+}
+
+/**
+ * Remap a vertex's blend weights AND tints to match a fixed tile index order.
+ *
+ * Similar to remapWeightsToTileOrder, but also remaps tints. When multiple
+ * tints map to the same quad slot, they're blended weighted by their contributions.
+ *
+ * @param {Object} vertexBlend - { tileIndices: [4], weights: [4], tints: [[r,g,b],...] } from vertex
+ * @param {Array} quadTileIndices - [4] fixed tile indices for the quad
+ * @returns {Object} { weights: [4], tints: [[r,g,b],...] } remapped to quad's tile order
+ */
+function remapWeightsAndTintsToTileOrder(vertexBlend, quadTileIndices) {
+    const remappedWeights = [0, 0, 0, 0];
+    const remappedTints = [
+        [0, 0, 0], [0, 0, 0], [0, 0, 0], [0, 0, 0]
+    ];
+
+    // For each tile in the vertex's blend, find where it goes in quad order
+    for (let i = 0; i < 4; i++) {
+        const tileIndex = vertexBlend.tileIndices[i];
+        const weight = vertexBlend.weights[i];
+        const tint = vertexBlend.tints[i];
+
+        // Find this tile in the quad's tile list
+        const quadSlot = quadTileIndices.indexOf(tileIndex);
+        if (quadSlot !== -1) {
+            remappedWeights[quadSlot] += weight;
+            // Accumulate tint weighted by contribution
+            remappedTints[quadSlot][0] += tint[0] * weight;
+            remappedTints[quadSlot][1] += tint[1] * weight;
+            remappedTints[quadSlot][2] += tint[2] * weight;
+        }
+        // If tile not in quad's list, its weight is lost
+    }
+
+    // Normalize weights and tints
+    const total = remappedWeights.reduce((a, b) => a + b, 0);
+    if (total > 0.001) {
+        for (let i = 0; i < 4; i++) {
+            remappedWeights[i] /= total;
+            if (remappedWeights[i] > 0.001) {
+                // Normalize accumulated tint by its weight
+                remappedTints[i][0] /= remappedWeights[i];
+                remappedTints[i][1] /= remappedWeights[i];
+                remappedTints[i][2] /= remappedWeights[i];
+            } else {
+                // Zero weight slot gets neutral tint
+                remappedTints[i] = [1.0, 1.0, 1.0];
+            }
+        }
+    } else {
+        // Fallback: all weight to first tile
+        remappedWeights[0] = 1.0;
+        remappedTints[0] = vertexBlend.tints[0] || [1.0, 1.0, 1.0];
+    }
+
+    return { weights: remappedWeights, tints: remappedTints };
 }
 
 /**
@@ -757,9 +851,11 @@ function generateSurfaceMesh(heightmap, voxelMask, heightfieldHoleMask, surfaceT
     // Splatting attributes - only used when NOT dithering
     const tileIndices = [];   // vec4: 4 tile indices per vertex
     const blendWeights = [];  // vec4: 4 blend weights per vertex
+    const blendTints = [];    // 12 floats per vertex: 4 tints × RGB (interleaved)
 
-    // Dithering attribute - only used when dithering
+    // Dithering attributes - only used when dithering
     const selectedTiles = []; // float: 1 tile index per vertex
+    const selectedTints = []; // vec3: 1 tint (RGB) per vertex
 
     for (let lz = 0; lz < CHUNK_SIZE; lz++) {
         for (let lx = 0; lx < CHUNK_SIZE; lx++) {
@@ -800,43 +896,48 @@ function generateSurfaceMesh(heightmap, voxelMask, heightfieldHoleMask, surfaceT
             const baseVertex = positions.length / 3;
 
             if (useDithering) {
-                // DITHERED MODE: Pick one tile for entire quad using weighted dithering
+                // DITHERED MODE: Pick one tile and tint for entire quad using weighted dithering
                 const centerX = worldMinX + lx + 0.5;
                 const centerZ = worldMinZ + lz + 0.5;
                 const centerH = (h00 + h10 + h01 + h11) / 4;
-                const selectedTile = computeDitheredTileSelection(
+                const selected = computeDitheredTileSelection(
                     centerX, centerZ, centerH, terrainProvider, BIOMES
                 );
 
+                // All 4 vertices get the same tile and tint
                 // Vertex 0: (lx, lz) -> local UV (0, 0)
                 positions.push(lx, h00, lz);
                 normals.push(...n00);
                 uvs.push(0, 0);
                 colors.push(ao00, ao00, ao00);
-                selectedTiles.push(selectedTile);
+                selectedTiles.push(selected.tileIndex);
+                selectedTints.push(...selected.tint);  // Spread RGB
 
                 // Vertex 1: (lx+1, lz) -> local UV (1, 0)
                 positions.push(lx + 1, h10, lz);
                 normals.push(...n10);
                 uvs.push(1, 0);
                 colors.push(ao10, ao10, ao10);
-                selectedTiles.push(selectedTile);
+                selectedTiles.push(selected.tileIndex);
+                selectedTints.push(...selected.tint);
 
                 // Vertex 2: (lx+1, lz+1) -> local UV (1, 1)
                 positions.push(lx + 1, h11, lz + 1);
                 normals.push(...n11);
                 uvs.push(1, 1);
                 colors.push(ao11, ao11, ao11);
-                selectedTiles.push(selectedTile);
+                selectedTiles.push(selected.tileIndex);
+                selectedTints.push(...selected.tint);
 
                 // Vertex 3: (lx, lz+1) -> local UV (0, 1)
                 positions.push(lx, h01, lz + 1);
                 normals.push(...n01);
                 uvs.push(0, 1);
                 colors.push(ao01, ao01, ao01);
-                selectedTiles.push(selectedTile);
+                selectedTiles.push(selected.tileIndex);
+                selectedTints.push(...selected.tint);
             } else {
-                // SPLATTING MODE: Compute blend weights for texture blending
+                // SPLATTING MODE: Compute blend weights and tints for texture blending
                 const blend00 = computeBlendWeights(worldMinX + lx, worldMinZ + lz, h00, terrainProvider, BIOMES);
                 const blend10 = computeBlendWeights(worldMinX + lx + 1, worldMinZ + lz, h10, terrainProvider, BIOMES);
                 const blend01 = computeBlendWeights(worldMinX + lx, worldMinZ + lz + 1, h01, terrainProvider, BIOMES);
@@ -845,11 +946,11 @@ function generateSurfaceMesh(heightmap, voxelMask, heightfieldHoleMask, surfaceT
                 // Compute tile indices from union of all 4 vertices (prevents weight loss at boundaries)
                 const quadTileIndices = computeQuadTileIndices(blend00, blend10, blend01, blend11);
 
-                // Remap each vertex's weights to match the quad's tile index order
-                const weights00 = remapWeightsToTileOrder(blend00, quadTileIndices);
-                const weights10 = remapWeightsToTileOrder(blend10, quadTileIndices);
-                const weights01 = remapWeightsToTileOrder(blend01, quadTileIndices);
-                const weights11 = remapWeightsToTileOrder(blend11, quadTileIndices);
+                // Remap each vertex's weights AND tints to match the quad's tile index order
+                const remapped00 = remapWeightsAndTintsToTileOrder(blend00, quadTileIndices);
+                const remapped10 = remapWeightsAndTintsToTileOrder(blend10, quadTileIndices);
+                const remapped01 = remapWeightsAndTintsToTileOrder(blend01, quadTileIndices);
+                const remapped11 = remapWeightsAndTintsToTileOrder(blend11, quadTileIndices);
 
                 // Vertex 0: (lx, lz) -> local UV (0, 0)
                 positions.push(lx, h00, lz);
@@ -857,7 +958,12 @@ function generateSurfaceMesh(heightmap, voxelMask, heightfieldHoleMask, surfaceT
                 uvs.push(0, 0);
                 colors.push(ao00, ao00, ao00);
                 tileIndices.push(...quadTileIndices);
-                blendWeights.push(...weights00);
+                blendWeights.push(...remapped00.weights);
+                // Pack 4 tints × RGB = 12 floats
+                blendTints.push(
+                    ...remapped00.tints[0], ...remapped00.tints[1],
+                    ...remapped00.tints[2], ...remapped00.tints[3]
+                );
 
                 // Vertex 1: (lx+1, lz) -> local UV (1, 0)
                 positions.push(lx + 1, h10, lz);
@@ -865,7 +971,11 @@ function generateSurfaceMesh(heightmap, voxelMask, heightfieldHoleMask, surfaceT
                 uvs.push(1, 0);
                 colors.push(ao10, ao10, ao10);
                 tileIndices.push(...quadTileIndices);
-                blendWeights.push(...weights10);
+                blendWeights.push(...remapped10.weights);
+                blendTints.push(
+                    ...remapped10.tints[0], ...remapped10.tints[1],
+                    ...remapped10.tints[2], ...remapped10.tints[3]
+                );
 
                 // Vertex 2: (lx+1, lz+1) -> local UV (1, 1)
                 positions.push(lx + 1, h11, lz + 1);
@@ -873,7 +983,11 @@ function generateSurfaceMesh(heightmap, voxelMask, heightfieldHoleMask, surfaceT
                 uvs.push(1, 1);
                 colors.push(ao11, ao11, ao11);
                 tileIndices.push(...quadTileIndices);
-                blendWeights.push(...weights11);
+                blendWeights.push(...remapped11.weights);
+                blendTints.push(
+                    ...remapped11.tints[0], ...remapped11.tints[1],
+                    ...remapped11.tints[2], ...remapped11.tints[3]
+                );
 
                 // Vertex 3: (lx, lz+1) -> local UV (0, 1)
                 positions.push(lx, h01, lz + 1);
@@ -881,7 +995,11 @@ function generateSurfaceMesh(heightmap, voxelMask, heightfieldHoleMask, surfaceT
                 uvs.push(0, 1);
                 colors.push(ao01, ao01, ao01);
                 tileIndices.push(...quadTileIndices);
-                blendWeights.push(...weights01);
+                blendWeights.push(...remapped01.weights);
+                blendTints.push(
+                    ...remapped01.tints[0], ...remapped01.tints[1],
+                    ...remapped01.tints[2], ...remapped01.tints[3]
+                );
             }
 
             indices.push(baseVertex, baseVertex + 2, baseVertex + 1);
@@ -901,9 +1019,11 @@ function generateSurfaceMesh(heightmap, voxelMask, heightfieldHoleMask, surfaceT
 
     if (useDithering) {
         result.selectedTiles = new Float32Array(selectedTiles);
+        result.selectedTints = new Float32Array(selectedTints);  // NEW: tint data for dithering
     } else {
         result.tileIndices = new Float32Array(tileIndices);
         result.blendWeights = new Float32Array(blendWeights);
+        result.blendTints = new Float32Array(blendTints);  // NEW: tint data for splatting
     }
 
     return result;
@@ -1190,12 +1310,18 @@ export function getTransferables(chunkData) {
 
     // Add mode-specific surface buffers
     if (chunkData.surface.selectedTiles) {
-        // Dithering mode: single tile per vertex
+        // Dithering mode: single tile + tint per vertex
         transferables.push(chunkData.surface.selectedTiles.buffer);
+        if (chunkData.surface.selectedTints) {
+            transferables.push(chunkData.surface.selectedTints.buffer);
+        }
     } else if (chunkData.surface.tileIndices && chunkData.surface.blendWeights) {
-        // Splatting mode: 4 tiles + weights per vertex
+        // Splatting mode: 4 tiles + weights + tints per vertex
         transferables.push(chunkData.surface.tileIndices.buffer);
         transferables.push(chunkData.surface.blendWeights.buffer);
+        if (chunkData.surface.blendTints) {
+            transferables.push(chunkData.surface.blendTints.buffer);
+        }
     }
 
     // Add static object position arrays

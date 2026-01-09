@@ -245,6 +245,11 @@ export class TerrainWorkerManager {
                 ? this._convertTileIndicesToLayers(data.selectedTiles)
                 : data.selectedTiles;
             geometry.setAttribute('aSelectedTile', new THREE.BufferAttribute(tiles, 1));
+
+            // Add tint attribute (3 floats per vertex: RGB)
+            if (data.selectedTints) {
+                geometry.setAttribute('aSelectedTint', new THREE.BufferAttribute(data.selectedTints, 3));
+            }
         } else if (data.tileIndices && data.blendWeights) {
             // Splatting mode: 4 tiles + weights per vertex
             // Convert tile indices only if using texture arrays
@@ -253,6 +258,43 @@ export class TerrainWorkerManager {
                 : data.tileIndices;
             geometry.setAttribute('aTileIndices', new THREE.BufferAttribute(indices, 4));
             geometry.setAttribute('aBlendWeights', new THREE.BufferAttribute(data.blendWeights, 4));
+
+            // Add tint attributes (4 vec3 per vertex, stored interleaved: 12 floats total)
+            // Need to de-interleave into 4 separate attributes for shader
+            if (data.blendTints) {
+                const vertexCount = data.positions.length / 3;
+                const tint0 = new Float32Array(vertexCount * 3);
+                const tint1 = new Float32Array(vertexCount * 3);
+                const tint2 = new Float32Array(vertexCount * 3);
+                const tint3 = new Float32Array(vertexCount * 3);
+
+                // De-interleave: [t0.r, t0.g, t0.b, t1.r, t1.g, t1.b, ...] → separate arrays
+                for (let i = 0; i < vertexCount; i++) {
+                    const srcIdx = i * 12;  // 12 floats per vertex
+                    const dstIdx = i * 3;   // 3 floats per tint
+
+                    tint0[dstIdx + 0] = data.blendTints[srcIdx + 0];
+                    tint0[dstIdx + 1] = data.blendTints[srcIdx + 1];
+                    tint0[dstIdx + 2] = data.blendTints[srcIdx + 2];
+
+                    tint1[dstIdx + 0] = data.blendTints[srcIdx + 3];
+                    tint1[dstIdx + 1] = data.blendTints[srcIdx + 4];
+                    tint1[dstIdx + 2] = data.blendTints[srcIdx + 5];
+
+                    tint2[dstIdx + 0] = data.blendTints[srcIdx + 6];
+                    tint2[dstIdx + 1] = data.blendTints[srcIdx + 7];
+                    tint2[dstIdx + 2] = data.blendTints[srcIdx + 8];
+
+                    tint3[dstIdx + 0] = data.blendTints[srcIdx + 9];
+                    tint3[dstIdx + 1] = data.blendTints[srcIdx + 10];
+                    tint3[dstIdx + 2] = data.blendTints[srcIdx + 11];
+                }
+
+                geometry.setAttribute('aBlendTint0', new THREE.BufferAttribute(tint0, 3));
+                geometry.setAttribute('aBlendTint1', new THREE.BufferAttribute(tint1, 3));
+                geometry.setAttribute('aBlendTint2', new THREE.BufferAttribute(tint2, 3));
+                geometry.setAttribute('aBlendTint3', new THREE.BufferAttribute(tint3, 3));
+            }
         }
 
         geometry.setIndex(new THREE.BufferAttribute(data.indices, 1));
