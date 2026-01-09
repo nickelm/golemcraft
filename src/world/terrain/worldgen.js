@@ -109,12 +109,15 @@ export function sampleTemperature(x, z, seed, template = DEFAULT_TEMPLATE) {
     const boundHash = (x, z) => hash(x, z, derivedSeed);
 
     // Templates don't modify temperature (climate is independent of continent shape)
-    return octaveNoise2D(
+    const raw = octaveNoise2D(
         x, z,
         WORLD_PARAMS.temperature.octaves,
         WORLD_PARAMS.temperature.frequency,
         boundHash
     );
+
+    // Normalize hash-based noise from [0.08, 0.45] to [0, 1]
+    return Math.max(0, Math.min(1, (raw - 0.08) / 0.37));
 }
 
 /**
@@ -135,12 +138,15 @@ export function sampleHumidity(x, z, seed, template = DEFAULT_TEMPLATE) {
     const boundHash = (x, z) => hash(x, z, derivedSeed);
 
     // Templates don't modify humidity (climate is independent of continent shape)
-    return octaveNoise2D(
+    const raw = octaveNoise2D(
         x, z,
         WORLD_PARAMS.humidity.octaves,
         WORLD_PARAMS.humidity.frequency,
         boundHash
     );
+
+    // Normalize hash-based noise from [0.08, 0.45] to [0, 1]
+    return Math.max(0, Math.min(1, (raw - 0.08) / 0.37));
 }
 
 /**
