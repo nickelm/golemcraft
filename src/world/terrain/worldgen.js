@@ -13,6 +13,16 @@ import { DEFAULT_TEMPLATE, getTemplateModifiers } from './templates.js';
 import { getBiomeConfig } from './biomesystem.js';
 
 /**
+ * Ocean threshold constants based on continentalness
+ * Used to distinguish deep ocean, shallow ocean, and land
+ */
+export const OCEAN_THRESHOLDS = {
+    deep: 0.10,      // continentalness below this = deep ocean
+    shallow: 0.25,   // continentalness below this = shallow ocean
+    land: 0.25,      // continentalness above this = land
+};
+
+/**
  * Height configuration for relative terrain scaling
  * All heights defined as fractions [0, 1] for easy scaling to any max height
  */
@@ -55,6 +65,76 @@ export const HEIGHT_CONFIG = {
  */
 export function getSeaLevel() {
     return HEIGHT_CONFIG.seaLevelWorld;
+}
+
+/**
+ * Get water type at world position based on continentalness
+ *
+ * @param {number} x - World X coordinate
+ * @param {number} z - World Z coordinate
+ * @param {number} seed - World seed
+ * @param {Object} template - Continent template (optional, defaults to DEFAULT_TEMPLATE)
+ * @returns {string} Water type: 'deep', 'shallow', or 'none'
+ */
+export function getWaterType(x, z, seed, template = DEFAULT_TEMPLATE) {
+    const continental = sampleContinentalness(x, z, seed, template);
+
+    // Add variation to deep/shallow boundary for organic coastlines
+    const boundaryNoiseSeed = deriveSeed(seed, 'deep_boundary');
+    const boundaryHash = (x, z) => hash(x, z, boundaryNoiseSeed);
+    const boundaryNoise = octaveNoise2D(x, z, 2, 0.008, boundaryHash) * 0.04;
+    const deepThreshold = OCEAN_THRESHOLDS.deep + (boundaryNoise - 0.02);
+
+    if (continental < deepThreshold) {
+        return 'deep';
+    }
+    if (continental < OCEAN_THRESHOLDS.shallow) {
+        return 'shallow';
+    }
+    return 'none';
+}
+
+/**
+ * Get ocean depth at world position
+ *
+ * @param {number} x - World X coordinate
+ * @param {number} z - World Z coordinate
+ * @param {number} seed - World seed
+ * @param {Object} template - Continent template (optional, defaults to DEFAULT_TEMPLATE)
+ * @returns {number|null} Ocean floor height in blocks, or null if on land
+ *   - Deep ocean: near floor (HEIGHT_CONFIG.toWorld(0.01))
+ *   - Shallow ocean: interpolated between floor and sea level based on continentalness
+ *   - Land: null
+ */
+export function getOceanDepth(x, z, seed, template = DEFAULT_TEMPLATE) {
+    const continental = sampleContinentalness(x, z, seed, template);
+
+    // Add variation to deep/shallow boundary for organic coastlines
+    const boundaryNoiseSeed = deriveSeed(seed, 'deep_boundary');
+    const boundaryHash = (x, z) => hash(x, z, boundaryNoiseSeed);
+    const boundaryNoise = octaveNoise2D(x, z, 2, 0.008, boundaryHash) * 0.04;
+    const deepThreshold = OCEAN_THRESHOLDS.deep + (boundaryNoise - 0.02);
+
+    // Land - no ocean depth
+    if (continental >= OCEAN_THRESHOLDS.shallow) {
+        return null;
+    }
+
+    // Deep ocean - near floor
+    if (continental < deepThreshold) {
+        return HEIGHT_CONFIG.toWorld(0.01);
+    }
+
+    // Shallow ocean - interpolate between floor and sea level based on continentalness
+    const shallowOceanFloor = HEIGHT_CONFIG.toWorld(HEIGHT_CONFIG.bands.shallowOceanFloor);
+    const seaLevel = HEIGHT_CONFIG.seaLevelWorld;
+
+    // Normalize continentalness within shallow range [deepThreshold, OCEAN_THRESHOLDS.shallow]
+    const shallowRange = OCEAN_THRESHOLDS.shallow - deepThreshold;
+    const t = (continental - deepThreshold) / shallowRange;
+
+    // Lerp from shallow ocean floor to sea level
+    return shallowOceanFloor + t * (seaLevel - shallowOceanFloor);
 }
 
 /**
