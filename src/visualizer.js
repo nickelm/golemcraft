@@ -11,6 +11,10 @@ import { TileCache } from './tools/mapvisualizer/tilecache.js';
 import { TerrainCache } from './visualizer/terraincache.js';
 import { TileManager } from './visualizer/tilemanager.js';
 
+// Zoom limits
+const MIN_ZOOM = 0.1;
+const MAX_ZOOM = 4.0;
+
 // Mode descriptions for UI
 const MODE_DESCRIPTIONS = {
     continental: 'Land/ocean distribution (blue = ocean, green = plains, brown = hills, white = peaks)',
@@ -82,6 +86,13 @@ class TerrainVisualizer {
             pinchCenterX: 0,
             pinchCenterZ: 0
         };
+
+        // Mouse pan state
+        this.isMousePanning = false;
+        this.mousePanStartX = 0;
+        this.mousePanStartY = 0;
+        this.mousePanStartViewX = 0;
+        this.mousePanStartViewZ = 0;
 
         // Set canvas to full window size
         this.resizeCanvas();
@@ -225,12 +236,12 @@ class TerrainVisualizer {
                     break;
                 case '+':
                 case '=':
-                    this.setZoom(this.zoom * 1.2);
+                    this.setZoom(Math.min(MAX_ZOOM, this.zoom * 1.2));
                     e.preventDefault();
                     break;
                 case '-':
                 case '_':
-                    this.setZoom(this.zoom / 1.2);
+                    this.setZoom(Math.max(MIN_ZOOM, this.zoom / 1.2));
                     e.preventDefault();
                     break;
                 case '1':
@@ -270,24 +281,73 @@ class TerrainVisualizer {
             }
         });
 
-        // Mouse wheel zoom
+        // Mouse wheel zoom toward cursor
         this.canvas.addEventListener('wheel', (e) => {
             e.preventDefault();
-            const zoomFactor = e.deltaY < 0 ? 1.1 : 0.9;
-            this.setZoom(this.zoom * zoomFactor);
+
+            const rect = this.canvas.getBoundingClientRect();
+            const canvasCenterX = this.canvas.width / 2;
+            const canvasCenterY = this.canvas.height / 2;
+            const offsetX = (e.clientX - rect.left) - canvasCenterX;
+            const offsetY = (e.clientY - rect.top) - canvasCenterY;
+
+            // World position under cursor before zoom
+            const worldX = this.viewX + offsetX / this.zoom;
+            const worldZ = this.viewZ + offsetY / this.zoom;
+
+            // Adjust zoom
+            const factor = e.deltaY > 0 ? 0.9 : 1.1;
+            const newZoom = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, this.zoom * factor));
+
+            if (newZoom !== this.zoom) {
+                this.zoom = newZoom;
+
+                // Keep cursor over same world point
+                this.viewX = worldX - offsetX / this.zoom;
+                this.viewZ = worldZ - offsetY / this.zoom;
+
+                this.updateInfoDisplay();
+                this.scheduleRender();
+            }
+        }, { passive: false });
+
+        // Mouse pan: left-drag
+        this.canvas.addEventListener('mousedown', (e) => {
+            if (e.button !== 0) return; // Left button only
+            e.preventDefault();
+            this.isMousePanning = true;
+            this.mousePanStartX = e.clientX;
+            this.mousePanStartY = e.clientY;
+            this.mousePanStartViewX = this.viewX;
+            this.mousePanStartViewZ = this.viewZ;
+            this.canvas.classList.add('panning');
         });
 
-        // Mouse move for value display
+        // Mouse move: coordinate display + pan handling
         this.canvas.addEventListener('mousemove', (e) => {
             const rect = this.canvas.getBoundingClientRect();
             const canvasX = e.clientX - rect.left;
             const canvasY = e.clientY - rect.top;
-
             const halfWidth = this.canvas.width / 2;
             const halfHeight = this.canvas.height / 2;
 
+            // Update world coordinates
             this.mouseWorldX = this.viewX + (canvasX - halfWidth) / this.zoom;
             this.mouseWorldZ = this.viewZ + (canvasY - halfHeight) / this.zoom;
+
+            // Handle panning
+            if (this.isMousePanning) {
+                const dx = e.clientX - this.mousePanStartX;
+                const dy = e.clientY - this.mousePanStartY;
+                this.viewX = this.mousePanStartViewX - dx / this.zoom;
+                this.viewZ = this.mousePanStartViewZ - dy / this.zoom;
+
+                // Update world coords after view change
+                this.mouseWorldX = this.viewX + (canvasX - halfWidth) / this.zoom;
+                this.mouseWorldZ = this.viewZ + (canvasY - halfHeight) / this.zoom;
+
+                this.scheduleRender();
+            }
 
             // Sample the value at mouse position
             const params = getTerrainParams(this.mouseWorldX, this.mouseWorldZ, this.seed, this.currentTemplate);
@@ -295,6 +355,17 @@ class TerrainVisualizer {
             this.mouseValue = params[paramName];
 
             this.updateInfoDisplay();
+        });
+
+        this.canvas.addEventListener('mouseup', (e) => {
+            if (e.button !== 0) return;
+            this.isMousePanning = false;
+            this.canvas.classList.remove('panning');
+        });
+
+        this.canvas.addEventListener('mouseleave', () => {
+            this.isMousePanning = false;
+            this.canvas.classList.remove('panning');
         });
 
         // Click handler for debug logging (bay orientation diagnosis)

@@ -122,6 +122,11 @@
             image-rendering: pixelated;
             image-rendering: crisp-edges;
             touch-action: none; /* Prevent default touch behaviors for pan/zoom */
+            cursor: grab;
+        }
+
+        #terrain-canvas.panning {
+            cursor: grabbing;
         }
 
         .mode-desc {
