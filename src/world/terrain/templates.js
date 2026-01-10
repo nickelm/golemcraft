@@ -425,6 +425,10 @@ export function getTemplateModifiers(worldX, worldZ, template) {
         }
     }
 
+    // Ensure no mountain boost in ocean areas
+    mountainBoost *= shapeMask;
+    ridgeWeight *= shapeMask;
+
     return {
         continentalnessMultiplier: shapeMask,
         elevationMultiplier: elevationMultiplier,
