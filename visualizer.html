@@ -96,6 +96,7 @@
             height: 100vh;
             image-rendering: pixelated;
             image-rendering: crisp-edges;
+            touch-action: none; /* Prevent default touch behaviors for pan/zoom */
         }
 
         .mode-desc {
@@ -148,6 +149,7 @@
     <div id="instructions">
         <strong>Arrow keys:</strong> Pan view<br>
         <strong>+/- or Mouse wheel:</strong> Zoom<br>
+        <strong>Touch:</strong> Drag to pan, pinch to zoom<br>
         <strong>1-8:</strong> Switch mode (1=Continental, 2=Temp, 3=Humidity, 4=Erosion, 5=Ridge, 6=Biome, 7=Elevation, 8=Composite)<br>
         <strong>D/V:</strong> Switch template (D=Default, V=Verdania)
     </div>
