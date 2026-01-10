@@ -30,7 +30,7 @@ const MODE_PARAM_MAP = {
     erosion: 'erosion',
     ridgeness: 'ridgeness',
     biome: 'biome',
-    elevation: 'height',
+    elevation: 'heightNormalized',  // Use normalized [0, 1] for display
     composite: 'biome'  // Shows biome in value display
 };
 

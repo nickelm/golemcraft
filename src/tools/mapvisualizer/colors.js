@@ -125,7 +125,7 @@ const MODE_PARAMS = {
   humidity: 'humidity',
   erosion: 'erosion',
   ridgeness: 'ridgeness',
-  elevation: 'height'
+  elevation: 'heightNormalized'  // Use normalized [0, 1] for gradient sampling
 };
 
 /**
@@ -251,9 +251,10 @@ export function getColorForMode(params, mode, neighbors = null) {
     }
 
     // Shallow ocean: show ocean floor with hillshade
+    // Note: oceanDepth is in world units, convert to normalized for gradient
     if (waterType === 'shallow') {
       const floorHeight = oceanDepth || SHALLOW_OCEAN_FLOOR;
-      const normalizedHeight = (floorHeight - 1) / 62;
+      const normalizedHeight = floorHeight / 63;  // Convert world units to normalized [0, 1]
       const baseColor = sampleGradient(normalizedHeight, ELEVATION_GRADIENT);
 
       // Calculate hillshade for ocean floor using oceanDepth for surrounding points
@@ -275,8 +276,8 @@ export function getColorForMode(params, mode, neighbors = null) {
     }
 
     // Land: normal elevation rendering with hillshade
-    const height = params.height;
-    const normalizedHeight = (height - 1) / 62;
+    const height = params.height;  // World-scaled for hillshade
+    const normalizedHeight = params.heightNormalized;  // Use normalized [0, 1] for color
     const baseColor = sampleGradient(normalizedHeight, ELEVATION_GRADIENT);
 
     const shade = calculateHillshade(
@@ -300,8 +301,10 @@ export function getColorForMode(params, mode, neighbors = null) {
     if (waterType === 'deep') {
       return [...WATER_COLORS.deep];
     }
-    const height = waterType === 'shallow' ? (params.oceanDepth || SHALLOW_OCEAN_FLOOR) : params.height;
-    const normalizedHeight = (height - 1) / 62;
+    // For shallow ocean, convert oceanDepth to normalized; for land, use heightNormalized
+    const normalizedHeight = waterType === 'shallow'
+      ? (params.oceanDepth || SHALLOW_OCEAN_FLOOR) / 63
+      : params.heightNormalized;
     return sampleGradient(normalizedHeight, ELEVATION_GRADIENT);
   }
 
