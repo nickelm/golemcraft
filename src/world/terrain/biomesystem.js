@@ -10,8 +10,8 @@
  *
  * Each biome defines:
  * - name: Display name
- * - baseHeight: Base terrain height
- * - heightScale: Vertical variation
+ * - baseHeightFraction: Base terrain height as fraction of maxHeight [0, 1]
+ * - heightScaleFraction: Vertical variation as fraction of maxHeight [0, 1]
  * - terrain: { primary, tint } - Surface texture and RGB tint (0-1, linear space)
  * - subsurface: { primary, tint } - Block type 1-3 blocks below surface
  * - underwater: { primary, tint } - Surface block when underwater
@@ -24,8 +24,8 @@ export const BIOMES = {
     // WATER BIOMES (sand-based)
     ocean: {
         name: 'Ocean',
-        baseHeight: 3,
-        heightScale: 2,
+        baseHeightFraction: 0.05,
+        heightScaleFraction: 0.03,
         terrain: { primary: 'sand', tint: [1.3, 1.5, 1.8] },  // Bright blue-tinted sand
         subsurface: { primary: 'sand', tint: [1.0, 1.0, 1.0] },
         underwater: { primary: 'sand', tint: [0.7, 0.85, 1.0] },
@@ -37,8 +37,8 @@ export const BIOMES = {
 
     beach: {
         name: 'Beach',
-        baseHeight: 6,
-        heightScale: 1,
+        baseHeightFraction: 0.10,
+        heightScaleFraction: 0.02,
         terrain: { primary: 'sand', tint: [1.8, 1.7, 1.4] },  // Very bright sandy beach
         subsurface: { primary: 'sand', tint: [1.0, 1.0, 1.0] },
         underwater: { primary: 'sand', tint: [1.0, 0.98, 0.92] },
@@ -51,8 +51,8 @@ export const BIOMES = {
     // TEMPERATE BIOMES (grass-based)
     plains: {
         name: 'Plains',
-        baseHeight: 8,
-        heightScale: 6,
+        baseHeightFraction: 0.13,
+        heightScaleFraction: 0.10,
         terrain: { primary: 'grass', tint: [1.0, 1.6, 0.9] },  // Bright vibrant green grass
         subsurface: { primary: 'dirt', tint: [1.0, 1.0, 1.0] },
         underwater: { primary: 'sand', tint: [1.0, 1.0, 1.0] },
@@ -74,8 +74,8 @@ export const BIOMES = {
 
     savanna: {
         name: 'Savanna',
-        baseHeight: 8,
-        heightScale: 4,
+        baseHeightFraction: 0.13,
+        heightScaleFraction: 0.06,
         terrain: { primary: 'grass', tint: [1.6, 1.5, 0.9] },  // Bright golden savanna grass
         subsurface: { primary: 'dirt', tint: [1.0, 0.9, 0.8] },
         underwater: { primary: 'sand', tint: [1.0, 1.0, 1.0] },
@@ -87,8 +87,8 @@ export const BIOMES = {
 
     taiga: {
         name: 'Taiga',
-        baseHeight: 9,
-        heightScale: 5,
+        baseHeightFraction: 0.14,
+        heightScaleFraction: 0.08,
         terrain: { primary: 'grass', tint: [0.9, 1.4, 1.2] },  // Bright cool teal-green grass
         subsurface: { primary: 'dirt', tint: [0.9, 0.9, 0.85] },
         underwater: { primary: 'sand', tint: [1.0, 1.0, 1.0] },
@@ -101,8 +101,8 @@ export const BIOMES = {
     // FOREST BIOMES (forest_floor-based)
     jungle: {
         name: 'Jungle',
-        baseHeight: 10,
-        heightScale: 8,
+        baseHeightFraction: 0.16,
+        heightScaleFraction: 0.13,
         terrain: { primary: 'forest_floor', tint: [0.9, 1.4, 0.8] },  // Bright lush jungle green
         subsurface: { primary: 'dirt', tint: [0.8, 0.7, 0.5] },
         underwater: { primary: 'sand', tint: [1.0, 1.0, 1.0] },
@@ -121,8 +121,8 @@ export const BIOMES = {
 
     rainforest: {
         name: 'Rainforest',
-        baseHeight: 11,
-        heightScale: 9,
+        baseHeightFraction: 0.17,
+        heightScaleFraction: 0.14,
         terrain: { primary: 'forest_floor', tint: [0.8, 1.7, 0.9] },  // Very bright vibrant green
         subsurface: { primary: 'dirt', tint: [0.7, 0.6, 0.4] },
         underwater: { primary: 'sand', tint: [1.0, 1.0, 1.0] },
@@ -134,8 +134,8 @@ export const BIOMES = {
 
     swamp: {
         name: 'Swamp',
-        baseHeight: 6,
-        heightScale: 3,
+        baseHeightFraction: 0.10,
+        heightScaleFraction: 0.05,
         terrain: { primary: 'forest_floor', tint: [0.8, 1.1, 0.8] },  // Brighter swamp green
         subsurface: { primary: 'dirt', tint: [0.5, 0.5, 0.45] },
         underwater: { primary: 'sand', tint: [0.6, 0.7, 0.6] },
@@ -148,8 +148,8 @@ export const BIOMES = {
     // DRY BIOMES (sand-based)
     desert: {
         name: 'Desert',
-        baseHeight: 7,
-        heightScale: 4,
+        baseHeightFraction: 0.11,
+        heightScaleFraction: 0.06,
         terrain: { primary: 'sand', tint: [1.7, 1.6, 1.2] },  // Bright golden desert sand
         subsurface: { primary: 'sand', tint: [1.0, 0.9, 0.7] },
         underwater: { primary: 'sand', tint: [1.0, 0.92, 0.7] },
@@ -168,8 +168,8 @@ export const BIOMES = {
 
     badlands: {
         name: 'Badlands',
-        baseHeight: 9,
-        heightScale: 12,
+        baseHeightFraction: 0.14,
+        heightScaleFraction: 0.19,
         terrain: { primary: 'sand', tint: [1.6, 0.9, 0.6] },  // Bright red-orange badlands
         subsurface: { primary: 'sand', tint: [0.85, 0.45, 0.25] },
         underwater: { primary: 'sand', tint: [0.9, 0.5, 0.3] },
@@ -182,8 +182,8 @@ export const BIOMES = {
     // COLD BIOMES (snow-based)
     snow: {
         name: 'Snowy Plains',
-        baseHeight: 9,
-        heightScale: 5,
+        baseHeightFraction: 0.14,
+        heightScaleFraction: 0.08,
         terrain: { primary: 'snow', tint: [2.0, 2.0, 2.0] },  // Bright white snow
         subsurface: { primary: 'dirt', tint: [1.0, 1.0, 1.0] },
         underwater: { primary: 'sand', tint: [1.0, 1.0, 1.0] },
@@ -201,8 +201,8 @@ export const BIOMES = {
 
     tundra: {
         name: 'Tundra',
-        baseHeight: 8,
-        heightScale: 3,
+        baseHeightFraction: 0.13,
+        heightScaleFraction: 0.05,
         terrain: { primary: 'snow', tint: [1.7, 1.8, 2.0] },  // Bright blue-white snow
         subsurface: { primary: 'dirt', tint: [0.85, 0.85, 0.9] },
         underwater: { primary: 'sand', tint: [1.0, 1.0, 1.0] },
@@ -214,8 +214,8 @@ export const BIOMES = {
 
     alpine: {
         name: 'Alpine',
-        baseHeight: 20,
-        heightScale: 15,
+        baseHeightFraction: 0.32,
+        heightScaleFraction: 0.24,
         terrain: { primary: 'snow', tint: [2.0, 1.8, 1.9] },  // Bright pink-tinted alpine snow
         subsurface: { primary: 'rock', tint: [0.9, 0.9, 0.9] },
         underwater: { primary: 'sand', tint: [1.0, 1.0, 1.0] },
@@ -228,8 +228,8 @@ export const BIOMES = {
     // MOUNTAIN BIOMES (rock-based)
     mountains: {
         name: 'Mountains',
-        baseHeight: 18,
-        heightScale: 20,
+        baseHeightFraction: 0.29,
+        heightScaleFraction: 0.32,
         terrain: { primary: 'rock', tint: [1.5, 1.5, 1.6] },  // Bright grey-blue rock
         subsurface: { primary: 'rock', tint: [0.85, 0.85, 0.9] },
         underwater: { primary: 'sand', tint: [1.0, 1.0, 1.0] },
@@ -247,8 +247,8 @@ export const BIOMES = {
 
     highlands: {
         name: 'Highlands',
-        baseHeight: 15,
-        heightScale: 12,
+        baseHeightFraction: 0.24,
+        heightScaleFraction: 0.19,
         terrain: { primary: 'rock', tint: [1.6, 1.5, 1.4] },  // Bright warm rock
         subsurface: { primary: 'rock', tint: [0.9, 0.88, 0.85] },
         underwater: { primary: 'sand', tint: [1.0, 1.0, 1.0] },
@@ -260,8 +260,8 @@ export const BIOMES = {
 
     volcanic: {
         name: 'Volcanic',
-        baseHeight: 12,
-        heightScale: 18,
+        baseHeightFraction: 0.19,
+        heightScaleFraction: 0.29,
         terrain: { primary: 'rock', tint: [1.3, 0.7, 0.5] },  // Bright red-brown volcanic rock
         subsurface: { primary: 'rock', tint: [0.5, 0.25, 0.2] },
         underwater: { primary: 'sand', tint: [0.7, 0.4, 0.3] },
@@ -274,8 +274,8 @@ export const BIOMES = {
     // NEW BIOMES (Spec 11 Revision - Climate Matrix)
     red_desert: {
         name: 'Red Desert',
-        baseHeight: 8,
-        heightScale: 7,
+        baseHeightFraction: 0.13,
+        heightScaleFraction: 0.11,
         terrain: { primary: 'sand', tint: [1.8, 1.0, 0.65] },  // Bright red-orange sand
         subsurface: { primary: 'sand', tint: [1.2, 0.6, 0.4] },  // Deeper red subsurface
         underwater: { primary: 'sand', tint: [1.0, 0.7, 0.5] },
@@ -287,8 +287,8 @@ export const BIOMES = {
 
     meadow: {
         name: 'Meadow',
-        baseHeight: 7,
-        heightScale: 3,
+        baseHeightFraction: 0.11,
+        heightScaleFraction: 0.05,
         terrain: { primary: 'grass', tint: [1.4, 1.8, 1.0] },  // Bright yellow-green grass
         subsurface: { primary: 'dirt', tint: [1.0, 0.95, 0.85] },
         underwater: { primary: 'sand', tint: [1.0, 1.0, 1.0] },
@@ -300,8 +300,8 @@ export const BIOMES = {
 
     deciduous_forest: {
         name: 'Deciduous Forest',
-        baseHeight: 14,
-        heightScale: 10,
+        baseHeightFraction: 0.22,
+        heightScaleFraction: 0.16,
         terrain: { primary: 'forest_floor', tint: [0.95, 1.6, 0.85] },  // Bright green forest floor
         subsurface: { primary: 'dirt', tint: [0.85, 0.75, 0.6] },
         underwater: { primary: 'sand', tint: [1.0, 1.0, 1.0] },
@@ -313,8 +313,8 @@ export const BIOMES = {
 
     autumn_forest: {
         name: 'Autumn Forest',
-        baseHeight: 10,
-        heightScale: 7,
+        baseHeightFraction: 0.16,
+        heightScaleFraction: 0.11,
         terrain: { primary: 'forest_floor', tint: [1.7, 1.2, 0.7] },  // Bright orange-red autumn colors
         subsurface: { primary: 'dirt', tint: [0.8, 0.7, 0.55] },
         underwater: { primary: 'sand', tint: [1.0, 1.0, 1.0] },
@@ -326,8 +326,8 @@ export const BIOMES = {
 
     glacier: {
         name: 'Glacier',
-        baseHeight: 16,
-        heightScale: 18,
+        baseHeightFraction: 0.25,
+        heightScaleFraction: 0.29,
         terrain: { primary: 'ice', tint: [1.8, 2.0, 2.2] },  // Bright blue-white ice
         subsurface: { primary: 'ice', tint: [1.5, 1.7, 2.0] },  // Ice subsurface
         underwater: { primary: 'ice', tint: [1.3, 1.5, 1.8] },
