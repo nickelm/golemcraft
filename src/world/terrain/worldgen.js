@@ -513,6 +513,21 @@ export function getBiomeAt(x, z, seed, template = DEFAULT_TEMPLATE) {
  * @returns {number} Height in blocks [1, HEIGHT_CONFIG.maxHeight]
  */
 export function getHeightAt(x, z, seed, template = DEFAULT_TEMPLATE) {
+    // Get template modifiers first for early ocean detection
+    const modifiers = getTemplateModifiers(x, z, template);
+
+    // Early return for ocean: if continentalnessMultiplier is low, this is ocean per template
+    if (modifiers.continentalnessMultiplier < 0.3) {
+        // Use ocean depth from the ocean system for consistency
+        const oceanDepth = getOceanDepth(x, z, seed, template);
+        if (oceanDepth !== null) {
+            return oceanDepth;
+        }
+        // If getOceanDepth returns null but we're still below threshold,
+        // return shallow ocean floor
+        return HEIGHT_CONFIG.toWorld(HEIGHT_CONFIG.bands.shallowOceanFloor);
+    }
+
     // Get biome for base height/scale
     const biome = getBiomeAt(x, z, seed, template);
     const biomeConfig = getBiomeConfig(biome);
@@ -534,14 +549,7 @@ export function getHeightAt(x, z, seed, template = DEFAULT_TEMPLATE) {
     const detailHash = (x, z) => hash(x, z, detailSeed);
     const microDetail = octaveNoise2D(x, z, 2, 0.12, detailHash) * 0.25;
 
-    // Get template modifiers
-    const modifiers = getTemplateModifiers(x, z, template);
-
-    // Apply elevation multiplier to detail noise
-    const modifiedDetail = microDetail * modifiers.elevationMultiplier;
-
     // Base height calculation using fractions (with backward compatibility for absolute values)
-    const LEGACY_MAX_HEIGHT = 63;  // Used for converting old absolute values to fractions
     const baseHeight = biomeConfig.baseHeightFraction !== undefined
         ? biomeConfig.baseHeightFraction * HEIGHT_CONFIG.maxHeight
         : biomeConfig.baseHeight;
@@ -549,9 +557,10 @@ export function getHeightAt(x, z, seed, template = DEFAULT_TEMPLATE) {
         ? biomeConfig.heightScaleFraction * HEIGHT_CONFIG.maxHeight
         : biomeConfig.heightScale;
 
-    let height = baseHeight + heightNoise * heightScale + modifiedDetail;
+    let height = baseHeight + heightNoise * heightScale + microDetail;
 
     // Add mountain height contribution (from spines and boosted regions)
+    // Uses mountainBoost and ridgeWeight from template modifiers
     const mountainHeight = sampleMountainHeight(x, z, seed, template);
     height += mountainHeight * 50; // Scale factor to match terrainworker.js peak bonus
 
@@ -563,6 +572,14 @@ export function getHeightAt(x, z, seed, template = DEFAULT_TEMPLATE) {
         const peakNoise = octaveNoise2D(x, z, 3, 0.04, peakHash);
         const peakBonus = peakNoise * 50;
         height += peakBonus;
+    }
+
+    // Apply elevation flattening from template
+    // elevationMultiplier < 1 means flatten terrain toward sea level
+    if (modifiers.elevationMultiplier < 1.0) {
+        const flatBaseHeight = HEIGHT_CONFIG.seaLevelWorld + 2; // Slightly above sea level
+        // Lerp between flat base and actual height based on elevationMultiplier
+        height = flatBaseHeight + (height - flatBaseHeight) * modifiers.elevationMultiplier;
     }
 
     // Final clamp to valid range
