@@ -109,6 +109,7 @@ const MAX_SHALLOW_DEPTH = SEA_LEVEL - SHALLOW_OCEAN_FLOOR;  // ~5 blocks
 // Map mode names to gradients
 const MODE_GRADIENTS = {
   continental: CONTINENTAL_GRADIENT,
+  effectiveContinental: CONTINENTAL_GRADIENT,  // Island-perturbed continentalness
   temperature: TEMPERATURE_GRADIENT,
   humidity: HUMIDITY_GRADIENT,
   erosion: EROSION_GRADIENT,
@@ -119,6 +120,7 @@ const MODE_GRADIENTS = {
 // Map mode names to parameter names
 const MODE_PARAMS = {
   continental: 'continental',
+  effectiveContinental: 'effectiveContinental',  // Shows island perturbation effect
   temperature: 'temperature',
   humidity: 'humidity',
   erosion: 'erosion',
