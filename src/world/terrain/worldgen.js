@@ -537,6 +537,8 @@ export function getHeightAt(x, z, seed, template = DEFAULT_TEMPLATE) {
  *   - ridgeness: Mountain ridge formation [0, 1]
  *   - biome: Biome name (string)
  *   - height: Terrain height in blocks [1, HEIGHT_CONFIG.maxHeight]
+ *   - waterType: 'deep', 'shallow', or 'none'
+ *   - oceanDepth: Ocean floor height in blocks, or null if on land
  */
 export function getTerrainParams(x, z, seed, template = DEFAULT_TEMPLATE) {
     return {
@@ -546,6 +548,8 @@ export function getTerrainParams(x, z, seed, template = DEFAULT_TEMPLATE) {
         erosion: sampleErosion(x, z, seed, template),
         ridgeness: sampleRidgeness(x, z, seed, template),
         biome: getBiomeAt(x, z, seed, template),
-        height: getHeightAt(x, z, seed, template)
+        height: getHeightAt(x, z, seed, template),
+        waterType: getWaterType(x, z, seed, template),
+        oceanDepth: getOceanDepth(x, z, seed, template)
     };
 }

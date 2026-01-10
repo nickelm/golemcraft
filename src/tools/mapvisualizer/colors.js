@@ -94,6 +94,18 @@ const BIOME_COLORS = {
   glacier: [204, 230, 250]
 };
 
+// Water colors for ocean depth visualization
+const WATER_COLORS = {
+    deep: [15, 30, 80],           // very dark blue
+    shallow: [30, 80, 160],       // medium blue
+    shallowFloor: [60, 100, 140], // lighter, shows sandy bottom
+};
+
+// Sea level and shallow ocean floor for depth calculations
+const SEA_LEVEL = 6;  // HEIGHT_CONFIG.toWorld(0.10)
+const SHALLOW_OCEAN_FLOOR = 1;  // HEIGHT_CONFIG.toWorld(0.02)
+const MAX_SHALLOW_DEPTH = SEA_LEVEL - SHALLOW_OCEAN_FLOOR;  // ~5 blocks
+
 // Map mode names to gradients
 const MODE_GRADIENTS = {
   continental: CONTINENTAL_GRADIENT,
@@ -198,6 +210,21 @@ function calculateHillshade(heightCenter, heightLeft, heightRight, heightUp, hei
 }
 
 /**
+ * Linear interpolation between two RGB colors
+ * @param {Array} color1 - First color [r, g, b]
+ * @param {Array} color2 - Second color [r, g, b]
+ * @param {number} t - Interpolation factor [0, 1]
+ * @returns {Array} Interpolated color [r, g, b]
+ */
+function lerpColor(color1, color2, t) {
+  return [
+    Math.floor(color1[0] + (color2[0] - color1[0]) * t),
+    Math.floor(color1[1] + (color2[1] - color1[1]) * t),
+    Math.floor(color1[2] + (color2[2] - color1[2]) * t)
+  ];
+}
+
+/**
  * Get RGB color for a given mode and terrain parameters
  * @param {Object} params - Terrain parameters from getTerrainParams
  * @param {string} mode - Visualization mode name
@@ -213,15 +240,43 @@ export function getColorForMode(params, mode, neighbors = null) {
 
   // Special case: elevation mode with hillshade
   if (mode === 'elevation' && neighbors) {
+    const waterType = params.waterType;
+    const oceanDepth = params.oceanDepth;
+
+    // Deep ocean: flat dark, no ocean floor visible
+    if (waterType === 'deep') {
+      return [...WATER_COLORS.deep];
+    }
+
+    // Shallow ocean: show ocean floor with hillshade
+    if (waterType === 'shallow') {
+      const floorHeight = oceanDepth || SHALLOW_OCEAN_FLOOR;
+      const normalizedHeight = (floorHeight - 1) / 62;
+      const baseColor = sampleGradient(normalizedHeight, ELEVATION_GRADIENT);
+
+      // Calculate hillshade for ocean floor using oceanDepth for surrounding points
+      const shade = calculateHillshade(
+        floorHeight,
+        neighbors.left,
+        neighbors.right,
+        neighbors.up,
+        neighbors.down
+      );
+
+      // Apply hillshade and tint blue for underwater
+      let r = Math.min(255, Math.max(0, Math.floor(baseColor[0] * shade * 0.7)));
+      let g = Math.min(255, Math.max(0, Math.floor(baseColor[1] * shade * 0.8)));
+      let b = Math.min(255, Math.max(0, Math.floor(baseColor[2] * shade * 1.1)));
+      b = Math.min(255, b);  // Ensure blue doesn't overflow
+
+      return [r, g, b];
+    }
+
+    // Land: normal elevation rendering with hillshade
     const height = params.height;
-
-    // Normalize height [1, 63] → [0, 1]
     const normalizedHeight = (height - 1) / 62;
-
-    // Sample base color from elevation gradient
     const baseColor = sampleGradient(normalizedHeight, ELEVATION_GRADIENT);
 
-    // Calculate hillshade if neighbors provided
     const shade = calculateHillshade(
       height,
       neighbors.left,
@@ -230,7 +285,6 @@ export function getColorForMode(params, mode, neighbors = null) {
       neighbors.down
     );
 
-    // Apply hillshade to base color
     const r = Math.min(255, Math.max(0, Math.floor(baseColor[0] * shade)));
     const g = Math.min(255, Math.max(0, Math.floor(baseColor[1] * shade)));
     const b = Math.min(255, Math.max(0, Math.floor(baseColor[2] * shade)));
@@ -240,7 +294,11 @@ export function getColorForMode(params, mode, neighbors = null) {
 
   // Fallback for elevation without neighbors (shouldn't happen)
   if (mode === 'elevation') {
-    const height = params.height;
+    const waterType = params.waterType;
+    if (waterType === 'deep') {
+      return [...WATER_COLORS.deep];
+    }
+    const height = waterType === 'shallow' ? (params.oceanDepth || SHALLOW_OCEAN_FLOOR) : params.height;
     const normalizedHeight = (height - 1) / 62;
     return sampleGradient(normalizedHeight, ELEVATION_GRADIENT);
   }
@@ -248,14 +306,24 @@ export function getColorForMode(params, mode, neighbors = null) {
   // Composite mode: biome colors + hillshade + water + contours
   if (mode === 'composite') {
     const height = params.height;
-    const WATER_LEVEL = 6;
+    const waterType = params.waterType;
+    const oceanDepth = params.oceanDepth;
 
-    // Water override: render as water blue if below water level
-    if (height < WATER_LEVEL) {
-      return [30, 80, 160];
+    // Water rendering based on water type
+    if (waterType === 'deep') {
+      // Deep ocean: render dark blue, no seafloor tint
+      return [...WATER_COLORS.deep];
     }
 
-    // Get biome color as base
+    if (waterType === 'shallow') {
+      // Shallow ocean: blend between water color and seafloor based on depth
+      const depth = SEA_LEVEL - (oceanDepth || SHALLOW_OCEAN_FLOOR);
+      const visibility = 1 - (depth / MAX_SHALLOW_DEPTH);  // 1 = very shallow, 0 = deeper
+      const blendFactor = Math.max(0, Math.min(1, visibility * 0.5));
+      return lerpColor(WATER_COLORS.shallow, WATER_COLORS.shallowFloor, blendFactor);
+    }
+
+    // Land: Get biome color as base
     const biomeName = params.biome;
     const baseColor = BIOME_COLORS[biomeName] || [128, 128, 128];
 
