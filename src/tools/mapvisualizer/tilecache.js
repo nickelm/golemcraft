@@ -1,6 +1,7 @@
 /**
  * Tile cache for terrain visualizer
  * Caches pre-rendered tiles to improve pan/zoom performance
+ * Integrates with TerrainCache for persistent IndexedDB storage
  */
 
 import { getTerrainParams } from '../../world/terrain/worldgen.js';
@@ -16,6 +17,15 @@ export class TileCache {
     this.maxTiles = maxTiles;
     this.cache = new Map(); // Key: "worldX,worldZ,mode,seed" -> { imageData, lastUsed }
     this.accessOrder = []; // Track access order for LRU eviction
+    this.terrainCache = null; // Optional TerrainCache for IndexedDB persistence
+  }
+
+  /**
+   * Set the terrain cache for persistent storage
+   * @param {TerrainCache} terrainCache - TerrainCache instance
+   */
+  setTerrainCache(terrainCache) {
+    this.terrainCache = terrainCache;
   }
 
   /**
@@ -50,6 +60,19 @@ export class TileCache {
    */
   getWorldTileSize(lodLevel = 0) {
     return this.tileSize * (1 << lodLevel);
+  }
+
+  /**
+   * Generate terrain cache key for a tile
+   * @private
+   * @param {number} worldX - Tile world X coordinate
+   * @param {number} worldZ - Tile world Z coordinate
+   * @param {number} lodLevel - LOD level
+   * @returns {string} Terrain cache coordinates as "chunkX,chunkZ"
+   */
+  _makeTerrainKey(worldX, worldZ, lodLevel) {
+    // Use tile coordinates as chunk coordinates for terrain cache
+    return { chunkX: worldX, chunkZ: worldZ, lod: lodLevel };
   }
 
   /**
@@ -91,6 +114,67 @@ export class TileCache {
     this.accessOrder.push(key);
 
     return imageData;
+  }
+
+  /**
+   * Get or render a tile with async terrain cache support
+   * Checks TerrainCache (IndexedDB) first for persistent cached terrain data
+   * @param {number} worldX - Tile world X coordinate (should be aligned to tileSize grid)
+   * @param {number} worldZ - Tile world Z coordinate (should be aligned to tileSize grid)
+   * @param {string} mode - Visualization mode
+   * @param {number} seed - World seed
+   * @param {Object} template - Terrain template
+   * @param {number} lodLevel - LOD level (0 = 1:1, 1 = 1:2, 2 = 1:4, etc.)
+   * @returns {Promise<{imageData: ImageData, fromTerrainCache: boolean}>}
+   */
+  async getTileAsync(worldX, worldZ, mode, seed, template, lodLevel = 0) {
+    const key = this._makeKey(worldX, worldZ, mode, seed, lodLevel);
+
+    // Check in-memory cache first
+    if (this.cache.has(key)) {
+      const idx = this.accessOrder.indexOf(key);
+      if (idx !== -1) {
+        this.accessOrder.splice(idx, 1);
+      }
+      this.accessOrder.push(key);
+      return { imageData: this.cache.get(key).imageData, fromTerrainCache: false };
+    }
+
+    let terrainData = null;
+    let fromTerrainCache = false;
+
+    // Check TerrainCache (IndexedDB) for cached terrain data
+    if (this.terrainCache) {
+      const { chunkX, chunkZ, lod } = this._makeTerrainKey(worldX, worldZ, lodLevel);
+      const cacheKey = `${chunkX},${chunkZ},${lod}`;
+      terrainData = await this.terrainCache.get(chunkX, chunkZ + lod * 1000000);
+      if (terrainData) {
+        fromTerrainCache = true;
+      }
+    }
+
+    // Render the tile (using cached terrain data if available)
+    const { imageData, heightmap, biomeData } = this._renderTileWithData(
+      worldX, worldZ, mode, seed, template, lodLevel, terrainData
+    );
+
+    // Store terrain data in TerrainCache if it was newly generated
+    if (this.terrainCache && !fromTerrainCache && heightmap) {
+      const { chunkX, chunkZ, lod } = this._makeTerrainKey(worldX, worldZ, lodLevel);
+      await this.terrainCache.set(chunkX, chunkZ + lod * 1000000, { heightmap, biomeData });
+    }
+
+    // Evict oldest if over capacity
+    while (this.cache.size >= this.maxTiles && this.accessOrder.length > 0) {
+      const oldestKey = this.accessOrder.shift();
+      this.cache.delete(oldestKey);
+    }
+
+    // Cache in memory
+    this.cache.set(key, { imageData, lastUsed: Date.now() });
+    this.accessOrder.push(key);
+
+    return { imageData, fromTerrainCache };
   }
 
   /**
@@ -153,6 +237,106 @@ export class TileCache {
     }
 
     return imageData;
+  }
+
+  /**
+   * Render a tile with optional cached terrain data
+   * Returns both the rendered image and the terrain data for caching
+   * @private
+   * @param {number} worldX - Tile world X coordinate
+   * @param {number} worldZ - Tile world Z coordinate
+   * @param {string} mode - Visualization mode
+   * @param {number} seed - World seed
+   * @param {Object} template - Terrain template
+   * @param {number} lodLevel - LOD level
+   * @param {Object|null} cachedTerrainData - Cached terrain data or null
+   * @returns {{imageData: ImageData, heightmap: Float32Array, biomeData: Uint8Array}}
+   */
+  _renderTileWithData(worldX, worldZ, mode, seed, template, lodLevel, cachedTerrainData) {
+    const canvas = new OffscreenCanvas(this.tileSize, this.tileSize);
+    const ctx = canvas.getContext('2d');
+    const imageData = ctx.createImageData(this.tileSize, this.tileSize);
+    const data = imageData.data;
+
+    const needsNeighbors = mode === 'elevation' || mode === 'composite';
+    const step = 1 << lodLevel;
+    const totalPixels = this.tileSize * this.tileSize;
+
+    // Prepare terrain data arrays
+    let heightmap = cachedTerrainData?.heightmap;
+    let biomeData = cachedTerrainData?.biomeData;
+    const generateTerrain = !heightmap;
+
+    if (generateTerrain) {
+      heightmap = new Float32Array(totalPixels);
+      biomeData = new Uint8Array(totalPixels);
+    }
+
+    // Pre-generate or use cached terrain params
+    const paramsGrid = new Array(totalPixels);
+
+    for (let py = 0; py < this.tileSize; py++) {
+      for (let px = 0; px < this.tileSize; px++) {
+        const wx = worldX + px * step;
+        const wz = worldZ + py * step;
+        const idx = py * this.tileSize + px;
+
+        if (generateTerrain) {
+          const params = getTerrainParams(wx, wz, seed, template);
+          paramsGrid[idx] = params;
+          heightmap[idx] = params.heightNormalized;
+          // Simple biome encoding (first char code for now)
+          biomeData[idx] = params.biome ? params.biome.charCodeAt(0) : 0;
+        } else {
+          // Reconstruct minimal params from cached data
+          const params = getTerrainParams(wx, wz, seed, template);
+          paramsGrid[idx] = params;
+        }
+      }
+    }
+
+    // Render pixels
+    for (let py = 0; py < this.tileSize; py++) {
+      for (let px = 0; px < this.tileSize; px++) {
+        const idx = py * this.tileSize + px;
+        const params = paramsGrid[idx];
+
+        let rgb;
+
+        if (needsNeighbors) {
+          const wx = worldX + px * step;
+          const wz = worldZ + py * step;
+
+          const leftParams = getTerrainParams(wx - step, wz, seed, template);
+          const rightParams = getTerrainParams(wx + step, wz, seed, template);
+          const upParams = getTerrainParams(wx, wz - step, seed, template);
+          const downParams = getTerrainParams(wx, wz + step, seed, template);
+
+          const neighbors = {
+            left: leftParams.height,
+            right: rightParams.height,
+            up: upParams.height,
+            down: downParams.height
+          };
+
+          rgb = getColorForMode(params, mode, neighbors);
+        } else {
+          rgb = getColorForMode(params, mode);
+        }
+
+        const pixelIdx = idx * 4;
+        data[pixelIdx] = rgb[0];
+        data[pixelIdx + 1] = rgb[1];
+        data[pixelIdx + 2] = rgb[2];
+        data[pixelIdx + 3] = 255;
+      }
+    }
+
+    return {
+      imageData,
+      heightmap: generateTerrain ? heightmap : null,
+      biomeData: generateTerrain ? biomeData : null
+    };
   }
 
   /**

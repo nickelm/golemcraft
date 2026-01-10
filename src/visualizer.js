@@ -9,6 +9,7 @@ import { getTerrainParams } from './world/terrain/worldgen.js';
 import { DEFAULT_TEMPLATE, VERDANIA_TEMPLATE, debugTemplateAt } from './world/terrain/templates.js';
 import { getColorForMode } from './tools/mapvisualizer/colors.js';
 import { TileCache } from './tools/mapvisualizer/tilecache.js';
+import { TerrainCache } from './visualizer/terraincache.js';
 
 // Mode descriptions for UI
 const MODE_DESCRIPTIONS = {
@@ -51,6 +52,10 @@ class TerrainVisualizer {
         // Tile cache for improved pan/zoom performance
         this.tileCache = new TileCache(128, 64);
 
+        // Persistent terrain cache (IndexedDB)
+        this.terrainCache = new TerrainCache();
+        this.terrainCacheReady = false;
+
         // Mouse tracking for value display
         this.mouseWorldX = 0;
         this.mouseWorldZ = 0;
@@ -79,6 +84,53 @@ class TerrainVisualizer {
 
         // Setup event listeners
         this.setupEventListeners();
+
+        // Initialize terrain cache asynchronously
+        this.initTerrainCache();
+    }
+
+    /**
+     * Initialize the persistent terrain cache (IndexedDB)
+     */
+    async initTerrainCache() {
+        try {
+            const success = await this.terrainCache.init();
+            if (success) {
+                this.terrainCache.setCacheVersion(this.seed, this.currentTemplate);
+                this.tileCache.setTerrainCache(this.terrainCache);
+                this.terrainCacheReady = true;
+                console.log('TerrainCache initialized and connected to TileCache');
+
+                // Log initial cache stats
+                const stats = await this.terrainCache.getCacheStats();
+                console.log(`TerrainCache stats: ${stats.entryCount} entries, ~${(stats.approximateSize / 1024).toFixed(1)} KB`);
+            }
+        } catch (error) {
+            console.warn('Failed to initialize TerrainCache:', error);
+        }
+    }
+
+    /**
+     * Clear the persistent terrain cache
+     */
+    async clearTerrainCache() {
+        if (this.terrainCache) {
+            await this.terrainCache.invalidateAll();
+            this.tileCache.invalidate();
+            this.render();
+            console.log('TerrainCache cleared');
+        }
+    }
+
+    /**
+     * Get terrain cache statistics
+     * @returns {Promise<{entryCount: number, approximateSize: number}>}
+     */
+    async getTerrainCacheStats() {
+        if (this.terrainCache) {
+            return await this.terrainCache.getCacheStats();
+        }
+        return { entryCount: 0, approximateSize: 0 };
     }
 
     resizeCanvas() {
@@ -408,6 +460,10 @@ class TerrainVisualizer {
 
     setSeed(newSeed) {
         this.seed = newSeed;
+        // Update terrain cache version so old entries become orphaned
+        if (this.terrainCacheReady) {
+            this.terrainCache.setCacheVersion(this.seed, this.currentTemplate);
+        }
         this.tileCache.invalidate();
         this.render();
     }
@@ -419,6 +475,10 @@ class TerrainVisualizer {
         } else {
             this.currentTemplate = templateOrName;
             this.currentTemplateName = templateOrName === VERDANIA_TEMPLATE ? 'Verdania' : 'Default';
+        }
+        // Update terrain cache version so old entries become orphaned
+        if (this.terrainCacheReady) {
+            this.terrainCache.setCacheVersion(this.seed, this.currentTemplate);
         }
         this.tileCache.invalidate();
         this.updateInfoDisplay();
@@ -554,6 +614,30 @@ window.addEventListener('DOMContentLoaded', () => {
     templateSelect.addEventListener('change', (e) => {
         visualizer.setTemplate(e.target.value);
     });
+
+    // Clear cache button
+    const clearCacheBtn = document.getElementById('clear-cache-btn');
+    const cacheStatsEl = document.getElementById('cache-stats');
+
+    clearCacheBtn.addEventListener('click', async () => {
+        await visualizer.clearTerrainCache();
+        updateCacheStats();
+    });
+
+    // Update cache stats display
+    async function updateCacheStats() {
+        const stats = await visualizer.getTerrainCacheStats();
+        if (stats.entryCount === 0) {
+            cacheStatsEl.textContent = 'Empty';
+        } else {
+            const sizeKB = (stats.approximateSize / 1024).toFixed(1);
+            cacheStatsEl.textContent = `${stats.entryCount} entries, ~${sizeKB} KB`;
+        }
+    }
+
+    // Update stats periodically
+    setInterval(updateCacheStats, 5000);
+    updateCacheStats();
 
     // Make visualizer globally accessible for debugging
     window.visualizer = visualizer;
