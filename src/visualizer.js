@@ -56,6 +56,20 @@ class TerrainVisualizer {
         this.mouseWorldZ = 0;
         this.mouseValue = null;
 
+        // Touch state for pan and pinch zoom
+        this.touchState = {
+            isPanning: false,
+            isPinching: false,
+            startX: 0,
+            startZ: 0,
+            startViewX: 0,
+            startViewZ: 0,
+            initialPinchDistance: 0,
+            initialZoom: 0,
+            pinchCenterX: 0,
+            pinchCenterZ: 0
+        };
+
         // Set canvas to full window size
         this.resizeCanvas();
         window.addEventListener('resize', () => {
@@ -167,6 +181,171 @@ class TerrainVisualizer {
 
             this.updateInfoDisplay();
         });
+
+        // Touch event listeners for pan and pinch zoom
+        this.setupTouchListeners();
+    }
+
+    /**
+     * Set up touch event listeners for pan and pinch zoom
+     */
+    setupTouchListeners() {
+        // Touch start - initialize pan or pinch
+        this.canvas.addEventListener('touchstart', (e) => {
+            e.preventDefault();
+
+            if (e.touches.length === 1) {
+                // Single touch - start pan
+                const touch = e.touches[0];
+                const rect = this.canvas.getBoundingClientRect();
+
+                this.touchState.isPanning = true;
+                this.touchState.isPinching = false;
+                this.touchState.startX = touch.clientX - rect.left;
+                this.touchState.startZ = touch.clientY - rect.top;
+                this.touchState.startViewX = this.viewX;
+                this.touchState.startViewZ = this.viewZ;
+
+                // Update coords display for touch position
+                this.updateTouchCoords(touch.clientX - rect.left, touch.clientY - rect.top);
+            } else if (e.touches.length === 2) {
+                // Two touches - start pinch zoom
+                this.touchState.isPanning = false;
+                this.touchState.isPinching = true;
+
+                const touch1 = e.touches[0];
+                const touch2 = e.touches[1];
+                const rect = this.canvas.getBoundingClientRect();
+
+                // Calculate initial pinch distance
+                const dx = touch2.clientX - touch1.clientX;
+                const dy = touch2.clientY - touch1.clientY;
+                this.touchState.initialPinchDistance = Math.sqrt(dx * dx + dy * dy);
+                this.touchState.initialZoom = this.zoom;
+
+                // Calculate pinch center in canvas coordinates
+                const centerX = (touch1.clientX + touch2.clientX) / 2 - rect.left;
+                const centerY = (touch1.clientY + touch2.clientY) / 2 - rect.top;
+
+                // Store pinch center in world coordinates for zoom-toward-center
+                const halfWidth = this.canvas.width / 2;
+                const halfHeight = this.canvas.height / 2;
+                this.touchState.pinchCenterX = centerX;
+                this.touchState.pinchCenterZ = centerY;
+                this.touchState.startViewX = this.viewX;
+                this.touchState.startViewZ = this.viewZ;
+
+                // Clear value display during pinch
+                this.mouseValue = null;
+                this.updateInfoDisplay();
+            }
+        }, { passive: false });
+
+        // Touch move - pan or pinch zoom
+        this.canvas.addEventListener('touchmove', (e) => {
+            e.preventDefault();
+
+            if (e.touches.length === 1 && this.touchState.isPanning) {
+                // Single touch pan
+                const touch = e.touches[0];
+                const rect = this.canvas.getBoundingClientRect();
+                const currentX = touch.clientX - rect.left;
+                const currentY = touch.clientY - rect.top;
+
+                // Calculate delta in canvas pixels
+                const deltaX = currentX - this.touchState.startX;
+                const deltaY = currentY - this.touchState.startZ;
+
+                // Convert to world units (inverted - drag right moves view left)
+                this.viewX = this.touchState.startViewX - deltaX / this.zoom;
+                this.viewZ = this.touchState.startViewZ - deltaY / this.zoom;
+
+                // Update coords display for current touch position
+                this.updateTouchCoords(currentX, currentY);
+
+                this.render();
+            } else if (e.touches.length === 2 && this.touchState.isPinching) {
+                // Pinch zoom
+                const touch1 = e.touches[0];
+                const touch2 = e.touches[1];
+                const rect = this.canvas.getBoundingClientRect();
+
+                // Calculate current pinch distance
+                const dx = touch2.clientX - touch1.clientX;
+                const dy = touch2.clientY - touch1.clientY;
+                const currentDistance = Math.sqrt(dx * dx + dy * dy);
+
+                // Calculate scale factor
+                const scale = currentDistance / this.touchState.initialPinchDistance;
+                const newZoom = Math.max(0.01, Math.min(10, this.touchState.initialZoom * scale));
+
+                // Calculate pinch center in current canvas coords
+                const centerX = (touch1.clientX + touch2.clientX) / 2 - rect.left;
+                const centerY = (touch1.clientY + touch2.clientY) / 2 - rect.top;
+
+                // Zoom toward pinch center
+                const halfWidth = this.canvas.width / 2;
+                const halfHeight = this.canvas.height / 2;
+
+                // World position under pinch center before zoom
+                const worldCenterX = this.touchState.startViewX + (this.touchState.pinchCenterX - halfWidth) / this.touchState.initialZoom;
+                const worldCenterZ = this.touchState.startViewZ + (this.touchState.pinchCenterZ - halfHeight) / this.touchState.initialZoom;
+
+                // Adjust view to keep world position under pinch center
+                this.viewX = worldCenterX - (centerX - halfWidth) / newZoom;
+                this.viewZ = worldCenterZ - (centerY - halfHeight) / newZoom;
+                this.zoom = newZoom;
+
+                this.render();
+                this.updateInfoDisplay();
+            }
+        }, { passive: false });
+
+        // Touch end - stop pan or pinch
+        this.canvas.addEventListener('touchend', (e) => {
+            if (e.touches.length === 0) {
+                // All touches released
+                this.touchState.isPanning = false;
+                this.touchState.isPinching = false;
+            } else if (e.touches.length === 1 && this.touchState.isPinching) {
+                // Switched from pinch to pan
+                const touch = e.touches[0];
+                const rect = this.canvas.getBoundingClientRect();
+
+                this.touchState.isPanning = true;
+                this.touchState.isPinching = false;
+                this.touchState.startX = touch.clientX - rect.left;
+                this.touchState.startZ = touch.clientY - rect.top;
+                this.touchState.startViewX = this.viewX;
+                this.touchState.startViewZ = this.viewZ;
+            }
+        });
+
+        // Touch cancel - reset state
+        this.canvas.addEventListener('touchcancel', () => {
+            this.touchState.isPanning = false;
+            this.touchState.isPinching = false;
+        });
+    }
+
+    /**
+     * Update coordinates display for touch position
+     * @param {number} canvasX - X position in canvas pixels
+     * @param {number} canvasY - Y position in canvas pixels
+     */
+    updateTouchCoords(canvasX, canvasY) {
+        const halfWidth = this.canvas.width / 2;
+        const halfHeight = this.canvas.height / 2;
+
+        this.mouseWorldX = this.viewX + (canvasX - halfWidth) / this.zoom;
+        this.mouseWorldZ = this.viewZ + (canvasY - halfHeight) / this.zoom;
+
+        // Sample the value at touch position
+        const params = getTerrainParams(this.mouseWorldX, this.mouseWorldZ, this.seed, this.currentTemplate);
+        const paramName = MODE_PARAM_MAP[this.mode];
+        this.mouseValue = params[paramName];
+
+        this.updateInfoDisplay();
     }
 
     pan(dx, dz) {
