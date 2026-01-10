@@ -60,6 +60,48 @@ export const HEIGHT_CONFIG = {
 };
 
 /**
+ * Biome height bands - defines the normalized height range [0, 1] for each biome
+ * These determine where terrain heights fall in world space:
+ * - Ocean areas: 0.00 - 0.10 (deep to shallow)
+ * - Lowlands: 0.10 - 0.30
+ * - Midlands: 0.30 - 0.55
+ * - Highlands: 0.55 - 0.75
+ * - Mountains: 0.75 - 1.00
+ */
+export const BIOME_HEIGHT_BANDS = {
+    // Water biomes (below sea level)
+    ocean: { min: 0.02, max: 0.08 },
+    beach: { min: 0.10, max: 0.18 },
+
+    // Lowland biomes
+    plains: { min: 0.12, max: 0.35 },
+    meadow: { min: 0.11, max: 0.28 },
+    savanna: { min: 0.12, max: 0.32 },
+    swamp: { min: 0.10, max: 0.22 },
+    desert: { min: 0.11, max: 0.30 },
+    tundra: { min: 0.12, max: 0.28 },
+
+    // Midland biomes
+    red_desert: { min: 0.15, max: 0.42 },
+    taiga: { min: 0.15, max: 0.40 },
+    jungle: { min: 0.18, max: 0.48 },
+    rainforest: { min: 0.20, max: 0.52 },
+    autumn_forest: { min: 0.18, max: 0.42 },
+    deciduous_forest: { min: 0.22, max: 0.55 },
+    snow: { min: 0.15, max: 0.38 },
+
+    // Highland biomes
+    badlands: { min: 0.25, max: 0.65 },
+    highlands: { min: 0.30, max: 0.68 },
+    volcanic: { min: 0.28, max: 0.72 },
+
+    // Mountain biomes (reaching peaks)
+    alpine: { min: 0.45, max: 0.88 },
+    glacier: { min: 0.40, max: 0.85 },
+    mountains: { min: 0.50, max: 1.00 },
+};
+
+/**
  * Get sea level in world units
  * @returns {number} Sea level height in blocks
  */
@@ -500,39 +542,27 @@ export function getBiomeAt(x, z, seed, template = DEFAULT_TEMPLATE) {
 }
 
 /**
- * Calculate terrain height at world position
- *
- * Uses biome height fractions (baseHeightFraction, heightScaleFraction) multiplied
- * by HEIGHT_CONFIG.maxHeight for relative terrain scaling. Supports legacy absolute
- * values (baseHeight, heightScale) for backward compatibility.
+ * Linear interpolation helper
+ * @param {number} a - Start value
+ * @param {number} b - End value
+ * @param {number} t - Interpolation factor [0, 1]
+ * @returns {number} Interpolated value
+ */
+function lerp(a, b, t) {
+    return a + (b - a) * t;
+}
+
+/**
+ * Sample base terrain noise at world position
+ * Returns normalized height in [0, 1] range
  *
  * @param {number} x - World X coordinate
  * @param {number} z - World Z coordinate
  * @param {number} seed - World seed
- * @param {Object} template - Continent template (optional, defaults to DEFAULT_TEMPLATE)
- * @returns {number} Height in blocks [1, HEIGHT_CONFIG.maxHeight]
+ * @returns {number} Base terrain noise [0, 1]
  */
-export function getHeightAt(x, z, seed, template = DEFAULT_TEMPLATE) {
-    // Get template modifiers first for early ocean detection
-    const modifiers = getTemplateModifiers(x, z, template);
-
-    // Early return for ocean: if continentalnessMultiplier is low, this is ocean per template
-    if (modifiers.continentalnessMultiplier < 0.3) {
-        // Use ocean depth from the ocean system for consistency
-        const oceanDepth = getOceanDepth(x, z, seed, template);
-        if (oceanDepth !== null) {
-            return oceanDepth;
-        }
-        // If getOceanDepth returns null but we're still below threshold,
-        // return shallow ocean floor
-        return HEIGHT_CONFIG.toWorld(HEIGHT_CONFIG.bands.shallowOceanFloor);
-    }
-
-    // Get biome for base height/scale
-    const biome = getBiomeAt(x, z, seed, template);
-    const biomeConfig = getBiomeConfig(biome);
-
-    // Domain warping for organic terrain (match terrainworker.js)
+function getBaseTerrainNoise(x, z, seed) {
+    // Domain warping for organic terrain
     const warpSeed = deriveSeed(seed, 'warp');
     const warpHash = (x, z) => hash(x, z, warpSeed);
     const warpStrength = 2.5;
@@ -544,46 +574,104 @@ export function getHeightAt(x, z, seed, template = DEFAULT_TEMPLATE) {
     const heightHash = (x, z) => hash(x, z, heightNoiseSeed);
     const heightNoise = octaveNoise2D(x + warpX, z + warpZ, 5, 0.03, heightHash);
 
-    // Micro-detail
+    // Micro-detail noise for local variation
     const detailSeed = deriveSeed(seed, 'detail');
     const detailHash = (x, z) => hash(x, z, detailSeed);
-    const microDetail = octaveNoise2D(x, z, 2, 0.12, detailHash) * 0.25;
+    const microDetail = octaveNoise2D(x, z, 2, 0.12, detailHash) * 0.15;
 
-    // Base height calculation using fractions (with backward compatibility for absolute values)
-    const baseHeight = biomeConfig.baseHeightFraction !== undefined
-        ? biomeConfig.baseHeightFraction * HEIGHT_CONFIG.maxHeight
-        : biomeConfig.baseHeight;
-    const heightScale = biomeConfig.heightScaleFraction !== undefined
-        ? biomeConfig.heightScaleFraction * HEIGHT_CONFIG.maxHeight
-        : biomeConfig.heightScale;
+    // Combine and normalize to [0, 1]
+    // octaveNoise2D returns roughly [0.08, 0.45], normalize this range
+    const combined = (heightNoise - 0.08) / 0.37 + microDetail;
+    return Math.max(0, Math.min(1, combined));
+}
 
-    let height = baseHeight + heightNoise * heightScale + microDetail;
+/**
+ * Calculate normalized terrain height at world position
+ * All calculations work in [0, 1] space before final scaling.
+ *
+ * Height distribution targets:
+ * - Ocean areas: 0.00 - 0.10 (deep to shallow)
+ * - Lowlands: 0.10 - 0.30
+ * - Midlands: 0.30 - 0.55
+ * - Highlands: 0.55 - 0.75
+ * - Mountains: 0.75 - 1.00
+ *
+ * @param {number} x - World X coordinate
+ * @param {number} z - World Z coordinate
+ * @param {number} seed - World seed
+ * @param {Object} template - Continent template (optional, defaults to DEFAULT_TEMPLATE)
+ * @returns {number} Normalized height [0, 1]
+ */
+export function getHeightAtNormalized(x, z, seed, template = DEFAULT_TEMPLATE) {
+    // Get template modifiers for ocean detection and terrain shaping
+    const modifiers = getTemplateModifiers(x, z, template);
 
-    // Add mountain height contribution (from spines and boosted regions)
-    // Uses mountainBoost and ridgeWeight from template modifiers
-    const mountainHeight = sampleMountainHeight(x, z, seed, template);
-    height += mountainHeight * 50; // Scale factor to match terrainworker.js peak bonus
+    // Ocean check - if continentalnessMultiplier is low, this is ocean per template
+    if (modifiers.continentalnessMultiplier < 0.3) {
+        // Map to ocean depths based on how deep into ocean we are
+        const oceanDepth = modifiers.continentalnessMultiplier / 0.3;
+        return HEIGHT_CONFIG.bands.deepOceanFloor +
+               oceanDepth * (HEIGHT_CONFIG.bands.seaLevel - HEIGHT_CONFIG.bands.deepOceanFloor);
+    }
 
-    // Peak boost for high-elevation biomes (match terrainworker.js logic)
-    const PEAK_BIOMES = ['mountains', 'glacier', 'alpine', 'badlands', 'highlands'];
+    // Get base terrain noise in [0, 1]
+    const baseNoise = getBaseTerrainNoise(x, z, seed);
+
+    // Get biome and its height band
+    const biome = getBiomeAt(x, z, seed, template);
+    const biomeHeightBand = BIOME_HEIGHT_BANDS[biome] || { min: 0.12, max: 0.35 };
+
+    // Map noise to biome's height range
+    let height = biomeHeightBand.min + baseNoise * (biomeHeightBand.max - biomeHeightBand.min);
+
+    // Mountain boost - ADDITIVE to push toward peaks
+    if (modifiers.mountainBoost > 0) {
+        // Get ridge noise for mountain detail
+        const ridge = sampleRidgeness(x, z, seed, template);
+        const weightedRidge = ridge * modifiers.ridgeWeight;
+
+        // Calculate headroom to peak and add mountain contribution
+        const headroom = HEIGHT_CONFIG.bands.peak - height;
+        height += modifiers.mountainBoost * weightedRidge * headroom * 0.8;
+    }
+
+    // Peak boost for high-elevation biomes
+    const PEAK_BIOMES = ['mountains', 'glacier', 'alpine', 'badlands', 'highlands', 'volcanic'];
     if (PEAK_BIOMES.includes(biome)) {
         const peakSeed = deriveSeed(seed, 'peaks');
         const peakHash = (x, z) => hash(x, z, peakSeed);
         const peakNoise = octaveNoise2D(x, z, 3, 0.04, peakHash);
-        const peakBonus = peakNoise * 50;
-        height += peakBonus;
+
+        // Normalize peak noise and add headroom-based boost
+        const normalizedPeak = (peakNoise - 0.08) / 0.37;
+        const headroom = HEIGHT_CONFIG.bands.peak - height;
+        height += normalizedPeak * headroom * 0.5;
     }
 
     // Apply elevation flattening from template
     // elevationMultiplier < 1 means flatten terrain toward sea level
     if (modifiers.elevationMultiplier < 1.0) {
-        const flatBaseHeight = HEIGHT_CONFIG.seaLevelWorld + 2; // Slightly above sea level
-        // Lerp between flat base and actual height based on elevationMultiplier
-        height = flatBaseHeight + (height - flatBaseHeight) * modifiers.elevationMultiplier;
+        const flatBase = HEIGHT_CONFIG.bands.seaLevel + 0.03; // Slightly above sea level
+        height = lerp(flatBase, height, modifiers.elevationMultiplier);
     }
 
-    // Final clamp to valid range
-    return Math.max(1.0, Math.min(HEIGHT_CONFIG.maxHeight, height));
+    // Final clamp to valid normalized range
+    return Math.max(0, Math.min(1, height));
+}
+
+/**
+ * Calculate terrain height at world position
+ * Returns height in world units (blocks).
+ *
+ * @param {number} x - World X coordinate
+ * @param {number} z - World Z coordinate
+ * @param {number} seed - World seed
+ * @param {Object} template - Continent template (optional, defaults to DEFAULT_TEMPLATE)
+ * @returns {number} Height in blocks [1, HEIGHT_CONFIG.maxHeight]
+ */
+export function getHeightAt(x, z, seed, template = DEFAULT_TEMPLATE) {
+    const normalized = getHeightAtNormalized(x, z, seed, template);
+    return Math.max(1, Math.round(normalized * HEIGHT_CONFIG.maxHeight));
 }
 
 /**
@@ -601,11 +689,13 @@ export function getHeightAt(x, z, seed, template = DEFAULT_TEMPLATE) {
  *   - erosion: Valley/erosion detail [0, 1]
  *   - ridgeness: Mountain ridge formation [0, 1]
  *   - biome: Biome name (string)
+ *   - heightNormalized: Normalized height [0, 1] for visualizer color mapping
  *   - height: Terrain height in blocks [1, HEIGHT_CONFIG.maxHeight]
  *   - waterType: 'deep', 'shallow', or 'none'
  *   - oceanDepth: Ocean floor height in blocks, or null if on land
  */
 export function getTerrainParams(x, z, seed, template = DEFAULT_TEMPLATE) {
+    const heightNormalized = getHeightAtNormalized(x, z, seed, template);
     return {
         continental: sampleContinentalness(x, z, seed, template),
         effectiveContinental: getEffectiveContinentalness(x, z, seed, template),
@@ -614,7 +704,8 @@ export function getTerrainParams(x, z, seed, template = DEFAULT_TEMPLATE) {
         erosion: sampleErosion(x, z, seed, template),
         ridgeness: sampleRidgeness(x, z, seed, template),
         biome: getBiomeAt(x, z, seed, template),
-        height: getHeightAt(x, z, seed, template),
+        heightNormalized: heightNormalized,
+        height: Math.max(1, Math.round(heightNormalized * HEIGHT_CONFIG.maxHeight)),
         waterType: getWaterType(x, z, seed, template),
         oceanDepth: getOceanDepth(x, z, seed, template)
     };
