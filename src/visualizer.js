@@ -8,6 +8,7 @@
 import { getTerrainParams } from './world/terrain/worldgen.js';
 import { DEFAULT_TEMPLATE, VERDANIA_TEMPLATE } from './world/terrain/templates.js';
 import { getColorForMode } from './tools/mapvisualizer/colors.js';
+import { TileCache } from './tools/mapvisualizer/tilecache.js';
 
 // Mode descriptions for UI
 const MODE_DESCRIPTIONS = {
@@ -46,6 +47,9 @@ class TerrainVisualizer {
         this.mode = 'continental';
         this.currentTemplate = DEFAULT_TEMPLATE;
         this.currentTemplateName = 'Default';
+
+        // Tile cache for improved pan/zoom performance
+        this.tileCache = new TileCache(128, 64);
 
         // Mouse tracking for value display
         this.mouseWorldX = 0;
@@ -181,6 +185,7 @@ class TerrainVisualizer {
 
     setMode(newMode) {
         this.mode = newMode;
+        this.tileCache.invalidate();
         this.render();
 
         // Update UI
@@ -190,6 +195,7 @@ class TerrainVisualizer {
 
     setSeed(newSeed) {
         this.seed = newSeed;
+        this.tileCache.invalidate();
         this.render();
     }
 
@@ -201,6 +207,7 @@ class TerrainVisualizer {
             this.currentTemplate = templateOrName;
             this.currentTemplateName = templateOrName === VERDANIA_TEMPLATE ? 'Verdania' : 'Default';
         }
+        this.tileCache.invalidate();
         this.updateInfoDisplay();
         this.render();
     }
@@ -230,60 +237,72 @@ class TerrainVisualizer {
         const height = this.canvas.height;
         const halfWidth = width / 2;
         const halfHeight = height / 2;
+        const tileSize = this.tileCache.tileSize;
 
-        // Create image data for efficient pixel manipulation
-        const imageData = this.ctx.createImageData(width, height);
-        const data = imageData.data;
+        // Clear canvas
+        this.ctx.fillStyle = '#000';
+        this.ctx.fillRect(0, 0, width, height);
 
-        // Render each pixel
-        for (let py = 0; py < height; py++) {
-            for (let px = 0; px < width; px++) {
-                // Convert canvas pixel to world coordinates
-                const worldX = this.viewX + (px - halfWidth) / this.zoom;
-                const worldZ = this.viewZ + (py - halfHeight) / this.zoom;
+        // Calculate visible world bounds
+        const worldLeft = this.viewX - halfWidth / this.zoom;
+        const worldRight = this.viewX + halfWidth / this.zoom;
+        const worldTop = this.viewZ - halfHeight / this.zoom;
+        const worldBottom = this.viewZ + halfHeight / this.zoom;
 
-                // Sample terrain parameters
-                const params = getTerrainParams(worldX, worldZ, this.seed, this.currentTemplate);
+        // Calculate which tiles are needed (aligned to tile grid)
+        const tileStartX = this.tileCache.alignToGrid(Math.floor(worldLeft));
+        const tileEndX = this.tileCache.alignToGrid(Math.ceil(worldRight)) + tileSize;
+        const tileStartZ = this.tileCache.alignToGrid(Math.floor(worldTop));
+        const tileEndZ = this.tileCache.alignToGrid(Math.ceil(worldBottom)) + tileSize;
 
-                let rgb;
+        let tilesRendered = 0;
+        let tilesCached = 0;
 
-                // For elevation and composite modes, sample neighbors for hillshade
-                if (this.mode === 'elevation' || this.mode === 'composite') {
-                    const leftParams = getTerrainParams(worldX - 1, worldZ, this.seed, this.currentTemplate);
-                    const rightParams = getTerrainParams(worldX + 1, worldZ, this.seed, this.currentTemplate);
-                    const upParams = getTerrainParams(worldX, worldZ - 1, this.seed, this.currentTemplate);
-                    const downParams = getTerrainParams(worldX, worldZ + 1, this.seed, this.currentTemplate);
+        // Render each visible tile
+        for (let tileWorldZ = tileStartZ; tileWorldZ < tileEndZ; tileWorldZ += tileSize) {
+            for (let tileWorldX = tileStartX; tileWorldX < tileEndX; tileWorldX += tileSize) {
+                // Check if tile was already cached
+                const key = `${tileWorldX},${tileWorldZ},${this.mode},${this.seed}`;
+                const wasCached = this.tileCache.cache.has(key);
 
-                    const neighbors = {
-                        left: leftParams.height,
-                        right: rightParams.height,
-                        up: upParams.height,
-                        down: downParams.height
-                    };
+                // Get tile (from cache or render it)
+                const tileImageData = this.tileCache.getTile(
+                    tileWorldX,
+                    tileWorldZ,
+                    this.mode,
+                    this.seed,
+                    this.currentTemplate
+                );
 
-                    rgb = getColorForMode(params, this.mode, neighbors);
+                if (wasCached) {
+                    tilesCached++;
                 } else {
-                    // Standard modes
-                    rgb = getColorForMode(params, this.mode);
+                    tilesRendered++;
                 }
 
-                // Set pixel in image data (RGBA format)
-                const index = (py * width + px) * 4;
-                data[index] = rgb[0];     // R
-                data[index + 1] = rgb[1]; // G
-                data[index + 2] = rgb[2]; // B
-                data[index + 3] = 255;    // A
+                // Calculate canvas position for this tile
+                const canvasX = halfWidth + (tileWorldX - this.viewX) * this.zoom;
+                const canvasY = halfHeight + (tileWorldZ - this.viewZ) * this.zoom;
+                const scaledSize = tileSize * this.zoom;
+
+                // Draw tile to canvas using createImageBitmap for scaling
+                // For now, use putImageData + drawImage approach
+                const tempCanvas = new OffscreenCanvas(tileSize, tileSize);
+                const tempCtx = tempCanvas.getContext('2d');
+                tempCtx.putImageData(tileImageData, 0, 0);
+
+                // Draw scaled tile to main canvas
+                this.ctx.imageSmoothingEnabled = this.zoom < 1; // Smooth when zoomed out
+                this.ctx.drawImage(tempCanvas, canvasX, canvasY, scaledSize, scaledSize);
             }
         }
-
-        // Draw the entire image at once
-        this.ctx.putImageData(imageData, 0, 0);
 
         const endTime = performance.now();
         const renderTime = endTime - startTime;
 
         // Log render performance
-        console.log(`Rendered ${width}x${height} in ${renderTime.toFixed(1)}ms (${(renderTime / (width * height) * 1000000).toFixed(2)}ns/pixel)`);
+        const stats = this.tileCache.getStats();
+        console.log(`Rendered in ${renderTime.toFixed(1)}ms (${tilesRendered} new, ${tilesCached} cached, ${stats.size}/${stats.maxTiles} in cache)`);
     }
 }
 
