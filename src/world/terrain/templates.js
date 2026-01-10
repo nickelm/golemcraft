@@ -375,6 +375,28 @@ function getRegionMembership(nz, region) {
  * const mods2 = getTemplateModifiers(0, 1400, VERDANIA_TEMPLATE);
  * // Spine center: { mountainBoost: ~0.6, ... }
  */
+/**
+ * Debug function to diagnose bay orientation issues
+ * Call from visualizer click handler to understand coordinate mapping
+ *
+ * @param {number} worldX - World X coordinate
+ * @param {number} worldZ - World Z coordinate
+ * @param {ContinentTemplate} template - Continent template
+ * @returns {Object} Template modifiers (same as getTemplateModifiers)
+ */
+export function debugTemplateAt(worldX, worldZ, template) {
+    const { nx, nz, distanceFromCenter } = getNormalizedPosition(worldX, worldZ, template);
+    const mods = getTemplateModifiers(worldX, worldZ, template);
+
+    console.log(`Position (${worldX}, ${worldZ}):`);
+    console.log(`  Normalized: nx=${nx.toFixed(3)}, nz=${nz.toFixed(3)}`);
+    console.log(`  Distance from center: ${distanceFromCenter.toFixed(0)}`);
+    console.log(`  Shape mask: ${mods.continentalnessMultiplier.toFixed(3)}`);
+    console.log(`  Mountain boost: ${mods.mountainBoost.toFixed(3)}`);
+
+    return mods;
+}
+
 export function getTemplateModifiers(worldX, worldZ, template) {
     // Get normalized position
     const { nx, nz, distanceFromCenter } = getNormalizedPosition(worldX, worldZ, template);

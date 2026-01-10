@@ -6,7 +6,7 @@
  */
 
 import { getTerrainParams } from './world/terrain/worldgen.js';
-import { DEFAULT_TEMPLATE, VERDANIA_TEMPLATE } from './world/terrain/templates.js';
+import { DEFAULT_TEMPLATE, VERDANIA_TEMPLATE, debugTemplateAt } from './world/terrain/templates.js';
 import { getColorForMode } from './tools/mapvisualizer/colors.js';
 import { TileCache } from './tools/mapvisualizer/tilecache.js';
 
@@ -180,6 +180,28 @@ class TerrainVisualizer {
             this.mouseValue = params[paramName];
 
             this.updateInfoDisplay();
+        });
+
+        // Click handler for debug logging (bay orientation diagnosis)
+        this.canvas.addEventListener('click', (e) => {
+            const rect = this.canvas.getBoundingClientRect();
+            const canvasX = e.clientX - rect.left;
+            const canvasY = e.clientY - rect.top;
+
+            const halfWidth = this.canvas.width / 2;
+            const halfHeight = this.canvas.height / 2;
+
+            const worldX = Math.round(this.viewX + (canvasX - halfWidth) / this.zoom);
+            const worldZ = Math.round(this.viewZ + (canvasY - halfHeight) / this.zoom);
+
+            console.log('=== Debug Template Click ===');
+            console.log(`Canvas position: (${canvasX.toFixed(0)}, ${canvasY.toFixed(0)})`);
+            console.log(`Screen Y increases downward, worldZ increases downward`);
+            debugTemplateAt(worldX, worldZ, this.currentTemplate);
+            console.log('Expected mapping:');
+            console.log('  nz=0 (north) should be at TOP of screen (negative worldZ)');
+            console.log('  nz=1 (south) should be at BOTTOM of screen (positive worldZ)');
+            console.log('============================');
         });
 
         // Touch event listeners for pan and pinch zoom
