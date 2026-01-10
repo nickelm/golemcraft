@@ -177,10 +177,22 @@ class TerrainVisualizer {
     }
 
     setZoom(newZoom) {
-        // Clamp zoom between 0.1x and 10x
-        this.zoom = Math.max(0.1, Math.min(10, newZoom));
+        // Clamp zoom between 0.01x and 10x (allow very zoomed out views)
+        this.zoom = Math.max(0.01, Math.min(10, newZoom));
         this.render();
         this.updateInfoDisplay();
+    }
+
+    /**
+     * Calculate appropriate LOD level based on zoom
+     * LOD 0 = 1:1 (zoom >= 1), LOD 1 = 1:2 (zoom >= 0.5), LOD 2 = 1:4 (zoom >= 0.25), etc.
+     * @returns {number} LOD level (0, 1, 2, ...)
+     */
+    calculateLOD() {
+        if (this.zoom >= 1) return 0;
+        // LOD = floor(-log2(zoom)), but capped at reasonable maximum
+        const lod = Math.floor(-Math.log2(this.zoom));
+        return Math.min(lod, 6); // Cap at LOD 6 (1:64 sampling)
     }
 
     setMode(newMode) {
@@ -239,6 +251,10 @@ class TerrainVisualizer {
         const halfHeight = height / 2;
         const tileSize = this.tileCache.tileSize;
 
+        // Calculate LOD level based on zoom
+        const lodLevel = this.calculateLOD();
+        const worldTileSize = this.tileCache.getWorldTileSize(lodLevel);
+
         // Clear canvas
         this.ctx.fillStyle = '#000';
         this.ctx.fillRect(0, 0, width, height);
@@ -249,20 +265,20 @@ class TerrainVisualizer {
         const worldTop = this.viewZ - halfHeight / this.zoom;
         const worldBottom = this.viewZ + halfHeight / this.zoom;
 
-        // Calculate which tiles are needed (aligned to tile grid)
-        const tileStartX = this.tileCache.alignToGrid(Math.floor(worldLeft));
-        const tileEndX = this.tileCache.alignToGrid(Math.ceil(worldRight)) + tileSize;
-        const tileStartZ = this.tileCache.alignToGrid(Math.floor(worldTop));
-        const tileEndZ = this.tileCache.alignToGrid(Math.ceil(worldBottom)) + tileSize;
+        // Calculate which tiles are needed (aligned to tile grid at current LOD)
+        const tileStartX = this.tileCache.alignToGrid(Math.floor(worldLeft), lodLevel);
+        const tileEndX = this.tileCache.alignToGrid(Math.ceil(worldRight), lodLevel) + worldTileSize;
+        const tileStartZ = this.tileCache.alignToGrid(Math.floor(worldTop), lodLevel);
+        const tileEndZ = this.tileCache.alignToGrid(Math.ceil(worldBottom), lodLevel) + worldTileSize;
 
         let tilesRendered = 0;
         let tilesCached = 0;
 
         // Render each visible tile
-        for (let tileWorldZ = tileStartZ; tileWorldZ < tileEndZ; tileWorldZ += tileSize) {
-            for (let tileWorldX = tileStartX; tileWorldX < tileEndX; tileWorldX += tileSize) {
+        for (let tileWorldZ = tileStartZ; tileWorldZ < tileEndZ; tileWorldZ += worldTileSize) {
+            for (let tileWorldX = tileStartX; tileWorldX < tileEndX; tileWorldX += worldTileSize) {
                 // Check if tile was already cached
-                const key = `${tileWorldX},${tileWorldZ},${this.mode},${this.seed}`;
+                const key = `${tileWorldX},${tileWorldZ},${this.mode},${this.seed},${lodLevel}`;
                 const wasCached = this.tileCache.cache.has(key);
 
                 // Get tile (from cache or render it)
@@ -271,7 +287,8 @@ class TerrainVisualizer {
                     tileWorldZ,
                     this.mode,
                     this.seed,
-                    this.currentTemplate
+                    this.currentTemplate,
+                    lodLevel
                 );
 
                 if (wasCached) {
@@ -281,9 +298,10 @@ class TerrainVisualizer {
                 }
 
                 // Calculate canvas position for this tile
+                // worldTileSize represents how much world space the tile covers
                 const canvasX = halfWidth + (tileWorldX - this.viewX) * this.zoom;
                 const canvasY = halfHeight + (tileWorldZ - this.viewZ) * this.zoom;
-                const scaledSize = tileSize * this.zoom;
+                const scaledSize = worldTileSize * this.zoom;
 
                 // Draw tile to canvas using createImageBitmap for scaling
                 // For now, use putImageData + drawImage approach
@@ -292,7 +310,8 @@ class TerrainVisualizer {
                 tempCtx.putImageData(tileImageData, 0, 0);
 
                 // Draw scaled tile to main canvas
-                this.ctx.imageSmoothingEnabled = this.zoom < 1; // Smooth when zoomed out
+                // Enable smoothing when zoomed out for better appearance
+                this.ctx.imageSmoothingEnabled = this.zoom < 1;
                 this.ctx.drawImage(tempCanvas, canvasX, canvasY, scaledSize, scaledSize);
             }
         }
@@ -302,7 +321,7 @@ class TerrainVisualizer {
 
         // Log render performance
         const stats = this.tileCache.getStats();
-        console.log(`Rendered in ${renderTime.toFixed(1)}ms (${tilesRendered} new, ${tilesCached} cached, ${stats.size}/${stats.maxTiles} in cache)`);
+        console.log(`Rendered in ${renderTime.toFixed(1)}ms (${tilesRendered} new, ${tilesCached} cached, ${stats.size}/${stats.maxTiles} in cache, LOD ${lodLevel})`);
     }
 }
 
