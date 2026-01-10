@@ -68,7 +68,8 @@ export function getSeaLevel() {
 }
 
 /**
- * Get water type at world position based on continentalness
+ * Get water type at world position based on effective continentalness
+ * Uses island-perturbed continentalness for land/ocean determination.
  *
  * @param {number} x - World X coordinate
  * @param {number} z - World Z coordinate
@@ -77,7 +78,7 @@ export function getSeaLevel() {
  * @returns {string} Water type: 'deep', 'shallow', or 'none'
  */
 export function getWaterType(x, z, seed, template = DEFAULT_TEMPLATE) {
-    const continental = sampleContinentalness(x, z, seed, template);
+    const continental = getEffectiveContinentalness(x, z, seed, template);
 
     // Add variation to deep/shallow boundary for organic coastlines
     const boundaryNoiseSeed = deriveSeed(seed, 'deep_boundary');
@@ -96,6 +97,7 @@ export function getWaterType(x, z, seed, template = DEFAULT_TEMPLATE) {
 
 /**
  * Get ocean depth at world position
+ * Uses island-perturbed continentalness for land/ocean determination.
  *
  * @param {number} x - World X coordinate
  * @param {number} z - World Z coordinate
@@ -107,7 +109,7 @@ export function getWaterType(x, z, seed, template = DEFAULT_TEMPLATE) {
  *   - Land: null
  */
 export function getOceanDepth(x, z, seed, template = DEFAULT_TEMPLATE) {
-    const continental = sampleContinentalness(x, z, seed, template);
+    const continental = getEffectiveContinentalness(x, z, seed, template);
 
     // Add variation to deep/shallow boundary for organic coastlines
     const boundaryNoiseSeed = deriveSeed(seed, 'deep_boundary');
@@ -214,6 +216,50 @@ export function sampleContinentalness(x, z, seed, template = DEFAULT_TEMPLATE) {
     // Apply template modifiers (bay carving, radial falloff)
     const modifiers = getTemplateModifiers(x, z, template);
     return base * modifiers.continentalnessMultiplier;
+}
+
+/**
+ * Sample island noise at world position
+ * Higher frequency than continental noise to create small island features.
+ *
+ * @param {number} x - World X coordinate
+ * @param {number} z - World Z coordinate
+ * @param {number} seed - World seed
+ * @returns {number} Island noise [0, 1]
+ */
+export function getIslandNoise(x, z, seed) {
+    const derivedSeed = deriveSeed(seed, 'islands');
+    const boundHash = (x, z) => hash(x, z, derivedSeed);
+
+    // Higher frequency than continental noise - creates small island features
+    return octaveNoise2D(x, z, 3, 0.015, boundHash);
+}
+
+/**
+ * Get effective continentalness with island perturbation
+ * Modifies the base continentalness in shallow ocean areas to create islands,
+ * irregular coastlines, and lagoons.
+ *
+ * @param {number} x - World X coordinate
+ * @param {number} z - World Z coordinate
+ * @param {number} seed - World seed
+ * @param {Object} template - Continent template (optional, defaults to DEFAULT_TEMPLATE)
+ * @returns {number} Effective continentalness [0, 1] with island perturbations
+ */
+export function getEffectiveContinentalness(x, z, seed, template = DEFAULT_TEMPLATE) {
+    const base = sampleContinentalness(x, z, seed, template);
+
+    // Only perturb in the shallow ocean band (potential island zone)
+    // Zone extends from just above deep ocean to slightly above land threshold
+    // This creates: islands in shallow water, irregular coastlines, lagoons in land
+    if (base > 0.12 && base < 0.35) {
+        const islandNoise = getIslandNoise(x, z, seed);
+        // Add island bumps - can push shallow ocean above land threshold
+        const perturbation = (islandNoise - 0.5) * 0.15;
+        return base + perturbation;
+    }
+
+    return base;
 }
 
 /**
@@ -429,13 +475,14 @@ function selectBiomeFromClimate(temp, humidity, elev) {
  * @returns {string} Biome name (e.g., 'plains', 'ocean', 'mountains')
  */
 export function getBiomeAt(x, z, seed, template = DEFAULT_TEMPLATE) {
-    // Sample terrain parameters with template modifiers
-    const continental = sampleContinentalness(x, z, seed, template);
+    // Use effective continentalness (with island perturbation) for land/ocean determination
+    const continental = getEffectiveContinentalness(x, z, seed, template);
     const temperature = sampleTemperature(x, z, seed, template);
     const humidity = sampleHumidity(x, z, seed, template);
 
     // Ocean check (below 15% continentalness threshold)
-    // This means bay areas will naturally become ocean biomes
+    // Island perturbation can push shallow ocean above this threshold (creating islands)
+    // or push land below it (creating lagoons)
     if (continental < 0.15) {
         return 'ocean';
     }
@@ -444,8 +491,8 @@ export function getBiomeAt(x, z, seed, template = DEFAULT_TEMPLATE) {
     const tempBand = temperature < 0.33 ? 'cold' : (temperature < 0.66 ? 'temperate' : 'hot');
     const humidityBand = humidity < 0.33 ? 'dry' : (humidity < 0.66 ? 'moderate' : 'wet');
 
-    // Elevation band from modified continentalness
-    // Templates affect biome distribution (bay → ocean, spine → mountains)
+    // Elevation band from effective continentalness
+    // Island perturbation affects elevation (islands tend to be low elevation)
     const elevBand = continental < 0.3 ? 'low' : (continental < 0.6 ? 'mid' : 'high');
 
     // Use climate matrix for biome lookup
@@ -530,7 +577,8 @@ export function getHeightAt(x, z, seed, template = DEFAULT_TEMPLATE) {
  * @param {number} seed - World seed
  * @param {Object} template - Continent template (optional, defaults to DEFAULT_TEMPLATE)
  * @returns {Object} Terrain parameters:
- *   - continental: Land/ocean distribution [0, 1]
+ *   - continental: Base land/ocean distribution [0, 1]
+ *   - effectiveContinental: Island-perturbed continentalness [0, 1]
  *   - temperature: Climate temperature [0, 1]
  *   - humidity: Precipitation/moisture [0, 1]
  *   - erosion: Valley/erosion detail [0, 1]
@@ -543,6 +591,7 @@ export function getHeightAt(x, z, seed, template = DEFAULT_TEMPLATE) {
 export function getTerrainParams(x, z, seed, template = DEFAULT_TEMPLATE) {
     return {
         continental: sampleContinentalness(x, z, seed, template),
+        effectiveContinental: getEffectiveContinentalness(x, z, seed, template),
         temperature: sampleTemperature(x, z, seed, template),
         humidity: sampleHumidity(x, z, seed, template),
         erosion: sampleErosion(x, z, seed, template),
