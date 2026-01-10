@@ -17,7 +17,8 @@ const MODE_DESCRIPTIONS = {
     erosion: 'Valley detail (dark gray = valleys, light gray = peaks)',
     ridgeness: 'Mountain ridges (black = valleys, brown = slopes, white = ridges)',
     biome: 'Biome distribution (colored regions show biome types)',
-    elevation: 'Terrain elevation with hillshade (blue = ocean, green = lowland, brown = highland, gray = mountain, white = peak)'
+    elevation: 'Terrain elevation with hillshade (blue = ocean, green = lowland, brown = highland, gray = mountain, white = peak)',
+    composite: 'In-game map view (biome colors + hillshade + contours)'
 };
 
 // Map mode names to getTerrainParams property names
@@ -28,7 +29,8 @@ const MODE_PARAM_MAP = {
     erosion: 'erosion',
     ridgeness: 'ridgeness',
     biome: 'biome',
-    elevation: 'height'
+    elevation: 'height',
+    composite: 'biome'  // Shows biome in value display
 };
 
 class TerrainVisualizer {
@@ -118,6 +120,9 @@ class TerrainVisualizer {
                     break;
                 case '7':
                     this.setMode('elevation');
+                    break;
+                case '8':
+                    this.setMode('composite');
                     break;
                 case 'd':
                 case 'D':
@@ -242,8 +247,8 @@ class TerrainVisualizer {
 
                 let rgb;
 
-                // For elevation mode, sample neighbors for hillshade
-                if (this.mode === 'elevation') {
+                // For elevation and composite modes, sample neighbors for hillshade
+                if (this.mode === 'elevation' || this.mode === 'composite') {
                     const leftParams = getTerrainParams(worldX - 1, worldZ, this.seed, this.currentTemplate);
                     const rightParams = getTerrainParams(worldX + 1, worldZ, this.seed, this.currentTemplate);
                     const upParams = getTerrainParams(worldX, worldZ - 1, this.seed, this.currentTemplate);
@@ -315,5 +320,5 @@ window.addEventListener('DOMContentLoaded', () => {
     window.visualizer = visualizer;
 
     console.log('Terrain Visualizer initialized');
-    console.log('Controls: Arrow keys = pan, +/- = zoom, 1-7 = switch mode, D/V = switch template');
+    console.log('Controls: Arrow keys = pan, +/- = zoom, 1-8 = switch mode, D/V = switch template');
 });
