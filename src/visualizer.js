@@ -7,9 +7,9 @@
 
 import { getTerrainParams } from './world/terrain/worldgen.js';
 import { DEFAULT_TEMPLATE, VERDANIA_TEMPLATE, debugTemplateAt } from './world/terrain/templates.js';
-import { getColorForMode } from './tools/mapvisualizer/colors.js';
 import { TileCache } from './tools/mapvisualizer/tilecache.js';
 import { TerrainCache } from './visualizer/terraincache.js';
+import { TileManager } from './visualizer/tilemanager.js';
 
 // Mode descriptions for UI
 const MODE_DESCRIPTIONS = {
@@ -50,11 +50,19 @@ class TerrainVisualizer {
         this.currentTemplateName = 'Default';
 
         // Tile cache for improved pan/zoom performance
-        this.tileCache = new TileCache(128, 64);
+        // At zoom=0.3 on 1920x1080, we can have ~400+ visible tiles
+        // Use larger cache to avoid thrashing
+        this.tileCache = new TileCache(128, 512);
 
         // Persistent terrain cache (IndexedDB)
         this.terrainCache = new TerrainCache();
         this.terrainCacheReady = false;
+
+        // Async tile manager (Web Worker)
+        this.tileManager = null;
+        this.tileManagerReady = false;
+        this.renderPending = false;
+        this.useAsyncRendering = true;  // Can be toggled for fallback
 
         // Mouse tracking for value display
         this.mouseWorldX = 0;
@@ -85,8 +93,63 @@ class TerrainVisualizer {
         // Setup event listeners
         this.setupEventListeners();
 
-        // Initialize terrain cache asynchronously
+        // Initialize terrain cache and tile manager asynchronously
         this.initTerrainCache();
+        this.initTileManager();
+    }
+
+    /**
+     * Initialize the async tile manager (Web Worker)
+     */
+    async initTileManager() {
+        try {
+            this.tileManager = new TileManager(
+                this.tileCache,
+                () => this.onTileReady()  // Callback when tile arrives
+            );
+
+            const success = await this.tileManager.initWorker(this.seed, this.currentTemplate);
+            if (success) {
+                this.tileManager.setMode(this.mode);
+                this.tileManagerReady = true;
+                this.useAsyncRendering = true;
+                console.log('TileManager initialized with Web Worker');
+                // Re-render with async now that worker is ready
+                this.scheduleRender();
+            } else {
+                console.warn('TileManager: Worker failed to initialize, using synchronous fallback');
+                this.useAsyncRendering = false;
+            }
+        } catch (error) {
+            console.warn('Failed to initialize TileManager:', error);
+            this.useAsyncRendering = false;
+        }
+    }
+
+    /**
+     * Called when a tile is ready from the worker
+     */
+    onTileReady() {
+        // If we were in sync mode but worker is now ready, switch to async
+        if (!this.useAsyncRendering && this.tileManager && this.tileManager.isWorkerAvailable()) {
+            console.log('TileManager: Worker became ready, switching to async rendering');
+            this.useAsyncRendering = true;
+            this.tileManagerReady = true;
+        }
+        this.scheduleRender();
+    }
+
+    /**
+     * Schedule a render on next animation frame (for async tile loading)
+     */
+    scheduleRender() {
+        if (!this.renderPending) {
+            this.renderPending = true;
+            requestAnimationFrame(() => {
+                this.renderPending = false;
+                this.render();
+            });
+        }
     }
 
     /**
@@ -451,6 +514,12 @@ class TerrainVisualizer {
     setMode(newMode) {
         this.mode = newMode;
         this.tileCache.invalidate();
+
+        // Update tile manager mode
+        if (this.tileManager) {
+            this.tileManager.setMode(newMode);
+        }
+
         this.render();
 
         // Update UI
@@ -464,6 +533,12 @@ class TerrainVisualizer {
         if (this.terrainCacheReady) {
             this.terrainCache.setCacheVersion(this.seed, this.currentTemplate);
         }
+
+        // Update tile manager configuration
+        if (this.tileManager) {
+            this.tileManager.updateConfig(this.seed, this.currentTemplate, this.mode);
+        }
+
         this.tileCache.invalidate();
         this.render();
     }
@@ -480,6 +555,12 @@ class TerrainVisualizer {
         if (this.terrainCacheReady) {
             this.terrainCache.setCacheVersion(this.seed, this.currentTemplate);
         }
+
+        // Update tile manager configuration
+        if (this.tileManager) {
+            this.tileManager.updateConfig(this.seed, this.currentTemplate, this.mode);
+        }
+
         this.tileCache.invalidate();
         this.updateInfoDisplay();
         this.render();
@@ -508,17 +589,99 @@ class TerrainVisualizer {
 
         const width = this.canvas.width;
         const height = this.canvas.height;
+        const tileSize = this.tileCache.tileSize;
+
+        // Clear canvas with dark background
+        this.ctx.fillStyle = '#1a1a2e';
+        this.ctx.fillRect(0, 0, width, height);
+
+        // Use async rendering if available, otherwise fall back to synchronous
+        if (this.useAsyncRendering && this.tileManagerReady) {
+            this._renderAsync(startTime, width, height, tileSize);
+        } else {
+            this._renderSync(startTime, width, height, tileSize);
+        }
+    }
+
+    /**
+     * Async render path - uses Web Worker for tile generation
+     * Non-blocking: only draws tiles that are already cached
+     * @private
+     */
+    _renderAsync(startTime, width, height, tileSize) {
+        // Update tile manager with current viewport
+        this.tileManager.updateViewport(
+            this.viewX,
+            this.viewZ,
+            this.zoom,
+            width,
+            height
+        );
+
+        // Get tiles that are ready (from memory cache)
+        const visibleTiles = this.tileManager.getVisibleTiles();
+        let tilesDrawn = 0;
+
+        // Enable smoothing when zoomed out
+        this.ctx.imageSmoothingEnabled = this.zoom < 1;
+
+        // Draw cached tiles
+        for (const tile of visibleTiles) {
+            const tempCanvas = new OffscreenCanvas(tileSize, tileSize);
+            const tempCtx = tempCanvas.getContext('2d');
+            tempCtx.putImageData(tile.imageData, 0, 0);
+
+            this.ctx.drawImage(
+                tempCanvas,
+                tile.screenX,
+                tile.screenY,
+                tile.scaledSize,
+                tile.scaledSize
+            );
+            tilesDrawn++;
+        }
+
+        // Draw loading indicators for pending tiles
+        const pendingTiles = this.tileManager.getPendingTiles();
+        if (pendingTiles.length > 0) {
+            const lodLevel = this.calculateLOD();
+            const worldTileSize = this.tileCache.getWorldTileSize(lodLevel);
+            const halfWidth = width / 2;
+            const halfHeight = height / 2;
+
+            this.ctx.fillStyle = 'rgba(100, 100, 150, 0.3)';
+            for (const { tileX, tileZ } of pendingTiles) {
+                const screenX = halfWidth + (tileX - this.viewX) * this.zoom;
+                const screenY = halfHeight + (tileZ - this.viewZ) * this.zoom;
+                const scaledSize = worldTileSize * this.zoom;
+
+                this.ctx.fillRect(screenX, screenY, scaledSize, scaledSize);
+            }
+        }
+
+        const endTime = performance.now();
+        const renderTime = endTime - startTime;
+
+        // Log render performance only when tiles are still loading
+        const pendingCount = this.tileManager.getPendingCount();
+        if (pendingCount > 0) {
+            const stats = this.tileCache.getStats();
+            console.log(`Async render: ${renderTime.toFixed(1)}ms (${tilesDrawn} drawn, ${pendingCount} pending, ${stats.size}/${stats.maxTiles} cached)`);
+        }
+    }
+
+    /**
+     * Synchronous render path - blocks while generating tiles
+     * Used as fallback when Web Worker is not available
+     * @private
+     */
+    _renderSync(startTime, width, height, tileSize) {
         const halfWidth = width / 2;
         const halfHeight = height / 2;
-        const tileSize = this.tileCache.tileSize;
 
         // Calculate LOD level based on zoom
         const lodLevel = this.calculateLOD();
         const worldTileSize = this.tileCache.getWorldTileSize(lodLevel);
-
-        // Clear canvas
-        this.ctx.fillStyle = '#000';
-        this.ctx.fillRect(0, 0, width, height);
 
         // Calculate visible world bounds
         const worldLeft = this.viewX - halfWidth / this.zoom;
@@ -559,19 +722,16 @@ class TerrainVisualizer {
                 }
 
                 // Calculate canvas position for this tile
-                // worldTileSize represents how much world space the tile covers
                 const canvasX = halfWidth + (tileWorldX - this.viewX) * this.zoom;
                 const canvasY = halfHeight + (tileWorldZ - this.viewZ) * this.zoom;
                 const scaledSize = worldTileSize * this.zoom;
 
-                // Draw tile to canvas using createImageBitmap for scaling
-                // For now, use putImageData + drawImage approach
+                // Draw tile to canvas
                 const tempCanvas = new OffscreenCanvas(tileSize, tileSize);
                 const tempCtx = tempCanvas.getContext('2d');
                 tempCtx.putImageData(tileImageData, 0, 0);
 
-                // Draw scaled tile to main canvas
-                // Enable smoothing when zoomed out for better appearance
+                // Enable smoothing when zoomed out
                 this.ctx.imageSmoothingEnabled = this.zoom < 1;
                 this.ctx.drawImage(tempCanvas, canvasX, canvasY, scaledSize, scaledSize);
             }
@@ -582,7 +742,7 @@ class TerrainVisualizer {
 
         // Log render performance
         const stats = this.tileCache.getStats();
-        console.log(`Rendered in ${renderTime.toFixed(1)}ms (${tilesRendered} new, ${tilesCached} cached, ${stats.size}/${stats.maxTiles} in cache, LOD ${lodLevel})`);
+        console.log(`Sync render: ${renderTime.toFixed(1)}ms (${tilesRendered} new, ${tilesCached} cached, ${stats.size}/${stats.maxTiles} in cache, LOD ${lodLevel})`);
     }
 }
 

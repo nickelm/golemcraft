@@ -340,6 +340,76 @@ export class TileCache {
   }
 
   /**
+   * Get tile from memory cache only (synchronous, non-blocking)
+   * Does NOT trigger rendering if tile is not cached
+   * @param {number} worldX - Tile world X coordinate
+   * @param {number} worldZ - Tile world Z coordinate
+   * @param {string} mode - Visualization mode
+   * @param {number} seed - World seed
+   * @param {number} lodLevel - LOD level
+   * @returns {ImageData|null} Cached tile or null if not in memory
+   */
+  getFromMemory(worldX, worldZ, mode, seed, lodLevel = 0) {
+    const key = this._makeKey(worldX, worldZ, mode, seed, lodLevel);
+
+    if (this.cache.has(key)) {
+      // Update access order for LRU
+      const idx = this.accessOrder.indexOf(key);
+      if (idx !== -1) {
+        this.accessOrder.splice(idx, 1);
+      }
+      this.accessOrder.push(key);
+
+      return this.cache.get(key).imageData;
+    }
+
+    return null;
+  }
+
+  /**
+   * Check if tile exists in memory cache
+   * @param {number} worldX - Tile world X coordinate
+   * @param {number} worldZ - Tile world Z coordinate
+   * @param {string} mode - Visualization mode
+   * @param {number} seed - World seed
+   * @param {number} lodLevel - LOD level
+   * @returns {boolean} True if tile is cached in memory
+   */
+  hasTile(worldX, worldZ, mode, seed, lodLevel = 0) {
+    const key = this._makeKey(worldX, worldZ, mode, seed, lodLevel);
+    return this.cache.has(key);
+  }
+
+  /**
+   * Store a tile in memory cache (from worker or external source)
+   * @param {number} worldX - Tile world X coordinate
+   * @param {number} worldZ - Tile world Z coordinate
+   * @param {string} mode - Visualization mode
+   * @param {number} seed - World seed
+   * @param {number} lodLevel - LOD level
+   * @param {ImageData} imageData - Tile image data to store
+   */
+  setTile(worldX, worldZ, mode, seed, lodLevel, imageData) {
+    const key = this._makeKey(worldX, worldZ, mode, seed, lodLevel);
+
+    // Evict oldest if over capacity
+    while (this.cache.size >= this.maxTiles && this.accessOrder.length > 0) {
+      const oldestKey = this.accessOrder.shift();
+      this.cache.delete(oldestKey);
+    }
+
+    // Remove from access order if already exists
+    const idx = this.accessOrder.indexOf(key);
+    if (idx !== -1) {
+      this.accessOrder.splice(idx, 1);
+    }
+
+    // Cache the tile
+    this.cache.set(key, { imageData, lastUsed: Date.now() });
+    this.accessOrder.push(key);
+  }
+
+  /**
    * Invalidate all cached tiles
    * Call this when seed or template changes
    */
