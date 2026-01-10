@@ -245,6 +245,48 @@ export function getColorForMode(params, mode, neighbors = null) {
     return sampleGradient(normalizedHeight, ELEVATION_GRADIENT);
   }
 
+  // Composite mode: biome colors + hillshade + water + contours
+  if (mode === 'composite') {
+    const height = params.height;
+    const WATER_LEVEL = 6;
+
+    // Water override: render as water blue if below water level
+    if (height < WATER_LEVEL) {
+      return [30, 80, 160];
+    }
+
+    // Get biome color as base
+    const biomeName = params.biome;
+    const baseColor = BIOME_COLORS[biomeName] || [128, 128, 128];
+
+    // Calculate hillshade if neighbors provided
+    let shade = 1.0;
+    if (neighbors) {
+      shade = calculateHillshade(
+        height,
+        neighbors.left,
+        neighbors.right,
+        neighbors.up,
+        neighbors.down
+      );
+    }
+
+    // Apply hillshade to base color
+    let r = Math.min(255, Math.max(0, Math.floor(baseColor[0] * shade)));
+    let g = Math.min(255, Math.max(0, Math.floor(baseColor[1] * shade)));
+    let b = Math.min(255, Math.max(0, Math.floor(baseColor[2] * shade)));
+
+    // Add contour lines every 10 units (darken pixels where height % 10 < 0.5)
+    if (height % 10 < 0.5) {
+      const contourDarken = 0.7;
+      r = Math.floor(r * contourDarken);
+      g = Math.floor(g * contourDarken);
+      b = Math.floor(b * contourDarken);
+    }
+
+    return [r, g, b];
+  }
+
   // Standard gradient modes
   const gradient = MODE_GRADIENTS[mode];
   const paramName = MODE_PARAMS[mode];
