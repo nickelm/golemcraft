@@ -51,11 +51,38 @@ import {
     getSubsurfaceTexture,
     getUnderwaterTexture
 } from '../world/terrain/biomesystem.js';
+import { HEIGHT_CONFIG } from '../world/terrain/worldgen.js';
 import { WorkerLandmarkSystem } from '../world/landmarks/workerlandmarksystem.js';
 import { generateSpawnPoints } from './spawnpointgenerator.js';
 import { generateObjectInstances } from './objectspawner.js';
 
 const DEBUG_CHUNK_DELAY_MS = 0;
+
+// ============================================================================
+// BIOME HEIGHT HELPERS
+// ============================================================================
+
+/**
+ * Get base height for a biome, using fractions with backward compatibility
+ * @param {Object} biomeData - Biome configuration object
+ * @returns {number} Base height in blocks
+ */
+function getBiomeBaseHeight(biomeData) {
+    return biomeData.baseHeightFraction !== undefined
+        ? biomeData.baseHeightFraction * HEIGHT_CONFIG.maxHeight
+        : biomeData.baseHeight;
+}
+
+/**
+ * Get height scale for a biome, using fractions with backward compatibility
+ * @param {Object} biomeData - Biome configuration object
+ * @returns {number} Height scale in blocks
+ */
+function getBiomeHeightScale(biomeData) {
+    return biomeData.heightScaleFraction !== undefined
+        ? biomeData.heightScaleFraction * HEIGHT_CONFIG.maxHeight
+        : biomeData.heightScale;
+}
 
 // ============================================================================
 // NOISE FUNCTIONS
@@ -264,7 +291,7 @@ class WorkerTerrainProvider {
         // Micro-detail for surface variation
         const microDetail = octaveNoise2D(x, z, 2, 0.12, hash2) * 0.25;
         
-        let height = biomeData.baseHeight + heightNoise * biomeData.heightScale + microDetail;
+        let height = getBiomeBaseHeight(biomeData) + heightNoise * getBiomeHeightScale(biomeData) + microDetail;
         let debugLog = null;
 
         // Apply peak variation to all high-elevation biomes (mountains, glacier, alpine, badlands, highlands)
@@ -280,9 +307,9 @@ class WorkerTerrainProvider {
             if (peakBonus > 25) {
                 debugLog = {
                     x, z, biome,
-                    baseHeight: biomeData.baseHeight,
+                    baseHeight: getBiomeBaseHeight(biomeData),
                     heightNoise: heightNoise.toFixed(3),
-                    heightScale: biomeData.heightScale,
+                    heightScale: getBiomeHeightScale(biomeData),
                     microDetail: microDetail.toFixed(3),
                     peakNoise: peakNoise.toFixed(3),
                     peakBonus: peakBonus.toFixed(2),
@@ -436,7 +463,7 @@ class WorkerTerrainProvider {
                 const neighborBiome = this.getBiome(x + dx, z + dz);
                 const neighborData = BIOMES[neighborBiome];
                 const neighborNoise = octaveNoise2D(x + dx, z + dz, 5, 0.03);
-                let neighborHeight = neighborData.baseHeight + neighborNoise * neighborData.heightScale;
+                let neighborHeight = getBiomeBaseHeight(neighborData) + neighborNoise * getBiomeHeightScale(neighborData);
 
                 // Apply peak variation to neighbors in high-elevation biomes
                 if (PEAK_BIOMES.includes(neighborBiome)) {

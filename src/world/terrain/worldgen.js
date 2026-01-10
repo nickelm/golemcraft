@@ -375,11 +375,15 @@ export function getBiomeAt(x, z, seed, template = DEFAULT_TEMPLATE) {
 /**
  * Calculate terrain height at world position
  *
+ * Uses biome height fractions (baseHeightFraction, heightScaleFraction) multiplied
+ * by HEIGHT_CONFIG.maxHeight for relative terrain scaling. Supports legacy absolute
+ * values (baseHeight, heightScale) for backward compatibility.
+ *
  * @param {number} x - World X coordinate
  * @param {number} z - World Z coordinate
  * @param {number} seed - World seed
  * @param {Object} template - Continent template (optional, defaults to DEFAULT_TEMPLATE)
- * @returns {number} Height in blocks [1, 63]
+ * @returns {number} Height in blocks [1, HEIGHT_CONFIG.maxHeight]
  */
 export function getHeightAt(x, z, seed, template = DEFAULT_TEMPLATE) {
     // Get biome for base height/scale
@@ -409,8 +413,16 @@ export function getHeightAt(x, z, seed, template = DEFAULT_TEMPLATE) {
     // Apply elevation multiplier to detail noise
     const modifiedDetail = microDetail * modifiers.elevationMultiplier;
 
-    // Base height calculation
-    let height = biomeConfig.baseHeight + heightNoise * biomeConfig.heightScale + modifiedDetail;
+    // Base height calculation using fractions (with backward compatibility for absolute values)
+    const LEGACY_MAX_HEIGHT = 63;  // Used for converting old absolute values to fractions
+    const baseHeight = biomeConfig.baseHeightFraction !== undefined
+        ? biomeConfig.baseHeightFraction * HEIGHT_CONFIG.maxHeight
+        : biomeConfig.baseHeight;
+    const heightScale = biomeConfig.heightScaleFraction !== undefined
+        ? biomeConfig.heightScaleFraction * HEIGHT_CONFIG.maxHeight
+        : biomeConfig.heightScale;
+
+    let height = baseHeight + heightNoise * heightScale + modifiedDetail;
 
     // Add mountain height contribution (from spines and boosted regions)
     const mountainHeight = sampleMountainHeight(x, z, seed, template);
@@ -427,7 +439,7 @@ export function getHeightAt(x, z, seed, template = DEFAULT_TEMPLATE) {
     }
 
     // Final clamp to valid range
-    return Math.max(1.0, Math.min(63.0, height));
+    return Math.max(1.0, Math.min(HEIGHT_CONFIG.maxHeight, height));
 }
 
 /**
@@ -444,7 +456,7 @@ export function getHeightAt(x, z, seed, template = DEFAULT_TEMPLATE) {
  *   - erosion: Valley/erosion detail [0, 1]
  *   - ridgeness: Mountain ridge formation [0, 1]
  *   - biome: Biome name (string)
- *   - height: Terrain height in blocks [1, 63]
+ *   - height: Terrain height in blocks [1, HEIGHT_CONFIG.maxHeight]
  */
 export function getTerrainParams(x, z, seed, template = DEFAULT_TEMPLATE) {
     return {
