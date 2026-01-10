@@ -110,8 +110,10 @@ export function getSeaLevel() {
 }
 
 /**
- * Get water type at world position based on effective continentalness
- * Uses island-perturbed continentalness for land/ocean determination.
+ * Get water type at world position based on coast proximity gradient
+ * Uses gradient-based classification:
+ * - Near coast (high gradient) → shallow water
+ * - Far from coast (low gradient) → deep water
  *
  * @param {number} x - World X coordinate
  * @param {number} z - World Z coordinate
@@ -122,63 +124,60 @@ export function getSeaLevel() {
 export function getWaterType(x, z, seed, template = DEFAULT_TEMPLATE) {
     const continental = getEffectiveContinentalness(x, z, seed, template);
 
-    // Add variation to deep/shallow boundary for organic coastlines
+    // Land
+    if (continental >= OCEAN_THRESHOLDS.shallow) {
+        return 'none';
+    }
+
+    // Use coast proximity for deep/shallow classification
+    const coastProximity = getCoastProximity(x, z, seed, template);
+
+    // High proximity = shallow, low proximity = deep
+    // Add noise for organic boundary between shallow/deep
     const boundaryNoiseSeed = deriveSeed(seed, 'deep_boundary');
     const boundaryHash = (x, z) => hash(x, z, boundaryNoiseSeed);
-    const boundaryNoise = octaveNoise2D(x, z, 2, 0.008, boundaryHash) * 0.04;
-    const deepThreshold = OCEAN_THRESHOLDS.deep + (boundaryNoise - 0.02);
+    const boundaryNoise = octaveNoise2D(x, z, 2, 0.008, boundaryHash) * 0.1;
+    const shallowThreshold = 0.3 + boundaryNoise;  // ~30% gradient = shallow
 
-    if (continental < deepThreshold) {
-        return 'deep';
-    }
-    if (continental < OCEAN_THRESHOLDS.shallow) {
-        return 'shallow';
-    }
-    return 'none';
+    return coastProximity > shallowThreshold ? 'shallow' : 'deep';
 }
 
 /**
  * Get ocean depth at world position
- * Uses island-perturbed continentalness for land/ocean determination.
+ * Uses gradient-based coast proximity to determine depth:
+ * - Near coast (high gradient) → shallow water
+ * - Far from coast (low gradient) → deep water
  *
  * @param {number} x - World X coordinate
  * @param {number} z - World Z coordinate
  * @param {number} seed - World seed
  * @param {Object} template - Continent template (optional, defaults to DEFAULT_TEMPLATE)
  * @returns {number|null} Ocean floor height in blocks, or null if on land
- *   - Deep ocean: near floor (HEIGHT_CONFIG.toWorld(0.01))
- *   - Shallow ocean: interpolated between floor and sea level based on continentalness
+ *   - Near coast: close to sea level
+ *   - Far from coast: near floor
  *   - Land: null
  */
 export function getOceanDepth(x, z, seed, template = DEFAULT_TEMPLATE) {
     const continental = getEffectiveContinentalness(x, z, seed, template);
-
-    // Add variation to deep/shallow boundary for organic coastlines
-    const boundaryNoiseSeed = deriveSeed(seed, 'deep_boundary');
-    const boundaryHash = (x, z) => hash(x, z, boundaryNoiseSeed);
-    const boundaryNoise = octaveNoise2D(x, z, 2, 0.008, boundaryHash) * 0.04;
-    const deepThreshold = OCEAN_THRESHOLDS.deep + (boundaryNoise - 0.02);
 
     // Land - no ocean depth
     if (continental >= OCEAN_THRESHOLDS.shallow) {
         return null;
     }
 
-    // Deep ocean - near floor
-    if (continental < deepThreshold) {
-        return HEIGHT_CONFIG.toWorld(0.01);
-    }
+    // Use gradient to determine coast proximity
+    const coastProximity = getCoastProximity(x, z, seed, template);
 
-    // Shallow ocean - interpolate between floor and sea level based on continentalness
     const shallowOceanFloor = HEIGHT_CONFIG.toWorld(HEIGHT_CONFIG.bands.shallowOceanFloor);
     const seaLevel = HEIGHT_CONFIG.seaLevelWorld;
+    const deepFloor = HEIGHT_CONFIG.toWorld(0.01);
 
-    // Normalize continentalness within shallow range [deepThreshold, OCEAN_THRESHOLDS.shallow]
-    const shallowRange = OCEAN_THRESHOLDS.shallow - deepThreshold;
-    const t = (continental - deepThreshold) / shallowRange;
+    // Blend based on coast proximity:
+    // High proximity (near coast) → shallower (closer to sea level)
+    // Low proximity (far from coast) → deeper (closer to floor)
+    const depth = deepFloor + coastProximity * (seaLevel - deepFloor);
 
-    // Lerp from shallow ocean floor to sea level
-    return shallowOceanFloor + t * (seaLevel - shallowOceanFloor);
+    return Math.max(deepFloor, Math.min(seaLevel, depth));
 }
 
 /**
@@ -192,12 +191,12 @@ export const WORLD_PARAMS = {
         warpStrength: 30     // Creates organic coastlines
     },
     temperature: {
-        frequency: 0.008,    // Climate zones (latitudinal variation)
-        octaves: 3
+        frequency: 0.0015,   // Large climate zones (~666 block wavelength for continent-scale biomes)
+        octaves: 2           // Fewer octaves = smoother, less fragmented biomes
     },
     humidity: {
-        frequency: 0.006,    // Precipitation patterns
-        octaves: 3
+        frequency: 0.0012,   // Precipitation patterns (~833 block wavelength)
+        octaves: 2           // Fewer octaves for smoother moisture regions
     },
     erosion: {
         frequency: 0.015,    // Local valleys and erosion detail
@@ -275,6 +274,40 @@ export function getIslandNoise(x, z, seed) {
 
     // Higher frequency than continental noise - creates small island features
     return octaveNoise2D(x, z, 3, 0.015, boundHash);
+}
+
+/**
+ * Estimate distance to coastline using continentalness gradient
+ * High gradient = near coast (continentalness changes rapidly)
+ * Low gradient = far from coast (uniform deep ocean or inland)
+ *
+ * @param {number} x - World X coordinate
+ * @param {number} z - World Z coordinate
+ * @param {number} seed - World seed
+ * @param {Object} template - Continent template
+ * @returns {number} Coast proximity [0, 1]:
+ *   1 = very close to coast (high gradient)
+ *   0 = far from coast (low gradient)
+ */
+export function getCoastProximity(x, z, seed, template = DEFAULT_TEMPLATE) {
+    const sampleDistance = 16;  // Distance to sample for gradient (in blocks)
+
+    // Sample continentalness at neighboring points
+    const cLeft = getEffectiveContinentalness(x - sampleDistance, z, seed, template);
+    const cRight = getEffectiveContinentalness(x + sampleDistance, z, seed, template);
+    const cUp = getEffectiveContinentalness(x, z - sampleDistance, seed, template);
+    const cDown = getEffectiveContinentalness(x, z + sampleDistance, seed, template);
+
+    // Calculate gradient magnitude using central differences
+    const dx = (cRight - cLeft) / (2 * sampleDistance);
+    const dz = (cDown - cUp) / (2 * sampleDistance);
+    const gradientMagnitude = Math.sqrt(dx * dx + dz * dz);
+
+    // Normalize gradient to [0, 1]
+    // Typical gradient near coast is ~0.01-0.02, deep ocean is ~0.001
+    const normalizedGradient = Math.min(1, gradientMagnitude * 100);
+
+    return normalizedGradient;
 }
 
 /**
