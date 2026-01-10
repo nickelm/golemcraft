@@ -13,6 +13,51 @@ import { DEFAULT_TEMPLATE, getTemplateModifiers } from './templates.js';
 import { getBiomeConfig } from './biomesystem.js';
 
 /**
+ * Height configuration for relative terrain scaling
+ * All heights defined as fractions [0, 1] for easy scaling to any max height
+ */
+export const HEIGHT_CONFIG = {
+    maxHeight: 63,  // Current max, can be changed to 127, 255, etc.
+
+    // Height bands as fractions of maxHeight
+    bands: {
+        deepOceanFloor: 0.00,    // 0% - bottom of world
+        shallowOceanFloor: 0.02, // 2% - shallow ocean has visible floor
+        seaLevel: 0.10,          // 10% - water surface
+        lowland: 0.25,           // 25% - plains, beaches
+        midland: 0.45,           // 45% - forests, hills
+        highland: 0.65,          // 65% - foothills
+        mountain: 0.85,          // 85% - mountain slopes
+        peak: 1.00,              // 100% - highest peaks
+    },
+
+    /**
+     * Convert a fraction to world units
+     * @param {number} fraction - Height as fraction [0, 1]
+     * @returns {number} Height in world units (blocks)
+     */
+    toWorld(fraction) {
+        return Math.round(fraction * this.maxHeight);
+    },
+
+    /**
+     * Get sea level in world units
+     * @returns {number} Sea level height in blocks
+     */
+    get seaLevelWorld() {
+        return this.toWorld(this.bands.seaLevel);
+    }
+};
+
+/**
+ * Get sea level in world units
+ * @returns {number} Sea level height in blocks
+ */
+export function getSeaLevel() {
+    return HEIGHT_CONFIG.seaLevelWorld;
+}
+
+/**
  * World generation parameters
  * Configuration for all terrain noise layers
  */
