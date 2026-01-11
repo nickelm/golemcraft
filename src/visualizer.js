@@ -10,6 +10,8 @@ import { DEFAULT_TEMPLATE, VERDANIA_TEMPLATE, debugTemplateAt } from './world/te
 import { TileCache } from './tools/mapvisualizer/tilecache.js';
 import { TerrainCache } from './visualizer/terraincache.js';
 import { TileManager } from './visualizer/tilemanager.js';
+import { WorldGenerator } from './world/worldgenerator.js';
+import { getZoneLevelColor } from './tools/mapvisualizer/colors.js';
 
 // Zoom limits
 const MIN_ZOOM = 0.1;
@@ -48,7 +50,7 @@ class TerrainVisualizer {
         this.seed = seed;
         this.viewX = 0;
         this.viewZ = 0;
-        this.zoom = 0.3;  // Pixels per world block
+        this.zoom = 2.0;  // Pixels per world block
         this.mode = 'continental';
         this.currentTemplate = DEFAULT_TEMPLATE;
         this.currentTemplateName = 'Default';
@@ -94,6 +96,12 @@ class TerrainVisualizer {
         this.mousePanStartViewX = 0;
         this.mousePanStartViewZ = 0;
 
+        // Zone overlay state
+        this.showZones = false;
+        this.zoneStyle = 'circles';  // 'circles', 'voronoi', 'grid'
+        this.worldGenerator = null;
+        this.worldData = null;
+
         // Set canvas to full window size
         this.resizeCanvas();
         window.addEventListener('resize', () => {
@@ -107,6 +115,23 @@ class TerrainVisualizer {
         // Initialize terrain cache and tile manager asynchronously
         this.initTerrainCache();
         this.initTileManager();
+
+        // Initialize world generator for zone data
+        this.initWorldGenerator();
+    }
+
+    /**
+     * Initialize the world generator for zone data
+     */
+    initWorldGenerator() {
+        this.worldGenerator = new WorldGenerator(this.seed, this.currentTemplate);
+        this.worldData = this.worldGenerator.generate();
+        console.log(`WorldGenerator initialized: ${this.worldData.zones.size} zones discovered`);
+
+        // Debug: list discovered zones
+        for (const zone of this.worldData.zones.values()) {
+            console.log(`  Zone: ${zone.name} (${zone.type}) at (${zone.center.x}, ${zone.center.z}) Lv ${zone.levels[0]}-${zone.levels[1]}`);
+        }
     }
 
     /**
@@ -278,6 +303,13 @@ class TerrainVisualizer {
                     this.setTemplate('verdania');
                     console.log('Switched to VERDANIA template');
                     break;
+                case 'z':
+                case 'Z':
+                    this.setShowZones(!this.showZones);
+                    const zonesCheckbox = document.getElementById('zones-checkbox');
+                    if (zonesCheckbox) zonesCheckbox.checked = this.showZones;
+                    console.log(`Zone overlay ${this.showZones ? 'enabled' : 'disabled'}`);
+                    break;
             }
         });
 
@@ -368,7 +400,7 @@ class TerrainVisualizer {
             this.canvas.classList.remove('panning');
         });
 
-        // Click handler for debug logging (bay orientation diagnosis)
+        // Click handler for zone info and debug logging
         this.canvas.addEventListener('click', (e) => {
             const rect = this.canvas.getBoundingClientRect();
             const canvasX = e.clientX - rect.left;
@@ -380,6 +412,18 @@ class TerrainVisualizer {
             const worldX = Math.round(this.viewX + (canvasX - halfWidth) / this.zoom);
             const worldZ = Math.round(this.viewZ + (canvasY - halfHeight) / this.zoom);
 
+            // Check for zone click when zone overlay is enabled
+            if (this.showZones) {
+                const clickedZone = this._getZoneAtPosition(worldX, worldZ);
+                if (clickedZone) {
+                    this._showZoneInfo(clickedZone);
+                    return;  // Don't show debug info when clicking a zone
+                } else {
+                    this._hideZoneInfo();
+                }
+            }
+
+            // Debug logging (bay orientation diagnosis)
             console.log('=== Debug Template Click ===');
             console.log(`Canvas position: (${canvasX.toFixed(0)}, ${canvasY.toFixed(0)})`);
             console.log(`Screen Y increases downward, worldZ increases downward`);
@@ -610,6 +654,9 @@ class TerrainVisualizer {
             this.tileManager.updateConfig(this.seed, this.currentTemplate, this.mode);
         }
 
+        // Regenerate world data with new seed
+        this.initWorldGenerator();
+
         this.tileCache.invalidate();
         this.render();
     }
@@ -631,6 +678,9 @@ class TerrainVisualizer {
         if (this.tileManager) {
             this.tileManager.updateConfig(this.seed, this.currentTemplate, this.mode);
         }
+
+        // Regenerate world data with new template
+        this.initWorldGenerator();
 
         this.tileCache.invalidate();
         this.updateInfoDisplay();
@@ -671,6 +721,11 @@ class TerrainVisualizer {
             this._renderAsync(startTime, width, height, tileSize);
         } else {
             this._renderSync(startTime, width, height, tileSize);
+        }
+
+        // Render zone overlay on top of terrain
+        if (this.showZones) {
+            this._renderZoneOverlay();
         }
     }
 
@@ -733,9 +788,9 @@ class TerrainVisualizer {
         const endTime = performance.now();
         const renderTime = endTime - startTime;
 
-        // Log render performance only when tiles are still loading
+        // Log render performance only occasionally when tiles are still loading
         const pendingCount = this.tileManager.getPendingCount();
-        if (pendingCount > 0) {
+        if (pendingCount > 0 && Math.random() < 0.1) {  // Log ~10% of the time
             const stats = this.tileCache.getStats();
             console.log(`Async render: ${renderTime.toFixed(1)}ms (${tilesDrawn} drawn, ${pendingCount} pending, ${stats.size}/${stats.maxTiles} cached)`);
         }
@@ -815,6 +870,175 @@ class TerrainVisualizer {
         const stats = this.tileCache.getStats();
         console.log(`Sync render: ${renderTime.toFixed(1)}ms (${tilesRendered} new, ${tilesCached} cached, ${stats.size}/${stats.maxTiles} in cache, LOD ${lodLevel})`);
     }
+
+    // ========== Zone Overlay Methods ==========
+
+    /**
+     * Toggle zone overlay visibility
+     * @param {boolean} enabled - Whether to show zones
+     */
+    setShowZones(enabled) {
+        this.showZones = enabled;
+        this.scheduleRender();
+    }
+
+    /**
+     * Set zone visualization style
+     * @param {string} style - 'circles', 'voronoi', or 'grid'
+     */
+    setZoneStyle(style) {
+        this.zoneStyle = style;
+        if (this.showZones) {
+            this.scheduleRender();
+        }
+    }
+
+    /**
+     * Render zone overlay on top of terrain
+     * Dispatches to appropriate renderer based on style
+     * @private
+     */
+    _renderZoneOverlay() {
+        if (!this.showZones || !this.worldData?.zones) return;
+
+        switch (this.zoneStyle) {
+            case 'circles':
+                this._renderZoneCircles();
+                break;
+            case 'voronoi':
+                // TODO(design): Voronoi tessellation - for each pixel, find nearest zone center
+                this._renderZoneCircles();  // Fallback to circles for now
+                break;
+            case 'grid':
+                // TODO(design): Show actual grid cell boundaries (800x800 blocks)
+                this._renderZoneCircles();  // Fallback to circles for now
+                break;
+        }
+    }
+
+    /**
+     * Render zones as circles with labels
+     * @private
+     */
+    _renderZoneCircles() {
+        const ctx = this.ctx;
+        const halfWidth = this.canvas.width / 2;
+        const halfHeight = this.canvas.height / 2;
+
+        for (const [key, zone] of this.worldData.zones) {
+            // Convert world coords to screen coords
+            const screenX = halfWidth + (zone.center.x - this.viewX) * this.zoom;
+            const screenY = halfHeight + (zone.center.z - this.viewZ) * this.zoom;
+            const screenRadius = zone.radius * this.zoom;
+
+            // Skip if completely off-screen
+            if (screenX + screenRadius < 0 || screenX - screenRadius > this.canvas.width) continue;
+            if (screenY + screenRadius < 0 || screenY - screenRadius > this.canvas.height) continue;
+
+            // Get zone color based on level
+            const color = getZoneLevelColor(zone.levels);
+
+            // Draw filled circle (20% opacity)
+            ctx.beginPath();
+            ctx.arc(screenX, screenY, screenRadius, 0, Math.PI * 2);
+            ctx.fillStyle = color + '33';
+            ctx.fill();
+
+            // Draw border (67% opacity)
+            ctx.strokeStyle = color + 'AA';
+            ctx.lineWidth = 2;
+            ctx.stroke();
+
+            // Draw labels if zoomed in enough
+            if (this.zoom > 0.1) {
+                this._renderZoneLabel(zone, screenX, screenY);
+            }
+        }
+    }
+
+    /**
+     * Render zone name and level label
+     * @private
+     * @param {Object} zone - Zone object
+     * @param {number} screenX - Screen X coordinate
+     * @param {number} screenY - Screen Y coordinate
+     */
+    _renderZoneLabel(zone, screenX, screenY) {
+        const ctx = this.ctx;
+        const fontSize = Math.max(12, 14 * this.zoom);
+
+        ctx.font = `bold ${fontSize}px sans-serif`;
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+
+        // Draw text with outline for readability
+        ctx.strokeStyle = '#000000';
+        ctx.lineWidth = 3;
+        ctx.fillStyle = '#FFFFFF';
+
+        ctx.strokeText(zone.name, screenX, screenY);
+        ctx.fillText(zone.name, screenX, screenY);
+
+        // Draw level range below name
+        const levelText = `Lv ${zone.levels[0]}-${zone.levels[1]}`;
+        const smallFontSize = Math.max(10, 12 * this.zoom);
+        ctx.font = `${smallFontSize}px sans-serif`;
+
+        const offsetY = 16 * Math.max(1, this.zoom);
+        ctx.strokeText(levelText, screenX, screenY + offsetY);
+        ctx.fillText(levelText, screenX, screenY + offsetY);
+    }
+
+    /**
+     * Get zone at a world position
+     * @param {number} x - World X coordinate
+     * @param {number} z - World Z coordinate
+     * @returns {Object|null} Zone object or null
+     */
+    _getZoneAtPosition(x, z) {
+        if (!this.worldData?.zones) return null;
+
+        for (const [key, zone] of this.worldData.zones) {
+            const dx = x - zone.center.x;
+            const dz = z - zone.center.z;
+            if (Math.sqrt(dx * dx + dz * dz) <= zone.radius) {
+                return zone;
+            }
+        }
+        return null;
+    }
+
+    /**
+     * Show zone info panel
+     * @param {Object} zone - Zone object to display
+     */
+    _showZoneInfo(zone) {
+        const panel = document.getElementById('zone-info');
+        if (!panel) return;
+
+        document.getElementById('zone-info-name').textContent = zone.name;
+        document.getElementById('zone-info-levels').textContent = `${zone.levels[0]}-${zone.levels[1]}`;
+        document.getElementById('zone-info-type').textContent = zone.type;
+        document.getElementById('zone-info-mood').textContent = zone.feel.mood;
+
+        // Get adjacent zone names
+        const adjacentNames = zone.adjacentZones
+            .map(key => this.worldData.zones.get(key)?.name || key)
+            .join(', ') || 'None';
+        document.getElementById('zone-info-adjacent').textContent = adjacentNames;
+
+        panel.style.display = 'block';
+    }
+
+    /**
+     * Hide zone info panel
+     */
+    _hideZoneInfo() {
+        const panel = document.getElementById('zone-info');
+        if (panel) {
+            panel.style.display = 'none';
+        }
+    }
 }
 
 // Initialize visualizer on page load
@@ -846,6 +1070,24 @@ window.addEventListener('DOMContentLoaded', () => {
         visualizer.setTemplate(e.target.value);
     });
 
+    // Zone overlay toggle
+    const zonesCheckbox = document.getElementById('zones-checkbox');
+    zonesCheckbox.addEventListener('change', (e) => {
+        visualizer.setShowZones(e.target.checked);
+    });
+
+    // Zone style selector
+    const zoneStyleSelect = document.getElementById('zone-style-select');
+    zoneStyleSelect.addEventListener('change', (e) => {
+        visualizer.setZoneStyle(e.target.value);
+    });
+
+    // Zone info panel close button
+    const zoneInfoClose = document.getElementById('zone-info-close');
+    zoneInfoClose.addEventListener('click', () => {
+        visualizer._hideZoneInfo();
+    });
+
     // Clear cache button
     const clearCacheBtn = document.getElementById('clear-cache-btn');
     const cacheStatsEl = document.getElementById('cache-stats');
@@ -874,5 +1116,5 @@ window.addEventListener('DOMContentLoaded', () => {
     window.visualizer = visualizer;
 
     console.log('Terrain Visualizer initialized');
-    console.log('Controls: Arrow keys = pan, +/- = zoom, 1-8 = switch mode, D/V = switch template');
+    console.log('Controls: Arrow keys = pan, +/- = zoom, 1-8 = switch mode, D/V = switch template, Z = toggle zones');
 });

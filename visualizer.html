@@ -134,6 +134,42 @@
             color: #aaa;
             margin-top: 5px;
         }
+
+        #zone-info {
+            position: absolute;
+            top: 10px;
+            left: 50%;
+            transform: translateX(-50%);
+            background: rgba(0, 0, 0, 0.9);
+            padding: 15px;
+            border-radius: 8px;
+            z-index: 150;
+            min-width: 200px;
+            font-size: 13px;
+            line-height: 1.6;
+        }
+
+        .zone-info-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 10px;
+            font-weight: bold;
+            font-size: 16px;
+        }
+
+        #zone-info-close {
+            background: none;
+            border: none;
+            color: #fff;
+            font-size: 20px;
+            cursor: pointer;
+            padding: 0 5px;
+        }
+
+        #zone-info-close:hover {
+            color: #ff6666;
+        }
     </style>
 </head>
 <body>
@@ -168,6 +204,19 @@
             Land/ocean distribution (black = ocean, white = highlands)
         </div>
         <div class="control-row" style="margin-top: 10px;">
+            <label for="zones-checkbox">
+                <input type="checkbox" id="zones-checkbox"> Show Zones
+            </label>
+        </div>
+        <div class="control-row">
+            <label for="zone-style-select">Zone Style:</label>
+            <select id="zone-style-select">
+                <option value="circles">Circles</option>
+                <option value="voronoi" disabled>Voronoi (coming soon)</option>
+                <option value="grid" disabled>Grid (debug)</option>
+            </select>
+        </div>
+        <div class="control-row" style="margin-top: 10px;">
             <button id="clear-cache-btn">Clear Cache</button>
             <span id="cache-stats">-</span>
         </div>
@@ -180,13 +229,25 @@
         <div>Value: <span id="value-display">-</span></div>
     </div>
 
+    <div id="zone-info" style="display: none;">
+        <div class="zone-info-header">
+            <span id="zone-info-name">Zone Name</span>
+            <button id="zone-info-close">&times;</button>
+        </div>
+        <div>Level: <span id="zone-info-levels">1-5</span></div>
+        <div>Type: <span id="zone-info-type">wilderness</span></div>
+        <div>Mood: <span id="zone-info-mood">wild</span></div>
+        <div>Adjacent: <span id="zone-info-adjacent">None</span></div>
+    </div>
+
     <div id="instructions">
         <strong>Arrow keys:</strong> Pan view<br>
         <strong>+/- or Mouse wheel:</strong> Zoom<br>
         <strong>Touch:</strong> Drag to pan, pinch to zoom<br>
-        <strong>Click:</strong> Debug template coords (see console)<br>
-        <strong>1-8:</strong> Switch mode (1=Continental, 2=Temp, 3=Humidity, 4=Erosion, 5=Ridge, 6=Biome, 7=Elevation, 8=Composite)<br>
-        <strong>D/V:</strong> Switch template (D=Default, V=Verdania)
+        <strong>Click:</strong> Show zone info (when zones enabled)<br>
+        <strong>1-8:</strong> Switch mode<br>
+        <strong>D/V:</strong> Switch template<br>
+        <strong>Z:</strong> Toggle zone overlay
     </div>
 
     <script type="module" src="/src/visualizer.js"></script>

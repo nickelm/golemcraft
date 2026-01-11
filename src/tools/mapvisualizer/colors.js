@@ -236,6 +236,34 @@ function lerpColor(color1, color2, t) {
  * @param {Object} neighbors - Optional neighbor heights for hillshade (left, right, up, down)
  * @returns {Array} RGB color [r, g, b] in range [0, 255]
  */
+/**
+ * Get zone color based on level range
+ * @param {Array} levels - Level range [min, max]
+ * @returns {string} Hex color string
+ */
+export function getZoneLevelColor(levels) {
+    const avgLevel = (levels[0] + levels[1]) / 2;
+    if (avgLevel <= 5) return '#44FF44';   // Green - safe
+    if (avgLevel <= 10) return '#AAFF44';  // Yellow-green
+    if (avgLevel <= 15) return '#FFAA44';  // Orange - moderate
+    return '#FF4444';                       // Red - dangerous
+}
+
+/**
+ * Zone type colors (alternative visualization)
+ */
+export const ZONE_TYPE_COLORS = {
+    haven: '#44FF44',
+    crossroads: '#FFAA44',
+    borderlands: '#FF4444',
+    wilderness: '#88CC88',
+    mountains: '#AAAAAA',
+    coast: '#44AAFF',
+    forest: '#228822',
+    desert: '#DDCC44',
+    ocean: '#4488FF'
+};
+
 export function getColorForMode(params, mode, neighbors = null) {
   // Special case: biome mode uses discrete colors
   if (mode === 'biome') {
