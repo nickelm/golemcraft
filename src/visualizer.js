@@ -5,7 +5,7 @@
  * Single source of truth - no duplicated generation logic.
  */
 
-import { getTerrainParams, buildRiverIndex } from './world/terrain/worldgen.js';
+import { getTerrainParams, buildRiverIndex, buildSpineIndex } from './world/terrain/worldgen.js';
 import { DEFAULT_TEMPLATE, VERDANIA_TEMPLATE, debugTemplateAt } from './world/terrain/templates.js';
 import { TileCache } from './tools/mapvisualizer/tilecache.js';
 import { TerrainCache } from './visualizer/terraincache.js';
@@ -105,6 +105,9 @@ class TerrainVisualizer {
         // River overlay state
         this.showRivers = true;  // Rivers visible by default
 
+        // Spine overlay state
+        this.showSpines = true;  // Spines visible by default
+
         // Set canvas to full window size
         this.resizeCanvas();
         window.addEventListener('resize', () => {
@@ -130,6 +133,18 @@ class TerrainVisualizer {
         this.worldGenerator = new WorldGenerator(this.seed, this.currentTemplate);
         this.worldData = this.worldGenerator.generate();
         console.log(`WorldGenerator initialized: ${this.worldData.zones.size} zones discovered`);
+
+        // Build spine index for terrain elevation boost (must be before rivers)
+        if (this.worldData.spines && this.worldData.spines.length > 0) {
+            buildSpineIndex(this.worldData.spines);
+            console.log(`Spines loaded: ${this.worldData.spines.length} spines`);
+            for (let i = 0; i < this.worldData.spines.length; i++) {
+                const spine = this.worldData.spines[i];
+                console.log(`  Spine ${i + 1}: ${spine.properties.name || 'unnamed'}, ${spine.path.length} points, direction: ${spine.properties.direction || 'N/A'}`);
+            }
+        } else {
+            console.log('No spines generated for this seed/template');
+        }
 
         // Build river index for terrain carving
         if (this.worldData.rivers && this.worldData.rivers.length > 0) {
@@ -341,6 +356,27 @@ class TerrainVisualizer {
                         this.scheduleRender();
                     } else {
                         console.log('No rivers to jump to');
+                    }
+                    break;
+                case 's':
+                    this.setShowSpines(!this.showSpines);
+                    console.log(`Spine overlay ${this.showSpines ? 'enabled' : 'disabled'}`);
+                    break;
+                case 'S':
+                    // Jump to first primary spine (Shift+S)
+                    if (this.worldData?.spines?.length > 0) {
+                        const primarySpine = this.worldData.spines.find(s => s.properties.type === 'primary');
+                        if (primarySpine) {
+                            const bounds = primarySpine.getBounds();
+                            this.viewX = (bounds.minX + bounds.maxX) / 2;
+                            this.viewZ = (bounds.minZ + bounds.maxZ) / 2;
+                            this.zoom = 0.5;
+                            console.log(`Jumped to spine "${primarySpine.properties.name}" at (${this.viewX.toFixed(0)}, ${this.viewZ.toFixed(0)})`);
+                            this.updateInfoDisplay();
+                            this.scheduleRender();
+                        }
+                    } else {
+                        console.log('No spines to jump to');
                     }
                     break;
                 case 'z':
@@ -763,6 +799,11 @@ class TerrainVisualizer {
             this._renderSync(startTime, width, height, tileSize);
         }
 
+        // Render spine overlay on top of terrain (before rivers)
+        if (this.showSpines) {
+            this._renderSpineOverlay();
+        }
+
         // Render river overlay on top of terrain
         if (this.showRivers) {
             this._renderRiverOverlay();
@@ -1073,6 +1114,126 @@ class TerrainVisualizer {
 
         // Perpendicular: rotate (dx, dz) by 90 degrees -> (-dz, dx)
         return { x: -dz / len, z: dx / len };
+    }
+
+    // ========== Spine Overlay Methods ==========
+
+    /**
+     * Toggle spine overlay visibility
+     * @param {boolean} enabled - Whether to show spines
+     */
+    setShowSpines(enabled) {
+        this.showSpines = enabled;
+        this.scheduleRender();
+    }
+
+    /**
+     * Render spines as vector overlay
+     * Primary spines shown in orange, secondary in yellow
+     * @private
+     */
+    _renderSpineOverlay() {
+        if (!this.worldData?.spines || this.worldData.spines.length === 0) {
+            return;
+        }
+
+        const halfWidth = this.canvas.width / 2;
+        const halfHeight = this.canvas.height / 2;
+
+        // Calculate view bounds for culling
+        const viewBounds = {
+            minX: this.viewX - halfWidth / this.zoom,
+            maxX: this.viewX + halfWidth / this.zoom,
+            minZ: this.viewZ - halfHeight / this.zoom,
+            maxZ: this.viewZ + halfHeight / this.zoom
+        };
+
+        for (const spine of this.worldData.spines) {
+            // Skip spines outside view bounds
+            const bounds = spine.getBounds();
+            if (bounds.maxX < viewBounds.minX || bounds.minX > viewBounds.maxX ||
+                bounds.maxZ < viewBounds.minZ || bounds.minZ > viewBounds.maxZ) {
+                continue;
+            }
+
+            this._renderSpinePath(spine, halfWidth, halfHeight);
+        }
+    }
+
+    /**
+     * Render a single spine path with elevation-based width
+     * @private
+     */
+    _renderSpinePath(spine, halfWidth, halfHeight) {
+        const ctx = this.ctx;
+        const path = spine.path;
+
+        if (path.length < 2) return;
+
+        const isPrimary = spine.properties.type === 'primary';
+
+        // Draw the spine as a thick line with elevation-based opacity
+        ctx.beginPath();
+
+        for (let i = 0; i < path.length; i++) {
+            const p = path[i];
+            const screenX = halfWidth + (p.x - this.viewX) * this.zoom;
+            const screenY = halfHeight + (p.z - this.viewZ) * this.zoom;
+
+            if (i === 0) {
+                ctx.moveTo(screenX, screenY);
+            } else {
+                ctx.lineTo(screenX, screenY);
+            }
+        }
+
+        // Style based on spine type
+        if (isPrimary) {
+            ctx.strokeStyle = '#FF6600';  // Orange for primary
+            ctx.lineWidth = Math.max(3, 6 * this.zoom);
+        } else {
+            ctx.strokeStyle = '#FFAA00';  // Yellow-orange for secondary
+            ctx.lineWidth = Math.max(2, 4 * this.zoom);
+        }
+        ctx.lineCap = 'round';
+        ctx.lineJoin = 'round';
+        ctx.stroke();
+
+        // Draw elevation markers at each point (when zoomed in)
+        if (this.zoom >= 1.0) {
+            for (let i = 0; i < path.length; i++) {
+                const p = path[i];
+                const screenX = halfWidth + (p.x - this.viewX) * this.zoom;
+                const screenY = halfHeight + (p.z - this.viewZ) * this.zoom;
+
+                // Circle size based on elevation
+                const radius = Math.max(2, p.elevation * 6 * this.zoom);
+
+                ctx.beginPath();
+                ctx.arc(screenX, screenY, radius, 0, Math.PI * 2);
+                ctx.fillStyle = isPrimary ? '#FF3300' : '#FF8800';
+                ctx.fill();
+                ctx.strokeStyle = '#000';
+                ctx.lineWidth = 1;
+                ctx.stroke();
+            }
+        }
+
+        // Draw spine label at center (when zoomed in enough)
+        if (this.zoom >= 0.5 && isPrimary && path.length > 0) {
+            const centerIdx = Math.floor(path.length / 2);
+            const centerPoint = path[centerIdx];
+            const screenX = halfWidth + (centerPoint.x - this.viewX) * this.zoom;
+            const screenY = halfHeight + (centerPoint.z - this.viewZ) * this.zoom;
+
+            ctx.font = '12px sans-serif';
+            ctx.fillStyle = '#FFF';
+            ctx.strokeStyle = '#000';
+            ctx.lineWidth = 3;
+            const label = spine.properties.name || 'Spine';
+            ctx.strokeText(label, screenX + 10, screenY - 10);
+            ctx.fillText(label, screenX + 10, screenY - 10);
+        }
     }
 
     // ========== Zone Overlay Methods ==========

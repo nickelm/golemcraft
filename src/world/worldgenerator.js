@@ -12,10 +12,13 @@ import {
     getTerrainParams,
     getCoastProximity,
     getHeightForRiverGen,
-    sampleHumidity
+    sampleHumidity,
+    getEffectiveContinentalness
 } from './terrain/worldgen.js';
+import { warpedNoise2D, hash } from '../utils/math/noise.js';
 import { DEFAULT_TEMPLATE, VERDANIA_TEMPLATE } from './terrain/templates.js';
 import { LinearFeature } from './features/linearfeature.js';
+import { SpineFeature } from './features/spinefeature.js';
 
 // Grid sizes for spatial indexing (match existing patterns)
 const ZONE_GRID_SIZE = 800;  // ~5×5 = 25 max grid cells, filtered to 10-15 land zones
@@ -63,6 +66,37 @@ const ZONE_TYPES = {
     ocean: { mood: 'vast', openness: 1.0, danger: 0.3 }
 };
 
+// Continental spine generation configuration
+const SPINE_CONFIG = {
+    // Continent detection
+    detectionGridSize: 100,      // Sample continentalness every 100 blocks
+    landThreshold: 0.25,         // Matches OCEAN_THRESHOLDS.land
+    minContinentCells: 20,       // Minimum cells to count as a continent (not an island)
+
+    // Coast avoidance
+    minCoastDistance: 200,       // Minimum blocks from coast for spine points
+    maxCoastDistance: 400,       // Maximum (ideal) distance from coast
+    coastCheckRadius: 250,       // Radius to search for ocean when checking coast distance
+
+    // Spine tracing
+    spinePointSpacing: 50,       // Distance between spine path points
+    noiseWarpStrength: 30,       // Organic variation amplitude
+    noiseWarpFrequency: 0.003,   // Low frequency for smooth curves
+
+    // Elevation profile
+    centerElevation: 0.9,        // Peak elevation at spine center
+    endElevation: 0.4,           // Tapered elevation at spine ends
+    centerProminence: 1.0,       // Peak prominence at center
+    endProminence: 0.5,          // Tapered prominence at ends
+
+    // Secondary spines
+    secondaryBranchChance: 0.4,      // Probability of secondary spine per candidate point
+    secondaryBranchMinAngle: 30,     // Minimum branch angle (degrees)
+    secondaryBranchMaxAngle: 60,     // Maximum branch angle (degrees)
+    secondaryLengthRatio: 0.4,       // Secondary spine length as ratio of primary
+    secondaryElevationScale: 0.7,    // Elevation reduction for secondary spines
+};
+
 /**
  * WorldGenerator class - orchestrates global world feature generation
  */
@@ -86,6 +120,7 @@ export class WorldGenerator {
         this._cache = {
             seed: this.seed,
             template: this._getTemplateName(),
+            spines: this.generateSpines(),  // Generate spines FIRST (influences rivers)
             rivers: this.generateRivers(),
             lakes: this.discoverLakes(),
             zones: this.discoverZones(),
@@ -505,6 +540,585 @@ export class WorldGenerator {
     }
 
     /**
+     * Generate mountain spines based on continent shape
+     * Spines define major ridgelines that guide river drainage.
+     *
+     * NEW: If template has spine.points defined (spine-first generation),
+     * convert those directly to SpineFeature objects instead of detecting blobs.
+     *
+     * LEGACY Algorithm (when no template spines):
+     * 1. Detect continent blobs via coarse-grid continentalness sampling
+     * 2. Calculate principal axis (longest extent) for each continent
+     * 3. Trace primary spine along axis, staying 200-400 blocks from coast
+     * 4. Branch secondary spines at 30-60 degree angles
+     * 5. Assign elevation profiles (highest at center, tapering at ends)
+     *
+     * @returns {Array<SpineFeature>} Generated spine features
+     */
+    generateSpines() {
+        const spineSeed = deriveSeed(this.seed, 'spines');
+        const spines = [];
+
+        // NEW: Check if template has spine-first definition
+        if (this.template?.spine?.points?.length >= 2) {
+            console.log('Spine generation: using template spine-first mode');
+            return this._generateSpinesFromTemplate();
+        }
+
+        // LEGACY: Detect continent blobs and generate spines procedurally
+        // Phase 1: Detect continent blobs
+        const blobs = this._detectContinentBlobs();
+        console.log(`Spine generation: found ${blobs.size} continent blobs`);
+
+        // Sort blobs by size (largest first) for consistent processing
+        const sortedBlobs = [...blobs.entries()].sort((a, b) => b[1].length - a[1].length);
+
+        // Phase 2-5: Generate spines for each continent
+        for (const [blobId, cells] of sortedBlobs) {
+            // Skip small islands
+            if (cells.length < SPINE_CONFIG.minContinentCells) {
+                continue;
+            }
+
+            // Calculate principal axis
+            const axis = this._calculatePrincipalAxis(cells);
+            if (!axis || axis.extent.length < 200) {
+                continue; // Skip if continent is too small for a spine
+            }
+
+            // Trace primary spine path
+            const primaryPath = this._traceSpinePath(axis, spineSeed + blobId);
+            if (primaryPath.length < 5) {
+                continue; // Skip if path is too short
+            }
+
+            // Create primary spine
+            const primary = new SpineFeature(primaryPath, {
+                name: `Continental Spine ${blobId}`,
+                type: 'primary',
+                direction: this._getSpineDirection(axis.axis)
+            });
+            spines.push(primary);
+
+            // Generate secondary branches
+            const secondaries = this._generateSecondarySpines(primary, spineSeed + blobId * 1000);
+            spines.push(...secondaries);
+        }
+
+        console.log(`Spine generation: generated ${spines.length} spines`);
+        return spines;
+    }
+
+    /**
+     * Generate SpineFeature objects from template spine definitions
+     * Converts normalized [0,1] coordinates to world coordinates
+     *
+     * @private
+     * @returns {Array<SpineFeature>} Spine features from template
+     */
+    _generateSpinesFromTemplate() {
+        const spines = [];
+        const template = this.template;
+
+        // Get world bounds for coordinate conversion
+        const bounds = template.worldBounds || { min: -2000, max: 2000 };
+        const worldSize = bounds.max - bounds.min;
+
+        /**
+         * Convert normalized point to world coordinates with elevation profile
+         * @param {Array<{x: number, z: number}>} normalizedPoints
+         * @param {number} baseElevation
+         * @returns {Array<{x: number, z: number, elevation: number, prominence: number}>}
+         */
+        const convertToWorldPath = (normalizedPoints, baseElevation) => {
+            const worldPath = [];
+            const numPoints = normalizedPoints.length;
+
+            for (let i = 0; i < numPoints; i++) {
+                const np = normalizedPoints[i];
+
+                // Convert normalized [0,1] to world coordinates
+                const worldX = bounds.min + np.x * worldSize;
+                const worldZ = bounds.min + np.z * worldSize;
+
+                // Calculate elevation profile: peaks at center, tapers at ends
+                const t = numPoints > 1 ? i / (numPoints - 1) : 0.5;
+                const centerDistance = Math.abs(t - 0.5);
+                const falloff = Math.cos(centerDistance * 2 * Math.PI) * 0.5 + 0.5;
+
+                const elevation = SPINE_CONFIG.endElevation +
+                    (baseElevation - SPINE_CONFIG.endElevation) * falloff;
+                const prominence = SPINE_CONFIG.endProminence +
+                    (SPINE_CONFIG.centerProminence - SPINE_CONFIG.endProminence) * falloff;
+
+                worldPath.push({
+                    x: worldX,
+                    z: worldZ,
+                    elevation,
+                    prominence
+                });
+            }
+
+            return worldPath;
+        };
+
+        // Create primary spine
+        if (template.spine?.points?.length >= 2) {
+            const primaryPath = convertToWorldPath(
+                template.spine.points,
+                template.spine.elevation || SPINE_CONFIG.centerElevation
+            );
+
+            const primary = new SpineFeature(primaryPath, {
+                name: 'Primary Continental Spine',
+                type: 'primary',
+                direction: this._estimateSpineDirection(template.spine.points)
+            });
+            spines.push(primary);
+        }
+
+        // Create secondary spines
+        for (let i = 0; i < (template.secondarySpines || []).length; i++) {
+            const secondary = template.secondarySpines[i];
+            if (!secondary.points || secondary.points.length < 2) continue;
+
+            const secondaryPath = convertToWorldPath(
+                secondary.points,
+                secondary.elevation || SPINE_CONFIG.centerElevation * SPINE_CONFIG.secondaryElevationScale
+            );
+
+            const secondarySpine = new SpineFeature(secondaryPath, {
+                name: `Secondary Spine ${i}`,
+                type: 'secondary',
+                direction: this._estimateSpineDirection(secondary.points)
+            });
+            spines.push(secondarySpine);
+        }
+
+        console.log(`Spine generation: created ${spines.length} spines from template`);
+        return spines;
+    }
+
+    /**
+     * Estimate spine direction from normalized points
+     * @private
+     * @param {Array<{x: number, z: number}>} points - Normalized points
+     * @returns {string} Direction label (E, NE, N, NW, W, SW, S, SE)
+     */
+    _estimateSpineDirection(points) {
+        if (points.length < 2) return 'E';
+
+        const first = points[0];
+        const last = points[points.length - 1];
+        const dx = last.x - first.x;
+        const dz = last.z - first.z;
+
+        return this._getSpineDirection({ dx, dz });
+    }
+
+    // ========== Spine Generation Helpers ==========
+
+    /**
+     * Detect continent blobs using coarse grid sampling and connected components
+     * @private
+     * @returns {Map<number, Array<{gx: number, gz: number, x: number, z: number}>>} Map of blobId to cells
+     */
+    _detectContinentBlobs() {
+        const gridSize = SPINE_CONFIG.detectionGridSize;
+        const minGrid = Math.floor(WORLD_BOUNDS.min / gridSize);
+        const maxGrid = Math.floor(WORLD_BOUNDS.max / gridSize);
+
+        // Phase 1: Sample continentalness on coarse grid
+        const cells = new Map();
+        for (let gx = minGrid; gx <= maxGrid; gx++) {
+            for (let gz = minGrid; gz <= maxGrid; gz++) {
+                const x = gx * gridSize + gridSize / 2;
+                const z = gz * gridSize + gridSize / 2;
+                const continental = getEffectiveContinentalness(x, z, this.seed, this.template);
+                const isLand = continental >= SPINE_CONFIG.landThreshold;
+
+                cells.set(`${gx},${gz}`, {
+                    gx, gz, x, z, isLand, blobId: -1
+                });
+            }
+        }
+
+        // Phase 2: Connected components via flood fill (4-connectivity)
+        const blobs = new Map();
+        let nextBlobId = 0;
+
+        for (const [key, cell] of cells) {
+            if (!cell.isLand || cell.blobId >= 0) continue;
+
+            // Start new blob with flood fill
+            const blobCells = [];
+            const stack = [key];
+
+            while (stack.length > 0) {
+                const currentKey = stack.pop();
+                const current = cells.get(currentKey);
+                if (!current || !current.isLand || current.blobId >= 0) continue;
+
+                current.blobId = nextBlobId;
+                blobCells.push({ gx: current.gx, gz: current.gz, x: current.x, z: current.z });
+
+                // Add 4-connected neighbors
+                const neighbors = [
+                    `${current.gx - 1},${current.gz}`,
+                    `${current.gx + 1},${current.gz}`,
+                    `${current.gx},${current.gz - 1}`,
+                    `${current.gx},${current.gz + 1}`
+                ];
+                for (const nKey of neighbors) {
+                    const neighbor = cells.get(nKey);
+                    if (neighbor && neighbor.isLand && neighbor.blobId < 0) {
+                        stack.push(nKey);
+                    }
+                }
+            }
+
+            if (blobCells.length > 0) {
+                blobs.set(nextBlobId, blobCells);
+                nextBlobId++;
+            }
+        }
+
+        return blobs;
+    }
+
+    /**
+     * Calculate principal axis of a continent blob using covariance analysis
+     * @private
+     * @param {Array<{x: number, z: number}>} cells - Blob cells
+     * @returns {{ centroid: {x: number, z: number}, axis: {dx: number, dz: number}, extent: {min: number, max: number, length: number} }}
+     */
+    _calculatePrincipalAxis(cells) {
+        if (cells.length === 0) return null;
+
+        // Calculate centroid
+        let sumX = 0, sumZ = 0;
+        for (const cell of cells) {
+            sumX += cell.x;
+            sumZ += cell.z;
+        }
+        const centroid = {
+            x: sumX / cells.length,
+            z: sumZ / cells.length
+        };
+
+        // Build covariance matrix
+        let covXX = 0, covXZ = 0, covZZ = 0;
+        for (const cell of cells) {
+            const dx = cell.x - centroid.x;
+            const dz = cell.z - centroid.z;
+            covXX += dx * dx;
+            covXZ += dx * dz;
+            covZZ += dz * dz;
+        }
+        covXX /= cells.length;
+        covXZ /= cells.length;
+        covZZ /= cells.length;
+
+        // Find principal eigenvector (closed-form for 2x2)
+        let axisX, axisZ;
+        if (Math.abs(covXZ) > 0.001) {
+            const trace = covXX + covZZ;
+            const det = covXX * covZZ - covXZ * covXZ;
+            const eigenvalue1 = trace / 2 + Math.sqrt(Math.max(0, (trace / 2) * (trace / 2) - det));
+            axisX = eigenvalue1 - covZZ;
+            axisZ = covXZ;
+        } else {
+            // Already axis-aligned
+            axisX = covXX >= covZZ ? 1 : 0;
+            axisZ = covXX >= covZZ ? 0 : 1;
+        }
+
+        // Normalize axis
+        const axisLen = Math.sqrt(axisX * axisX + axisZ * axisZ);
+        if (axisLen > 0) {
+            axisX /= axisLen;
+            axisZ /= axisLen;
+        }
+
+        // Calculate extent along axis
+        let minProj = Infinity, maxProj = -Infinity;
+        for (const cell of cells) {
+            const dx = cell.x - centroid.x;
+            const dz = cell.z - centroid.z;
+            const proj = dx * axisX + dz * axisZ;
+            minProj = Math.min(minProj, proj);
+            maxProj = Math.max(maxProj, proj);
+        }
+
+        return {
+            centroid,
+            axis: { dx: axisX, dz: axisZ },
+            extent: {
+                min: minProj,
+                max: maxProj,
+                length: maxProj - minProj
+            }
+        };
+    }
+
+    /**
+     * Estimate distance to nearest coast from a position
+     * @private
+     * @param {number} x - World X coordinate
+     * @param {number} z - World Z coordinate
+     * @returns {number} Distance to coast in blocks, or Infinity if no coast found
+     */
+    _estimateCoastDistance(x, z) {
+        const sampleRadii = [50, 100, 150, 200, 250, 300, 400];
+        const sampleCount = 12;
+
+        for (const radius of sampleRadii) {
+            for (let i = 0; i < sampleCount; i++) {
+                const angle = (i / sampleCount) * Math.PI * 2;
+                const sx = x + Math.cos(angle) * radius;
+                const sz = z + Math.sin(angle) * radius;
+
+                const continental = getEffectiveContinentalness(sx, sz, this.seed, this.template);
+                if (continental < SPINE_CONFIG.landThreshold) {
+                    // Found ocean - estimate distance
+                    return radius * 0.8; // Approximate
+                }
+            }
+        }
+
+        return Infinity; // No coast found within search radius
+    }
+
+    /**
+     * Adjust a point to maintain proper coast distance
+     * @private
+     * @param {number} x - World X coordinate
+     * @param {number} z - World Z coordinate
+     * @param {number} targetX - Direction to push toward (for inland adjustment)
+     * @param {number} targetZ - Direction to push toward
+     * @returns {{x: number, z: number} | null} Adjusted point or null if invalid
+     */
+    _adjustForCoastDistance(x, z, targetX, targetZ) {
+        // Check if point is on land
+        const continental = getEffectiveContinentalness(x, z, this.seed, this.template);
+        if (continental < SPINE_CONFIG.landThreshold) {
+            return null; // In water
+        }
+
+        const coastDist = this._estimateCoastDistance(x, z);
+
+        // If too close to coast, push inland
+        if (coastDist < SPINE_CONFIG.minCoastDistance) {
+            const pushDist = SPINE_CONFIG.minCoastDistance - coastDist + 50;
+            const dx = targetX - x;
+            const dz = targetZ - z;
+            const len = Math.sqrt(dx * dx + dz * dz);
+            if (len > 0) {
+                const newX = x + (dx / len) * pushDist;
+                const newZ = z + (dz / len) * pushDist;
+
+                // Verify new point is still on land
+                const newCont = getEffectiveContinentalness(newX, newZ, this.seed, this.template);
+                if (newCont >= SPINE_CONFIG.landThreshold) {
+                    return { x: newX, z: newZ };
+                }
+            }
+            return null; // Couldn't find valid inland point
+        }
+
+        return { x, z };
+    }
+
+    /**
+     * Trace a spine path along the principal axis with organic noise
+     * @private
+     * @param {{ centroid: {x: number, z: number}, axis: {dx: number, dz: number}, extent: {min: number, max: number, length: number} }} axis
+     * @param {number} spineSeed - Seed for deterministic noise
+     * @returns {Array<{x: number, z: number, elevation: number, prominence: number}>}
+     */
+    _traceSpinePath(axis, spineSeed) {
+        const path = [];
+        const { centroid, axis: dir, extent } = axis;
+
+        // Calculate endpoints at 90% of extent (avoid edges)
+        const startProj = extent.min * 0.9;
+        const endProj = extent.max * 0.9;
+        const projLength = endProj - startProj;
+
+        const numPoints = Math.max(5, Math.ceil(projLength / SPINE_CONFIG.spinePointSpacing));
+
+        for (let i = 0; i < numPoints; i++) {
+            const t = i / (numPoints - 1);
+            const proj = startProj + t * projLength;
+
+            // Base position on axis
+            let baseX = centroid.x + dir.dx * proj;
+            let baseZ = centroid.z + dir.dz * proj;
+
+            // Add organic noise warp
+            const boundHash = (x, z) => hash(x, z, spineSeed);
+            const warpX = (warpedNoise2D(baseX, baseZ, 2, SPINE_CONFIG.noiseWarpFrequency, SPINE_CONFIG.noiseWarpStrength * 0.5, boundHash) - 0.5) * 2 * SPINE_CONFIG.noiseWarpStrength;
+            const warpZ = (warpedNoise2D(baseX + 500, baseZ + 500, 2, SPINE_CONFIG.noiseWarpFrequency, SPINE_CONFIG.noiseWarpStrength * 0.5, boundHash) - 0.5) * 2 * SPINE_CONFIG.noiseWarpStrength;
+
+            let candidateX = baseX + warpX;
+            let candidateZ = baseZ + warpZ;
+
+            // Clamp to world bounds
+            candidateX = Math.max(WORLD_BOUNDS.min + 100, Math.min(WORLD_BOUNDS.max - 100, candidateX));
+            candidateZ = Math.max(WORLD_BOUNDS.min + 100, Math.min(WORLD_BOUNDS.max - 100, candidateZ));
+
+            // Adjust for coast distance
+            const adjusted = this._adjustForCoastDistance(candidateX, candidateZ, centroid.x, centroid.z);
+            if (!adjusted) continue;
+
+            // Calculate elevation profile (peaks at center, tapers at ends)
+            const centerDistance = Math.abs(t - 0.5);
+            const falloff = Math.cos(centerDistance * 2 * Math.PI) * 0.5 + 0.5;
+
+            const elevation = SPINE_CONFIG.endElevation +
+                (SPINE_CONFIG.centerElevation - SPINE_CONFIG.endElevation) * falloff;
+            const prominence = SPINE_CONFIG.endProminence +
+                (SPINE_CONFIG.centerProminence - SPINE_CONFIG.endProminence) * falloff;
+
+            path.push({
+                x: adjusted.x,
+                z: adjusted.z,
+                elevation,
+                prominence
+            });
+        }
+
+        return path;
+    }
+
+    /**
+     * Generate secondary spines branching from a primary spine
+     * @private
+     * @param {SpineFeature} primary - Primary spine to branch from
+     * @param {number} branchSeed - Seed for deterministic branching
+     * @returns {Array<SpineFeature>} Secondary spine features
+     */
+    _generateSecondarySpines(primary, branchSeed) {
+        const secondaries = [];
+        const path = primary.path;
+        if (path.length < 5) return secondaries;
+
+        // Skip first and last 20% of spine
+        const startIdx = Math.floor(path.length * 0.2);
+        const endIdx = Math.floor(path.length * 0.8);
+
+        for (let i = startIdx; i < endIdx; i++) {
+            // Check branch chance
+            const branchRoll = this._hash(i, 0, branchSeed);
+            if (branchRoll > SPINE_CONFIG.secondaryBranchChance) continue;
+
+            // Calculate local tangent
+            const prev = path[Math.max(0, i - 1)];
+            const next = path[Math.min(path.length - 1, i + 1)];
+            let tangentX = next.x - prev.x;
+            let tangentZ = next.z - prev.z;
+            const tangentLen = Math.sqrt(tangentX * tangentX + tangentZ * tangentZ);
+            if (tangentLen < 1) continue;
+            tangentX /= tangentLen;
+            tangentZ /= tangentLen;
+
+            // Calculate perpendicular
+            const perpX = -tangentZ;
+            const perpZ = tangentX;
+
+            // Choose branch angle (30-60 degrees)
+            const angleRange = SPINE_CONFIG.secondaryBranchMaxAngle - SPINE_CONFIG.secondaryBranchMinAngle;
+            const angleDeg = SPINE_CONFIG.secondaryBranchMinAngle + this._hash(i, 1, branchSeed) * angleRange;
+            const angleRad = angleDeg * Math.PI / 180;
+
+            // Rotate tangent by angle
+            let branchDirX = tangentX * Math.cos(angleRad) + perpX * Math.sin(angleRad);
+            let branchDirZ = tangentZ * Math.cos(angleRad) + perpZ * Math.sin(angleRad);
+
+            // Randomly flip to other side
+            if (this._hash(i, 2, branchSeed) > 0.5) {
+                branchDirX = -branchDirX;
+                branchDirZ = -branchDirZ;
+            }
+
+            // Calculate secondary spine length
+            const primaryLength = this._getPathLength(path);
+            const secondaryLength = primaryLength * SPINE_CONFIG.secondaryLengthRatio;
+            const numPoints = Math.max(3, Math.ceil(secondaryLength / SPINE_CONFIG.spinePointSpacing));
+
+            // Trace secondary spine
+            const secondaryPath = [];
+            const branchPoint = path[i];
+
+            for (let j = 0; j < numPoints; j++) {
+                const t = j / (numPoints - 1);
+                const dist = t * secondaryLength;
+
+                let sx = branchPoint.x + branchDirX * dist;
+                let sz = branchPoint.z + branchDirZ * dist;
+
+                // Clamp to world bounds
+                sx = Math.max(WORLD_BOUNDS.min + 100, Math.min(WORLD_BOUNDS.max - 100, sx));
+                sz = Math.max(WORLD_BOUNDS.min + 100, Math.min(WORLD_BOUNDS.max - 100, sz));
+
+                // Check if on land
+                const continental = getEffectiveContinentalness(sx, sz, this.seed, this.template);
+                if (continental < SPINE_CONFIG.landThreshold) break;
+
+                // Elevation: peaks at junction, tapers toward end
+                const falloff = 1 - t;
+                const baseElevation = branchPoint.elevation * SPINE_CONFIG.secondaryElevationScale;
+                const elevation = SPINE_CONFIG.endElevation +
+                    (baseElevation - SPINE_CONFIG.endElevation) * falloff;
+                const prominence = SPINE_CONFIG.endProminence +
+                    (branchPoint.prominence * SPINE_CONFIG.secondaryElevationScale - SPINE_CONFIG.endProminence) * falloff;
+
+                secondaryPath.push({ x: sx, z: sz, elevation, prominence });
+            }
+
+            if (secondaryPath.length >= 3) {
+                secondaries.push(new SpineFeature(secondaryPath, {
+                    name: `Secondary Spine ${i}`,
+                    type: 'secondary',
+                    parentId: primary.id
+                }));
+            }
+        }
+
+        return secondaries;
+    }
+
+    /**
+     * Get total path length
+     * @private
+     */
+    _getPathLength(path) {
+        let length = 0;
+        for (let i = 1; i < path.length; i++) {
+            const dx = path[i].x - path[i - 1].x;
+            const dz = path[i].z - path[i - 1].z;
+            length += Math.sqrt(dx * dx + dz * dz);
+        }
+        return length;
+    }
+
+    /**
+     * Get spine direction label from axis vector
+     * @private
+     */
+    _getSpineDirection(axis) {
+        const angle = Math.atan2(axis.dz, axis.dx) * 180 / Math.PI;
+        if (angle >= -22.5 && angle < 22.5) return 'E';
+        if (angle >= 22.5 && angle < 67.5) return 'NE';
+        if (angle >= 67.5 && angle < 112.5) return 'N';
+        if (angle >= 112.5 && angle < 157.5) return 'NW';
+        if (angle >= 157.5 || angle < -157.5) return 'W';
+        if (angle >= -157.5 && angle < -112.5) return 'SW';
+        if (angle >= -112.5 && angle < -67.5) return 'S';
+        return 'SE';
+    }
+
+    /**
      * Discover natural lakes based on terrain
      * TODO(design): Implement lake discovery
      * Lakes form in terrain depressions (local minima)
@@ -603,6 +1217,7 @@ export class WorldGenerator {
         const serializable = {
             seed: data.seed,
             template: data.template,
+            spines: data.spines.map(s => s.toJSON()),
             rivers: data.rivers,
             lakes: data.lakes,
             zones: Array.from(data.zones.entries()),
@@ -626,6 +1241,7 @@ export class WorldGenerator {
         generator._cache = {
             seed: data.seed,
             template: data.template,
+            spines: (data.spines || []).map(s => SpineFeature.fromJSON(s)),
             rivers: data.rivers || [],
             lakes: data.lakes || [],
             zones: new Map(data.zones || []),

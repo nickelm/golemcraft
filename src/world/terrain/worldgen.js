@@ -12,6 +12,7 @@ import { hash, octaveNoise2D, ridgedNoise2D, warpedNoise2D } from '../../utils/m
 import { DEFAULT_TEMPLATE, getTemplateModifiers } from './templates.js';
 import { getBiomeConfig } from './biomesystem.js';
 import { LinearFeatureIndex } from '../features/linearfeature.js';
+import { SpineFeatureIndex } from '../features/spinefeature.js';
 
 /**
  * Ocean threshold constants based on continentalness
@@ -61,6 +62,34 @@ export const HEIGHT_CONFIG = {
 };
 
 // =============================================================================
+// Spine Influence Configuration
+// =============================================================================
+
+/**
+ * Configuration for how spine features influence terrain
+ * Spine acts as a soft influence, biasing terrain toward land/elevation near the ridge
+ */
+export const SPINE_INFLUENCE_CONFIG = {
+    // Continentalness influence (land/ocean determination)
+    continentSigma: 200,            // Gaussian width in blocks
+    continentBoostStrength: 0.4,    // Max boost to continentalness near spine (0-1)
+
+    // Height influence (elevation boost along spine)
+    heightSigma: 200,               // Gaussian width for height boost in blocks
+    heightBoostStrength: 0.4,       // Max height contribution from spine (0-1)
+    drainageBiasStrength: 0.0001    // Subtle downhill trend away from spine
+};
+
+/**
+ * Continentalness thresholds for land/ocean determination
+ * Used with effective continentalness (noise + spine boost)
+ */
+export const CONTINENT_THRESHOLDS = {
+    deepOcean: 0.15,    // Below this = deep ocean floor
+    land: 0.30          // Above this = land; between = coastal transition
+};
+
+// =============================================================================
 // River Carving System
 // =============================================================================
 
@@ -91,6 +120,50 @@ export function buildRiverIndex(rivers) {
  */
 export function clearRiverIndex() {
     _riverIndex = null;
+}
+
+// =============================================================================
+// Spine Boost System
+// =============================================================================
+
+/**
+ * Module-level spine spatial index for efficient elevation boost queries
+ * Built once when world data is available, used by getHeightAtNormalized
+ */
+let _spineIndex = null;
+
+/**
+ * Build the spine spatial index from generated spine data
+ * Must be called before terrain generation to enable spine elevation boost
+ *
+ * @param {Array<SpineFeature>} spines - Array of spine features from WorldGenerator
+ * @returns {SpineFeatureIndex} The built index
+ */
+export function buildSpineIndex(spines) {
+    _spineIndex = new SpineFeatureIndex(256);
+    for (const spine of spines) {
+        _spineIndex.add(spine);
+    }
+    console.log(`Spine index built: ${spines.length} spines indexed`);
+    return _spineIndex;
+}
+
+/**
+ * Clear the spine index (for cleanup or reinitialization)
+ */
+export function clearSpineIndex() {
+    _spineIndex = null;
+}
+
+/**
+ * Get spine elevation boost at a world position
+ * @param {number} x - World X coordinate
+ * @param {number} z - World Z coordinate
+ * @returns {number} Elevation boost [0-1], or 0 if no spine influence
+ */
+function getSpineBoostAt(x, z) {
+    if (!_spineIndex) return 0;
+    return _spineIndex.getElevationBoostAt(x, z);
 }
 
 /**
@@ -172,7 +245,8 @@ function applyRiverCarving(baseHeight, riverInfluence) {
  */
 export const BIOME_HEIGHT_BANDS = {
     // Water biomes (below sea level)
-    ocean: { min: 0.02, max: 0.08 },
+    ocean: { min: 0.00, max: 0.05 },           // Deep ocean floor
+    shallow_ocean: { min: 0.04, max: 0.09 },   // Shallow ocean floor
     beach: { min: 0.10, max: 0.18 },
 
     // Lowland biomes
@@ -643,34 +717,88 @@ function selectBiomeFromClimate(temp, humidity, elev) {
 }
 
 /**
- * Determine biome at world position using climate classification
+ * Get land biome for height generation (no height dependency to avoid recursion)
+ *
+ * Used internally by getHeightAtNormalized_SpineFirst to determine biome height bands.
+ * Does NOT check ocean/beach - those are determined by final elevation.
  *
  * @param {number} x - World X coordinate
  * @param {number} z - World Z coordinate
  * @param {number} seed - World seed
- * @param {Object} template - Continent template (optional, defaults to DEFAULT_TEMPLATE)
- * @returns {string} Biome name (e.g., 'plains', 'ocean', 'mountains')
+ * @param {number} continentalness - Effective continentalness value for elevation band
+ * @param {Object} template - Continent template
+ * @returns {string} Land biome name
  */
-export function getBiomeAt(x, z, seed, template = DEFAULT_TEMPLATE) {
-    // Use effective continentalness (with island perturbation) for land/ocean determination
-    const continental = getEffectiveContinentalness(x, z, seed, template);
+function getLandBiomeForHeight(x, z, seed, continentalness, template) {
     const temperature = sampleTemperature(x, z, seed, template);
     const humidity = sampleHumidity(x, z, seed, template);
-
-    // Ocean check (below 15% continentalness threshold)
-    // Island perturbation can push shallow ocean above this threshold (creating islands)
-    // or push land below it (creating lagoons)
-    if (continental < 0.15) {
-        return 'ocean';
-    }
 
     // Classify into climate bands
     const tempBand = temperature < 0.33 ? 'cold' : (temperature < 0.66 ? 'temperate' : 'hot');
     const humidityBand = humidity < 0.33 ? 'dry' : (humidity < 0.66 ? 'moderate' : 'wet');
 
-    // Elevation band from effective continentalness
-    // Island perturbation affects elevation (islands tend to be low elevation)
-    const elevBand = continental < 0.3 ? 'low' : (continental < 0.6 ? 'mid' : 'high');
+    // Elevation band from continentalness (proxy for elevation during height generation)
+    const elevBand = continentalness < 0.45 ? 'low' : (continentalness < 0.70 ? 'mid' : 'high');
+
+    return selectBiomeFromClimate(tempBand, humidityBand, elevBand);
+}
+
+/**
+ * Determine biome at world position using climate classification
+ *
+ * Respects land/ocean boundaries using actual terrain elevation:
+ * 1. Get actual terrain height to determine water vs land
+ * 2. For water, distinguish deep vs shallow ocean
+ * 3. For land near coast at low elevation, return beach
+ * 4. Otherwise use climate-based biome selection
+ *
+ * @param {number} x - World X coordinate
+ * @param {number} z - World Z coordinate
+ * @param {number} seed - World seed
+ * @param {Object} template - Continent template (optional, defaults to DEFAULT_TEMPLATE)
+ * @returns {string} Biome name (e.g., 'plains', 'ocean', 'shallow_ocean', 'beach', 'mountains')
+ */
+export function getBiomeAt(x, z, seed, template = DEFAULT_TEMPLATE) {
+    // Get actual terrain elevation
+    const elevation = getHeightAtNormalized(x, z, seed, template);
+    const seaLevel = HEIGHT_CONFIG.bands.seaLevel;
+
+    // =========================================================================
+    // STEP 1: Check if underwater (ocean biomes)
+    // =========================================================================
+    if (elevation < seaLevel) {
+        // Distinguish deep vs shallow ocean based on depth
+        const depth = seaLevel - elevation;
+        const deepThreshold = 0.05;  // 5% below sea level = deep ocean
+
+        if (depth > deepThreshold) {
+            return 'ocean';
+        }
+        return 'shallow_ocean';
+    }
+
+    // =========================================================================
+    // STEP 2: Land - check for beach (near coast + low elevation)
+    // =========================================================================
+    const coastProximity = getCoastProximity(x, z, seed, template);
+
+    // Beach: high coast proximity AND low elevation (< 0.15 normalized, just above sea level)
+    if (coastProximity > 0.7 && elevation < 0.15) {
+        return 'beach';
+    }
+
+    // =========================================================================
+    // STEP 3: Regular land biome selection based on climate
+    // =========================================================================
+    const temperature = sampleTemperature(x, z, seed, template);
+    const humidity = sampleHumidity(x, z, seed, template);
+
+    // Classify into climate bands
+    const tempBand = temperature < 0.33 ? 'cold' : (temperature < 0.66 ? 'temperate' : 'hot');
+    const humidityBand = humidity < 0.33 ? 'dry' : (humidity < 0.66 ? 'moderate' : 'wet');
+
+    // Elevation band from actual terrain height
+    const elevBand = elevation < 0.30 ? 'low' : (elevation < 0.55 ? 'mid' : 'high');
 
     // Use climate matrix for biome lookup
     return selectBiomeFromClimate(tempBand, humidityBand, elevBand);
@@ -770,12 +898,13 @@ function getInlandFactor(x, z, seed, template) {
  * Calculate normalized terrain height at world position
  * All calculations work in [0, 1] space before final scaling.
  *
- * Height distribution targets:
- * - Ocean areas: 0.00 - 0.10 (deep to shallow)
- * - Lowlands: 0.10 - 0.30
- * - Midlands: 0.30 - 0.55
- * - Highlands: 0.55 - 0.75
- * - Mountains: 0.75 - 1.00
+ * For SPINE-FIRST templates (template.spine.points defined):
+ * - Elevation is DIRECTLY derived from distance to spine
+ * - Spine = mountain ridge, distance from spine = lower elevation
+ * - Land/ocean boundary determined by max land extent from spine
+ *
+ * For LEGACY templates:
+ * - Uses noise-based terrain with template modifiers
  *
  * @param {number} x - World X coordinate
  * @param {number} z - World Z coordinate
@@ -784,6 +913,240 @@ function getInlandFactor(x, z, seed, template) {
  * @returns {number} Normalized height [0, 1]
  */
 export function getHeightAtNormalized(x, z, seed, template = DEFAULT_TEMPLATE) {
+    // Check if using spine-first generation
+    if (template?.spine?.points?.length >= 2) {
+        return getHeightAtNormalized_SpineFirst(x, z, seed, template);
+    }
+
+    // LEGACY path for templates without spine.points
+    return getHeightAtNormalized_Legacy(x, z, seed, template);
+}
+
+/**
+ * HYBRID terrain generation for spine-first templates
+ *
+ * Strategy:
+ * 1. Use NOISE-BASED continentalness as primary driver for land/ocean
+ * 2. Spine ADDS to continentalness (makes land more likely near spine)
+ * 3. Noise-based terrain for elevation with biome-specific height bands
+ * 4. Spine adds ADDITIVE ridge boost + subtle drainage bias
+ *
+ * This creates organic, irregular coastlines while spine provides directional tendency.
+ *
+ * @param {number} x - World X coordinate
+ * @param {number} z - World Z coordinate
+ * @param {number} seed - World seed
+ * @param {Object} template - Spine-first template
+ * @returns {number} Normalized height [0, 1]
+ */
+function getHeightAtNormalized_SpineFirst(x, z, seed, template) {
+    const bounds = template.worldBounds || { min: -2000, max: 2000 };
+    const worldSize = bounds.max - bounds.min;
+
+    // Convert world coords to normalized [0, 1]
+    const nx = (x - bounds.min) / worldSize;
+    const nz = (z - bounds.min) / worldSize;
+
+    // Get spine info: distance to nearest spine (normalized), and that spine's elevation
+    const spineInfo = getSpineInfoAt(nx, nz, template);
+
+    // =========================================================================
+    // STEP 1: Noise-based continentalness + spine boost for land/ocean
+    // =========================================================================
+
+    // Get base noise continentalness (irregular, organic coastlines)
+    const continentSeed = deriveSeed(seed, 'continentalness');
+    const boundHash = (hx, hz) => hash(hx, hz, continentSeed);
+    const baseContinentalness = warpedNoise2D(
+        x, z,
+        WORLD_PARAMS.continental.octaves,
+        WORLD_PARAMS.continental.frequency,
+        WORLD_PARAMS.continental.warpStrength,
+        boundHash
+    );
+
+    // Spine adds to continentalness (makes land more likely near spine)
+    const continentSigmaNorm = SPINE_INFLUENCE_CONFIG.continentSigma / worldSize;
+    const spineContinentInfluence = Math.exp(
+        -(spineInfo.distance * spineInfo.distance) / (2 * continentSigmaNorm * continentSigmaNorm)
+    );
+    const spineContinentBoost = spineContinentInfluence * SPINE_INFLUENCE_CONFIG.continentBoostStrength;
+
+    // Combine: noise + spine boost
+    const effectiveContinentalness = Math.min(1.0, baseContinentalness + spineContinentBoost);
+
+    // Determine ocean/land from effective continentalness
+    if (effectiveContinentalness < CONTINENT_THRESHOLDS.deepOcean) {
+        // Deep ocean - flat floor with slight variation
+        const oceanNoise = getBaseTerrainNoise(x, z, seed) * 0.01;
+        return HEIGHT_CONFIG.bands.deepOceanFloor + oceanNoise;
+    }
+
+    if (effectiveContinentalness < CONTINENT_THRESHOLDS.land) {
+        // Coastal transition zone - interpolate between ocean floor and sea level
+        const t = (effectiveContinentalness - CONTINENT_THRESHOLDS.deepOcean) /
+                  (CONTINENT_THRESHOLDS.land - CONTINENT_THRESHOLDS.deepOcean);
+        const shallowNoise = getBaseTerrainNoise(x, z, seed) * 0.03;
+        return HEIGHT_CONFIG.bands.shallowOceanFloor +
+               t * (HEIGHT_CONFIG.bands.seaLevel - HEIGHT_CONFIG.bands.shallowOceanFloor) +
+               shallowNoise * (1 - t);
+    }
+
+    // =========================================================================
+    // STEP 2: Land - use NOISE-BASED terrain for variety
+    // =========================================================================
+
+    // Get base terrain from noise
+    const baseNoise = getBaseTerrainNoise(x, z, seed);
+
+    // Get land biome for height band (uses continentalness, not height - avoids recursion)
+    const biome = getLandBiomeForHeight(x, z, seed, effectiveContinentalness, template);
+    const biomeHeightBand = BIOME_HEIGHT_BANDS[biome] || { min: 0.15, max: 0.40 };
+
+    // Map noise to biome's height range
+    let height = biomeHeightBand.min + baseNoise * (biomeHeightBand.max - biomeHeightBand.min);
+
+    // =========================================================================
+    // STEP 3: Spine ridge boost - ADDITIVE on top of noise terrain
+    // =========================================================================
+
+    // Calculate spine height influence using configurable Gaussian falloff
+    const heightSigmaNorm = SPINE_INFLUENCE_CONFIG.heightSigma / worldSize;
+    const spineHeightInfluence = Math.exp(
+        -(spineInfo.distance * spineInfo.distance) / (2 * heightSigmaNorm * heightSigmaNorm)
+    );
+
+    // Add elevation boost near spine (ADDITIVE, not replacing)
+    if (spineHeightInfluence > 0.01) {
+        const headroom = HEIGHT_CONFIG.bands.peak - height;
+        const boostStrength = spineInfo.elevation * spineHeightInfluence * SPINE_INFLUENCE_CONFIG.heightBoostStrength;
+        height += boostStrength * headroom;
+
+        // Add ridged noise detail on the spine for mountain texture
+        if (spineHeightInfluence > 0.3) {
+            const ridgeSeed = deriveSeed(seed, 'ridge');
+            const ridgeHash = (rx, rz) => hash(rx, rz, ridgeSeed);
+            const ridgeNoise = ridgedNoise2D(x, z, 3, 0.015, 0.5, 2.0, ridgeHash);
+            height += ridgeNoise * 0.12 * spineHeightInfluence;
+        }
+    }
+
+    // =========================================================================
+    // STEP 4: Drainage bias - subtle downhill trend away from spine
+    // =========================================================================
+
+    // Convert normalized distance to blocks for drainage calculation
+    const drainageDistance = spineInfo.distance * worldSize;
+    const drainageBias = -drainageDistance * SPINE_INFLUENCE_CONFIG.drainageBiasStrength;
+    height += drainageBias;
+
+    // Soft floor: stay above sea level but add noise to prevent flat areas
+    const floorLevel = HEIGHT_CONFIG.bands.seaLevel + 0.02;
+    if (height < floorLevel) {
+        const floorSeed = deriveSeed(seed, 'floor');
+        const floorHash = (fx, fz) => hash(fx, fz, floorSeed);
+        const floorNoise = octaveNoise2D(x, z, 2, 0.05, floorHash);
+        height = floorLevel + Math.abs(floorNoise) * 0.03;
+    }
+
+    // =========================================================================
+    // STEP 5: River carving and final adjustments
+    // =========================================================================
+
+    if (!_skipRiverCarving) {
+        const riverInfluence = getRiverInfluenceAt(x, z);
+        if (riverInfluence) {
+            height = applyRiverCarving(height, riverInfluence);
+        }
+    }
+
+    // World edge boundary falloff
+    const edgeDist = Math.min(nx, nz, 1 - nx, 1 - nz);
+    if (edgeDist < 0.08) {
+        const edgeFalloff = edgeDist / 0.08;
+        height = HEIGHT_CONFIG.bands.deepOceanFloor +
+                 edgeFalloff * (height - HEIGHT_CONFIG.bands.deepOceanFloor);
+    }
+
+    return Math.max(0, Math.min(1, height));
+}
+
+/**
+ * Get spine information at a normalized position
+ * Returns distance to nearest spine and the elevation at that spine point
+ *
+ * @param {number} nx - Normalized X [0,1]
+ * @param {number} nz - Normalized Z [0,1]
+ * @param {Object} template - Template with spine data
+ * @returns {{distance: number, elevation: number}}
+ */
+function getSpineInfoAt(nx, nz, template) {
+    let minDist = Infinity;
+    let elevation = 0.5;
+
+    // Check primary spine
+    const primaryPoints = template.spine?.points || [];
+    const primaryElevation = template.spine?.elevation || 0.8;
+
+    for (let i = 0; i < primaryPoints.length - 1; i++) {
+        const p1 = primaryPoints[i];
+        const p2 = primaryPoints[i + 1];
+        const dist = distToSegment(nx, nz, p1.x, p1.z, p2.x, p2.z);
+        if (dist < minDist) {
+            minDist = dist;
+            elevation = primaryElevation;
+        }
+    }
+
+    // Check secondary spines
+    for (const secondary of template.secondarySpines || []) {
+        const secPoints = secondary.points || [];
+        const secElevation = secondary.elevation || 0.6;
+
+        for (let i = 0; i < secPoints.length - 1; i++) {
+            const p1 = secPoints[i];
+            const p2 = secPoints[i + 1];
+            const dist = distToSegment(nx, nz, p1.x, p1.z, p2.x, p2.z);
+            if (dist < minDist) {
+                minDist = dist;
+                elevation = secElevation;
+            }
+        }
+    }
+
+    return { distance: minDist, elevation };
+}
+
+/**
+ * Calculate distance from point to line segment
+ * @param {number} px - Point X
+ * @param {number} pz - Point Z
+ * @param {number} ax - Segment start X
+ * @param {number} az - Segment start Z
+ * @param {number} bx - Segment end X
+ * @param {number} bz - Segment end Z
+ * @returns {number} Distance to segment
+ */
+function distToSegment(px, pz, ax, az, bx, bz) {
+    const dx = bx - ax;
+    const dz = bz - az;
+    const lenSq = dx * dx + dz * dz;
+
+    if (lenSq < 0.0001) {
+        return Math.sqrt((px - ax) ** 2 + (pz - az) ** 2);
+    }
+
+    const t = Math.max(0, Math.min(1, ((px - ax) * dx + (pz - az) * dz) / lenSq));
+    const projX = ax + t * dx;
+    const projZ = az + t * dz;
+
+    return Math.sqrt((px - projX) ** 2 + (pz - projZ) ** 2);
+}
+
+/**
+ * LEGACY terrain generation (for templates without spine.points)
+ */
+function getHeightAtNormalized_Legacy(x, z, seed, template) {
     // Get template modifiers for ocean detection and terrain shaping
     const modifiers = getTemplateModifiers(x, z, template);
 
@@ -805,45 +1168,20 @@ export function getHeightAtNormalized(x, z, seed, template = DEFAULT_TEMPLATE) {
     // Map noise to biome's height range
     let height = biomeHeightBand.min + baseNoise * (biomeHeightBand.max - biomeHeightBand.min);
 
-    // INLAND ELEVATION BOOST - Critical for river flow!
-    // Adds elevation based on distance from coast, creating consistent slope toward ocean
-    const inlandFactor = getInlandFactor(x, z, seed, template);
-    const inlandBoost = inlandFactor * 0.15; // Up to 15% height boost deep inland
-    height += inlandBoost;
-
     // Mountain boost - ADDITIVE to push toward peaks
     if (modifiers.mountainBoost > 0) {
-        // Get ridge noise for mountain detail
-        const ridge = sampleRidgeness(x, z, seed, template);
-        const weightedRidge = ridge * modifiers.ridgeWeight;
-
-        // Calculate headroom to peak and add mountain contribution
         const headroom = HEIGHT_CONFIG.bands.peak - height;
-        height += modifiers.mountainBoost * weightedRidge * headroom * 0.8;
+        height += modifiers.mountainBoost * headroom * 0.5;
     }
 
-    // Peak boost for high-elevation biomes
-    const PEAK_BIOMES = ['mountains', 'glacier', 'alpine', 'badlands', 'highlands', 'volcanic'];
-    if (PEAK_BIOMES.includes(biome)) {
-        const peakSeed = deriveSeed(seed, 'peaks');
-        const peakHash = (x, z) => hash(x, z, peakSeed);
-        const peakNoise = octaveNoise2D(x, z, 3, 0.04, peakHash);
-
-        // Normalize peak noise and add headroom-based boost
-        const normalizedPeak = (peakNoise - 0.08) / 0.37;
+    // Apply spine elevation boost from SpineFeatureIndex (for procedurally generated spines)
+    const spineBoost = getSpineBoostAt(x, z);
+    if (spineBoost > 0) {
         const headroom = HEIGHT_CONFIG.bands.peak - height;
-        height += normalizedPeak * headroom * 0.5;
+        height += spineBoost * headroom * 0.6;
     }
 
-    // Apply elevation flattening from template
-    // elevationMultiplier < 1 means flatten terrain toward sea level
-    if (modifiers.elevationMultiplier < 1.0) {
-        const flatBase = HEIGHT_CONFIG.bands.seaLevel + 0.03; // Slightly above sea level
-        height = lerp(flatBase, height, modifiers.elevationMultiplier);
-    }
-
-    // Apply river carving (after all terrain modifiers)
-    // Skip during river generation to avoid feedback loop
+    // Apply river carving (SUBTRACTIVE)
     if (!_skipRiverCarving) {
         const riverInfluence = getRiverInfluenceAt(x, z);
         if (riverInfluence) {
@@ -851,7 +1189,6 @@ export function getHeightAtNormalized(x, z, seed, template = DEFAULT_TEMPLATE) {
         }
     }
 
-    // Final clamp to valid normalized range
     return Math.max(0, Math.min(1, height));
 }
 

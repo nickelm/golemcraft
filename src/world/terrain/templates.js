@@ -65,10 +65,10 @@ const TEMPLATE_DEFAULTS = {
 };
 
 /**
- * Default template with no features
- * Pure noise-based generation with simple radial falloff
+ * Simple template with radial falloff and no spine features
+ * For backwards compatibility or when spine-first is not desired
  */
-export const DEFAULT_TEMPLATE = {
+export const SIMPLE_TEMPLATE = {
     shape: {
         centerX: 0,
         centerZ: 0,
@@ -94,15 +94,202 @@ export const DEFAULT_TEMPLATE = {
 };
 
 /**
- * Verdania template - Example continent with multiple features
+ * Verdania template - C-shaped continent opening south
  *
- * Features:
- * - Northern bay (carves into north edge)
- * - East-west mountain spine at 85% north
- * - Flattened plains in northern 40%
- * - Mountain boost in southern 30%
+ * SPINE-FIRST generation:
+ * - Elevation is DIRECTLY derived from distance to spine
+ * - Spine = mountain ridge, farther from spine = lower elevation
+ * - Land/ocean boundary at landExtent distance from spine
+ *
+ * The C-shape naturally creates a bay because land only extends
+ * landExtent distance from the spine in all directions.
+ * Bay opens to the south (high Z), land curves around in the north.
  */
 export const VERDANIA_TEMPLATE = {
+    // World bounds for coordinate mapping
+    worldBounds: { min: -2000, max: 2000 },
+
+    // Bay center for inner/outer side detection
+    bayCenter: { x: 0.5, z: 0.85 },  // South bay center (inside the C opening)
+
+    // Shape parameters (kept for legacy compatibility, not used by spine-first)
+    shape: {
+        centerX: 0,
+        centerZ: 0,
+        radius: 2000,
+        falloffSharpness: 0.3
+    },
+
+    // Primary spine: C-shape opening south (bay faces south)
+    // The C-shape naturally creates a bay in the center
+    spine: {
+        points: [
+            { x: 0.15, z: 0.70 },   // West horn tip (south)
+            { x: 0.18, z: 0.50 },   // West arm
+            { x: 0.30, z: 0.32 },   // NW highlands
+            { x: 0.50, z: 0.25 },   // Northern peak (back of C)
+            { x: 0.70, z: 0.32 },   // NE highlands
+            { x: 0.82, z: 0.50 },   // East arm
+            { x: 0.85, z: 0.70 }    // East horn tip (south)
+        ],
+        elevation: 0.85            // Peak elevation along spine
+    },
+
+    // Secondary spines for additional ridges
+    secondarySpines: [
+        {
+            // Western coastal ridge
+            points: [
+                { x: 0.18, z: 0.50 },
+                { x: 0.08, z: 0.55 }
+            ],
+            elevation: 0.50
+        },
+        {
+            // Eastern coastal ridge
+            points: [
+                { x: 0.82, z: 0.50 },
+                { x: 0.92, z: 0.55 }
+            ],
+            elevation: 0.50
+        },
+        {
+            // Northern outer ridge
+            points: [
+                { x: 0.35, z: 0.12 },
+                { x: 0.50, z: 0.08 },
+                { x: 0.65, z: 0.12 }
+            ],
+            elevation: 0.40
+        }
+    ],
+
+    // Land extent from spine (in normalized coords)
+    // Land extends this far from any spine before becoming ocean
+    // 0.20 = 20% of world size = 800 blocks at 4000 world size
+    landExtent: {
+        inner: 0.20,
+        outer: 0.20
+    },
+
+    // Legacy (not used by spine-first generation)
+    elevation: {
+        mountainBoost: { region: null, strength: 0.5, ridgeWeight: 0.6 },
+        flattenRegion: { region: null, flatness: 0.7 }
+    },
+    features: { bay: null, lake: null, spine: null }
+};
+
+/**
+ * Archipelago template - Chain of islands
+ *
+ * SPINE-FIRST generation:
+ * Multiple small spines create separate islands.
+ * Each spine defines a ridge, land extends landExtent from any spine.
+ */
+export const ARCHIPELAGO_TEMPLATE = {
+    worldBounds: { min: -2000, max: 2000 },
+
+    shape: { centerX: 0, centerZ: 0, radius: 2000, falloffSharpness: 0.4 },
+
+    // Primary spine: Main island
+    spine: {
+        points: [
+            { x: 0.25, z: 0.45 },
+            { x: 0.35, z: 0.50 },
+            { x: 0.40, z: 0.48 }
+        ],
+        elevation: 0.55
+    },
+
+    // Secondary islands as separate spines
+    secondarySpines: [
+        {
+            // Northern island
+            points: [{ x: 0.50, z: 0.30 }, { x: 0.58, z: 0.35 }],
+            elevation: 0.45
+        },
+        {
+            // Eastern island
+            points: [{ x: 0.65, z: 0.50 }, { x: 0.72, z: 0.55 }, { x: 0.75, z: 0.52 }],
+            elevation: 0.50
+        },
+        {
+            // Southern island
+            points: [{ x: 0.45, z: 0.70 }, { x: 0.52, z: 0.72 }],
+            elevation: 0.40
+        }
+    ],
+
+    // Small land extent for islands
+    landExtent: { inner: 0.10, outer: 0.10 },
+
+    // Legacy (not used)
+    elevation: { mountainBoost: { region: null, strength: 0.4, ridgeWeight: 0.5 }, flattenRegion: { region: null, flatness: 0.8 } },
+    features: { bay: null, lake: null, spine: null }
+};
+
+/**
+ * Pangaea template - Large irregular supercontinent
+ *
+ * SPINE-FIRST generation:
+ * Single massive landmass with branching mountain ranges.
+ * Large landExtent creates expansive lowlands around ridges.
+ */
+export const PANGAEA_TEMPLATE = {
+    worldBounds: { min: -2000, max: 2000 },
+
+    shape: { centerX: 0, centerZ: 0, radius: 2000, falloffSharpness: 0.25 },
+
+    // Primary spine: Main continental ridge (roughly E-W)
+    spine: {
+        points: [
+            { x: 0.15, z: 0.50 },
+            { x: 0.30, z: 0.48 },
+            { x: 0.50, z: 0.45 },
+            { x: 0.70, z: 0.48 },
+            { x: 0.85, z: 0.52 }
+        ],
+        elevation: 0.85
+    },
+
+    // Secondary ridges branching from main spine
+    secondarySpines: [
+        {
+            // Northern ridge
+            points: [{ x: 0.50, z: 0.45 }, { x: 0.48, z: 0.30 }, { x: 0.45, z: 0.18 }],
+            elevation: 0.70
+        },
+        {
+            // Southern ridge
+            points: [{ x: 0.50, z: 0.45 }, { x: 0.55, z: 0.62 }, { x: 0.58, z: 0.78 }],
+            elevation: 0.65
+        },
+        {
+            // Western peninsula
+            points: [{ x: 0.30, z: 0.48 }, { x: 0.18, z: 0.38 }],
+            elevation: 0.50
+        },
+        {
+            // Eastern peninsula
+            points: [{ x: 0.70, z: 0.48 }, { x: 0.82, z: 0.62 }],
+            elevation: 0.55
+        }
+    ],
+
+    // Large land extent for massive continent
+    landExtent: { inner: 0.30, outer: 0.30 },
+
+    // Legacy (not used)
+    elevation: { mountainBoost: { region: null, strength: 0.5, ridgeWeight: 0.6 }, flattenRegion: { region: null, flatness: 0.75 } },
+    features: { bay: null, lake: null, spine: null }
+};
+
+/**
+ * Legacy Verdania template - for backwards compatibility testing
+ * Uses old format with features.spine: {direction, positionZ}
+ */
+export const VERDANIA_TEMPLATE_LEGACY = {
     shape: {
         centerX: 0,
         centerZ: 0,
@@ -133,6 +320,12 @@ export const VERDANIA_TEMPLATE = {
         }
     }
 };
+
+/**
+ * Default template - uses VERDANIA spine-first template
+ * This ensures spine-first generation works by default
+ */
+export const DEFAULT_TEMPLATE = VERDANIA_TEMPLATE;
 
 /**
  * Convert world coordinates to normalized [0,1] coordinates relative to continent bounds
@@ -319,6 +512,293 @@ function applySpineBoost(nx, nz, spine) {
     return boost;
 }
 
+// =============================================================================
+// Spine-First Generation Helpers
+// =============================================================================
+
+/**
+ * Project a point onto a line segment and return distance and projected point
+ * Works in normalized [0,1] coordinates
+ *
+ * @param {number} px - Point X coordinate
+ * @param {number} pz - Point Z coordinate
+ * @param {{x: number, z: number}} a - Segment start point
+ * @param {{x: number, z: number}} b - Segment end point
+ * @returns {{dist: number, point: {x: number, z: number}, t: number}}
+ */
+function projectOntoSegmentNormalized(px, pz, a, b) {
+    const dx = b.x - a.x;
+    const dz = b.z - a.z;
+    const lenSq = dx * dx + dz * dz;
+
+    if (lenSq < 0.0001) {
+        // Degenerate segment
+        const dist = Math.sqrt((px - a.x) ** 2 + (pz - a.z) ** 2);
+        return { dist, point: { x: a.x, z: a.z }, t: 0 };
+    }
+
+    // Project onto line, clamp to segment
+    const t = Math.max(0, Math.min(1,
+        ((px - a.x) * dx + (pz - a.z) * dz) / lenSq
+    ));
+
+    const projX = a.x + t * dx;
+    const projZ = a.z + t * dz;
+    const dist = Math.sqrt((px - projX) ** 2 + (pz - projZ) ** 2);
+
+    return { dist, point: { x: projX, z: projZ }, t };
+}
+
+/**
+ * Find nearest point on any spine segment and return distance + nearest point
+ *
+ * @param {number} nx - Normalized X coordinate [0,1]
+ * @param {number} nz - Normalized Z coordinate [0,1]
+ * @param {Object} template - Template with spine.points and secondarySpines
+ * @returns {{distance: number, nearestPoint: {x: number, z: number}, spineElevation: number, spineWidth: number}}
+ */
+function getNearestSpineInfo(nx, nz, template) {
+    let minDist = Infinity;
+    let nearestPoint = { x: nx, z: nz };
+    let spineElevation = 0;
+    let spineWidth = 0.1;
+
+    // Helper to check a polyline
+    const checkPolyline = (points, elevation, width) => {
+        for (let i = 0; i < points.length - 1; i++) {
+            const p1 = points[i];
+            const p2 = points[i + 1];
+            const { dist, point } = projectOntoSegmentNormalized(nx, nz, p1, p2);
+            if (dist < minDist) {
+                minDist = dist;
+                nearestPoint = point;
+                spineElevation = elevation;
+                spineWidth = width;
+            }
+        }
+    };
+
+    // Check primary spine
+    if (template.spine?.points && template.spine.points.length >= 2) {
+        checkPolyline(
+            template.spine.points,
+            template.spine.elevation || 0.8,
+            template.spine.width || 0.1
+        );
+    }
+
+    // Check secondary spines
+    for (const secondary of template.secondarySpines || []) {
+        if (secondary.points && secondary.points.length >= 2) {
+            checkPolyline(
+                secondary.points,
+                secondary.elevation || 0.6,
+                secondary.width || 0.08
+            );
+        }
+    }
+
+    return { distance: minDist, nearestPoint, spineElevation, spineWidth };
+}
+
+/**
+ * Get the "inner" reference point for asymmetric land extent
+ *
+ * If template has explicit bayCenter, use that.
+ * Otherwise, calculate centroid of all spine points (primary + secondary).
+ *
+ * For C-shapes, bayCenter should be explicitly set to a point in the bay opening.
+ *
+ * @param {Object} template - Template with spine.points and secondarySpines
+ * @returns {{x: number, z: number}} Inner reference point in normalized coordinates
+ */
+function getInnerReferencePoint(template) {
+    // Use explicit bay center if provided
+    if (template.bayCenter) {
+        return template.bayCenter;
+    }
+
+    // Fall back to centroid calculation
+    let sumX = 0, sumZ = 0, count = 0;
+
+    for (const p of template.spine?.points || []) {
+        sumX += p.x;
+        sumZ += p.z;
+        count++;
+    }
+
+    for (const secondary of template.secondarySpines || []) {
+        for (const p of secondary.points || []) {
+            sumX += p.x;
+            sumZ += p.z;
+            count++;
+        }
+    }
+
+    return count > 0
+        ? { x: sumX / count, z: sumZ / count }
+        : { x: 0.5, z: 0.5 };
+}
+
+/**
+ * Get distance to spine and determine which side (inner/outer)
+ *
+ * Uses the inner reference point (bayCenter if defined, else centroid) to determine sides:
+ * - Points TOWARD the inner reference point from spine → inner side (less land)
+ * - Points AWAY from the inner reference point from spine → outer side (more land)
+ *
+ * For a C-shaped spine opening north with bayCenter in the bay:
+ * - Points in the bay (toward bayCenter) → inner (less land)
+ * - Points on outer coast (away from bayCenter) → outer (more land)
+ *
+ * @param {number} nx - Normalized X coordinate [0,1]
+ * @param {number} nz - Normalized Z coordinate [0,1]
+ * @param {Object} template - Template with spine data
+ * @returns {{distance: number, isInnerSide: boolean, spineElevation: number, spineWidth: number}}
+ */
+function getSpineDistanceWithSide(nx, nz, template) {
+    // Get inner reference point (bayCenter if defined, else spine centroid)
+    const innerRef = getInnerReferencePoint(template);
+
+    // Find nearest point on spine
+    const { distance, nearestPoint, spineElevation, spineWidth } = getNearestSpineInfo(nx, nz, template);
+
+    // Determine if query point is on the inner reference side
+    const toInnerRefX = innerRef.x - nearestPoint.x;
+    const toInnerRefZ = innerRef.z - nearestPoint.z;
+    const toQueryX = nx - nearestPoint.x;
+    const toQueryZ = nz - nearestPoint.z;
+
+    // Dot product: positive if query is on same side as inner reference
+    const dot = toInnerRefX * toQueryX + toInnerRefZ * toQueryZ;
+
+    // Inner = TOWARD inner reference (dot > 0) - the bay side
+    // Outer = AWAY from inner reference (dot < 0) - the coast side
+    const isInnerSide = dot > 0;
+
+    return { distance, isInnerSide, spineElevation, spineWidth };
+}
+
+/**
+ * Calculate land mask from spine distance
+ * Land extends asymmetrically based on landExtent
+ * Uses centroid-based side detection
+ *
+ * @param {number} nx - Normalized X coordinate [0,1]
+ * @param {number} nz - Normalized Z coordinate [0,1]
+ * @param {Object} template - Template with spine and landExtent
+ * @returns {number} Land mask [0,1]
+ */
+function calculateSpineLandMask(nx, nz, template) {
+    // Check if template has spine-first structure
+    if (!template.spine?.points || template.spine.points.length < 2) {
+        return 1.0; // No spine defined, don't mask
+    }
+
+    const { distance, isInnerSide } = getSpineDistanceWithSide(nx, nz, template);
+    const landExtent = template.landExtent || { inner: 0.4, outer: 0.4 };
+
+    // Choose extent based on which side of spine we're on
+    const maxExtent = isInnerSide ? landExtent.inner : landExtent.outer;
+
+    // Handle spine endpoints - extend land in a circular cap around them
+    // This prevents abrupt cutoffs at the "horns" of C-shaped continents
+    const endpointCapRadius = Math.max(landExtent.inner, landExtent.outer) * 1.2;
+    const spinePoints = template.spine.points;
+    const firstPoint = spinePoints[0];
+    const lastPoint = spinePoints[spinePoints.length - 1];
+
+    // Distance to first and last spine points
+    const distToFirst = Math.sqrt((nx - firstPoint.x) ** 2 + (nz - firstPoint.z) ** 2);
+    const distToLast = Math.sqrt((nx - lastPoint.x) ** 2 + (nz - lastPoint.z) ** 2);
+    const minEndpointDist = Math.min(distToFirst, distToLast);
+
+    // If close to endpoint, use circular cap instead of perpendicular distance
+    if (minEndpointDist < endpointCapRadius) {
+        // Smooth falloff from endpoint
+        const capFalloffStart = endpointCapRadius * 0.6;
+        if (minEndpointDist < capFalloffStart) return 1.0;
+        return smoothstep((endpointCapRadius - minEndpointDist) / (endpointCapRadius - capFalloffStart));
+    }
+
+    if (distance > maxExtent) return 0;
+
+    // Smooth falloff at edges
+    const falloffStart = maxExtent * 0.7;
+    if (distance < falloffStart) return 1.0;
+
+    return smoothstep((maxExtent - distance) / (maxExtent - falloffStart));
+}
+
+/**
+ * Calculate elevation boost from spine proximity
+ * Uses Gaussian falloff from nearest spine segment
+ *
+ * @param {number} nx - Normalized X coordinate [0,1]
+ * @param {number} nz - Normalized Z coordinate [0,1]
+ * @param {Object} template - Template with spine data
+ * @returns {number} Elevation boost [0,1]
+ */
+function calculateSpineElevationBoost(nx, nz, template) {
+    if (!template.spine?.points || template.spine.points.length < 2) {
+        return 0;
+    }
+
+    const { distance, spineElevation, spineWidth } = getNearestSpineInfo(nx, nz, template);
+
+    // Gaussian falloff based on spine width
+    // Increase sigma to make the ridge wider and more visible
+    // spineWidth of 0.12 in normalized space = ~480 blocks at 4000 world size
+    // We want the ridge to be visually prominent, so use 1.5x the width
+    const sigma = spineWidth * 1.5;
+    const influence = Math.exp(-(distance * distance) / (2 * sigma * sigma));
+
+    return spineElevation * influence;
+}
+
+/**
+ * Normalize template to new spine-first format
+ * Converts old format (features.spine: {direction, positionZ}) to new format
+ *
+ * @param {Object} template - Template in old or new format
+ * @returns {Object} Template in new format (or original if already new)
+ */
+function normalizeTemplate(template) {
+    // If using new format (has spine.points), return as-is
+    if (template.spine?.points) {
+        return template;
+    }
+
+    // Convert old format to new
+    if (template.features?.spine) {
+        const { direction, positionZ } = template.features.spine;
+        const points = direction === 'EW'
+            ? [{ x: 0.1, z: positionZ }, { x: 0.9, z: positionZ }]
+            : [{ x: positionZ, z: 0.1 }, { x: positionZ, z: 0.9 }];
+
+        return {
+            ...template,
+            spine: { points, elevation: 0.8, width: 0.1 },
+            landExtent: { inner: 0.4, outer: 0.4 }
+        };
+    }
+
+    return template;
+}
+
+/**
+ * Check if template uses spine-first generation
+ * @param {Object} template - Template to check
+ * @returns {boolean} True if template has spine polyline points
+ */
+export function hasSpineFirstGeneration(template) {
+    return template.spine?.points?.length >= 2;
+}
+
+// =============================================================================
+// Legacy Helper Functions
+// =============================================================================
+
 /**
  * Check if normalized Z coordinate is within a region
  *
@@ -398,52 +878,99 @@ export function debugTemplateAt(worldX, worldZ, template) {
 }
 
 export function getTemplateModifiers(worldX, worldZ, template) {
+    // Normalize template to handle both old and new formats
+    const normalizedTemplate = normalizeTemplate(template);
+
     // Get normalized position
-    const { nx, nz, distanceFromCenter } = getNormalizedPosition(worldX, worldZ, template);
+    const { nx, nz, distanceFromCenter } = getNormalizedPosition(worldX, worldZ, normalizedTemplate);
+
+    // Check if using spine-first generation (new format with spine.points)
+    const useSpineFirst = normalizedTemplate.spine?.points?.length >= 2;
 
     // 1. SHAPE MASK (continentalness modifier)
-    let shapeMask = applyShapeMask(
-        distanceFromCenter,
-        template.shape.radius,
-        template.shape.falloffSharpness
-    );
+    let shapeMask;
 
-    // Apply bay carving if defined
-    const bayCarving = applyBayCarving(nx, nz, template.features.bay);
-    shapeMask *= bayCarving;
+    if (useSpineFirst) {
+        // NEW: Spine-first generation - land mask based on distance from spine
+        shapeMask = calculateSpineLandMask(nx, nz, normalizedTemplate);
+
+        // Also apply world boundary falloff
+        const boundaryMask = applyShapeMask(
+            distanceFromCenter,
+            normalizedTemplate.shape.radius,
+            normalizedTemplate.shape.falloffSharpness
+        );
+        shapeMask *= boundaryMask;
+    } else {
+        // LEGACY: Radial shape mask
+        shapeMask = applyShapeMask(
+            distanceFromCenter,
+            normalizedTemplate.shape.radius,
+            normalizedTemplate.shape.falloffSharpness
+        );
+    }
+
+    // Apply bay carving if defined (works for both old and new formats)
+    if (normalizedTemplate.features?.bay) {
+        const bayCarving = applyBayCarving(nx, nz, normalizedTemplate.features.bay);
+        shapeMask *= bayCarving;
+    }
 
     // 2. ELEVATION EFFECTS
 
     // Flatten region effect
     let elevationMultiplier = 1.0;
-    if (template.elevation.flattenRegion.region) {
+    if (normalizedTemplate.elevation?.flattenRegion?.region) {
         const flattenMembership = getRegionMembership(
             nz,
-            template.elevation.flattenRegion.region
+            normalizedTemplate.elevation.flattenRegion.region
         );
         // Blend between normal (1.0) and flattened
-        elevationMultiplier = 1.0 - flattenMembership * (1.0 - template.elevation.flattenRegion.flatness);
+        elevationMultiplier = 1.0 - flattenMembership * (1.0 - normalizedTemplate.elevation.flattenRegion.flatness);
     }
 
-    // Mountain boost effect
+    // 3. MOUNTAIN BOOST
     let mountainBoost = 0.0;
     let ridgeWeight = 0.0;
-    if (template.elevation.mountainBoost.region || template.features.spine) {
-        // Region-based boost
-        if (template.elevation.mountainBoost.region) {
+
+    if (useSpineFirst) {
+        // NEW: Spine-first elevation boost from polyline spine
+        const spineBoost = calculateSpineElevationBoost(nx, nz, normalizedTemplate);
+        mountainBoost = spineBoost;
+        ridgeWeight = spineBoost * 0.6;
+
+        // Also apply region-based boost if defined
+        if (normalizedTemplate.elevation?.mountainBoost?.region) {
             const boostMembership = getRegionMembership(
                 nz,
-                template.elevation.mountainBoost.region
+                normalizedTemplate.elevation.mountainBoost.region
             );
-            mountainBoost = boostMembership * template.elevation.mountainBoost.strength;
-            ridgeWeight = boostMembership * template.elevation.mountainBoost.ridgeWeight;
+            const regionBoost = boostMembership * normalizedTemplate.elevation.mountainBoost.strength;
+            const regionRidge = boostMembership * normalizedTemplate.elevation.mountainBoost.ridgeWeight;
+            mountainBoost = Math.max(mountainBoost, regionBoost);
+            ridgeWeight = Math.max(ridgeWeight, regionRidge);
         }
+    } else {
+        // LEGACY: Region and simple spine boost
+        if (normalizedTemplate.elevation?.mountainBoost?.region || normalizedTemplate.features?.spine) {
+            // Region-based boost
+            if (normalizedTemplate.elevation?.mountainBoost?.region) {
+                const boostMembership = getRegionMembership(
+                    nz,
+                    normalizedTemplate.elevation.mountainBoost.region
+                );
+                mountainBoost = boostMembership * normalizedTemplate.elevation.mountainBoost.strength;
+                ridgeWeight = boostMembership * normalizedTemplate.elevation.mountainBoost.ridgeWeight;
+            }
 
-        // Spine-based boost (additive with region boost)
-        if (template.features.spine) {
-            const spineBoost = applySpineBoost(nx, nz, template.features.spine);
-            mountainBoost = Math.max(mountainBoost, spineBoost * template.elevation.mountainBoost.strength);
-            ridgeWeight = Math.max(ridgeWeight, spineBoost * template.elevation.mountainBoost.ridgeWeight);
+            // Simple spine-based boost (old format: direction + positionZ)
+            if (normalizedTemplate.features?.spine) {
+                const spineBoost = applySpineBoost(nx, nz, normalizedTemplate.features.spine);
+                const strength = normalizedTemplate.elevation?.mountainBoost?.strength || 0.5;
+                const ridge = normalizedTemplate.elevation?.mountainBoost?.ridgeWeight || 0.6;
+                mountainBoost = Math.max(mountainBoost, spineBoost * strength);
+                ridgeWeight = Math.max(ridgeWeight, spineBoost * ridge);
+            }
         }
     }
 
@@ -457,4 +984,40 @@ export function getTemplateModifiers(worldX, worldZ, template) {
         mountainBoost: mountainBoost,
         ridgeWeight: ridgeWeight
     };
+}
+
+// =============================================================================
+// Template Selection
+// =============================================================================
+
+/**
+ * Available archetype templates for deterministic selection
+ */
+const ARCHETYPE_TEMPLATES = [
+    VERDANIA_TEMPLATE,      // C-shaped continent
+    PANGAEA_TEMPLATE,       // Large irregular supercontinent
+    ARCHIPELAGO_TEMPLATE,   // Island chain
+];
+
+/**
+ * Get a template based on seed for deterministic world generation
+ * Always returns a spine-first template for consistent continent shapes
+ *
+ * @param {number} seed - World seed
+ * @returns {Object} Selected template
+ */
+export function getTemplateForSeed(seed) {
+    // Use seed to deterministically pick an archetype
+    const index = Math.abs(seed) % ARCHETYPE_TEMPLATES.length;
+    return ARCHETYPE_TEMPLATES[index];
+}
+
+/**
+ * Get the default template (VERDANIA for spine-first generation)
+ * Use this when no specific template is provided
+ *
+ * @returns {Object} Default template
+ */
+export function getDefaultTemplate() {
+    return VERDANIA_TEMPLATE;
 }

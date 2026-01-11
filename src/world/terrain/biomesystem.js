@@ -23,12 +23,25 @@
 export const BIOMES = {
     // WATER BIOMES (sand-based)
     ocean: {
-        name: 'Ocean',
-        baseHeightFraction: 0.05,
+        name: 'Deep Ocean',
+        baseHeightFraction: 0.02,
+        heightScaleFraction: 0.02,
+        terrain: { primary: 'sand', tint: [0.8, 1.0, 1.4] },  // Dark blue-tinted sand (deep)
+        subsurface: { primary: 'sand', tint: [0.7, 0.8, 1.0] },
+        underwater: { primary: 'sand', tint: [0.5, 0.7, 1.0] },
+        objects: [],
+        objectDensities: {},
+        mobs: [],
+        spawnWeights: {}
+    },
+
+    shallow_ocean: {
+        name: 'Shallow Ocean',
+        baseHeightFraction: 0.07,
         heightScaleFraction: 0.03,
         terrain: { primary: 'sand', tint: [1.3, 1.5, 1.8] },  // Bright blue-tinted sand
         subsurface: { primary: 'sand', tint: [1.0, 1.0, 1.0] },
-        underwater: { primary: 'sand', tint: [0.7, 0.85, 1.0] },
+        underwater: { primary: 'sand', tint: [0.8, 0.95, 1.1] },
         objects: [],
         objectDensities: {},
         mobs: [],
