@@ -10,19 +10,43 @@
 import {
     deriveSeed,
     getTerrainParams,
-    getCoastProximity
+    getCoastProximity,
+    getHeightAtNormalized,
+    sampleHumidity
 } from './terrain/worldgen.js';
 import { DEFAULT_TEMPLATE, VERDANIA_TEMPLATE } from './terrain/templates.js';
+import { LinearFeature } from './features/linearfeature.js';
 
 // Grid sizes for spatial indexing (match existing patterns)
 const ZONE_GRID_SIZE = 800;  // ~5×5 = 25 max grid cells, filtered to 10-15 land zones
 const LANDMARK_GRID_SIZE = 128;
+const ZONE_INDEX_CELL_SIZE = 256;  // Finer grid for zone influence queries
 
 // World boundaries for zone discovery (fixed 4000-block world)
 const WORLD_BOUNDS = {
     min: -2000,
     max: 2000,
     size: 4000
+};
+
+// River generation configuration
+const RIVER_CONFIG = {
+    sourceGridSize: 512,        // One potential source per 512×512 area
+    minSourceElevation: 0.45,   // Minimum normalized height for river source
+    minHumidity: 0.25,          // Minimum humidity to spawn a river
+    stepSize: 16,               // Sample every 16 blocks when tracing
+    maxPathLength: 500,         // Maximum river path points
+    minPathLength: 10,          // Minimum points for valid river
+    seaLevel: 0.10,             // Normalized sea level
+    gradientEpsilon: 8,         // Sample distance for gradient calculation
+    meanderStrength: 0.3,       // How much rivers curve in flat areas
+    // River width categories (blocks)
+    widths: {
+        stream: { min: 2, max: 3 },
+        creek: { min: 4, max: 6 },
+        river: { min: 8, max: 15 },
+        greatRiver: { min: 20, max: 40 }
+    }
 };
 
 // Zone type definitions with associated mood/feel metadata
@@ -50,6 +74,7 @@ export class WorldGenerator {
         this.seed = seed;
         this.template = template || DEFAULT_TEMPLATE;
         this._cache = null;
+        this._zoneIndex = null;  // Built lazily for zone influence queries
     }
 
     /**
@@ -82,14 +107,292 @@ export class WorldGenerator {
     }
 
     /**
-     * Generate river networks
-     * TODO(design): Implement river generation using flow simulation
-     * Rivers should flow from high elevation to ocean/lakes
-     * @returns {Array} Array of river objects
+     * Generate river networks using terrain-following flow simulation
+     * Rivers flow from high elevation sources to ocean/lakes
+     * @returns {Array<LinearFeature>} Array of river LinearFeature objects
      */
     generateRivers() {
-        // Stub - will use deriveSeed(this.seed, 'rivers') for determinism
-        return [];
+        const rivers = [];
+        const riverSeed = deriveSeed(this.seed, 'rivers');
+
+        // Find river sources (high elevation points with sufficient humidity)
+        const sources = this._findRiverSources(riverSeed);
+
+        for (const source of sources) {
+            // Trace river path downhill
+            const riverPath = this._traceRiverDownhill(source, riverSeed);
+
+            if (riverPath.length >= RIVER_CONFIG.minPathLength) {
+                // Calculate width at each point (widens downstream)
+                const widths = this._calculateRiverWidths(riverPath, source);
+
+                // Create LinearFeature for this river
+                const river = new LinearFeature('river', riverPath, {
+                    width: widths[0],
+                    widths: widths,
+                    sourceElevation: source.elevation,
+                    riverType: this._getRiverType(widths[widths.length - 1])
+                });
+
+                rivers.push(river);
+            }
+        }
+
+        // Merge rivers that meet (tributaries join main rivers)
+        this._mergeRivers(rivers);
+
+        return rivers;
+    }
+
+    /**
+     * Find potential river source locations
+     * @private
+     * @param {number} riverSeed - Derived seed for rivers
+     * @returns {Array<{x: number, z: number, elevation: number, humidity: number}>}
+     */
+    _findRiverSources(riverSeed) {
+        const sources = [];
+        const gridSize = RIVER_CONFIG.sourceGridSize;
+
+        // Grid-based sampling to ensure even distribution
+        const minGrid = Math.floor(WORLD_BOUNDS.min / gridSize);
+        const maxGrid = Math.floor(WORLD_BOUNDS.max / gridSize);
+
+        for (let gx = minGrid; gx <= maxGrid; gx++) {
+            for (let gz = minGrid; gz <= maxGrid; gz++) {
+                // Deterministic offset within grid cell
+                const offsetX = this._hash(gx, gz, riverSeed) * gridSize * 0.8 + gridSize * 0.1;
+                const offsetZ = this._hash(gx + 100, gz + 100, riverSeed) * gridSize * 0.8 + gridSize * 0.1;
+
+                const x = gx * gridSize + offsetX;
+                const z = gz * gridSize + offsetZ;
+
+                // Check elevation and humidity
+                const elevation = getHeightAtNormalized(x, z, this.seed, this.template);
+                const humidity = sampleHumidity(x, z, this.seed, this.template);
+                const params = getTerrainParams(x, z, this.seed, this.template);
+
+                // Source requirements:
+                // - Above minimum elevation (mountains/highlands)
+                // - Sufficient humidity
+                // - Not in water
+                if (elevation >= RIVER_CONFIG.minSourceElevation &&
+                    humidity >= RIVER_CONFIG.minHumidity &&
+                    params.waterType === 'none') {
+
+                    // Use humidity as probability modifier
+                    const spawnChance = humidity * 0.8 + 0.2;
+                    if (this._hash(gx + 200, gz + 200, riverSeed) < spawnChance) {
+                        sources.push({ x, z, elevation, humidity });
+                    }
+                }
+            }
+        }
+
+        return sources;
+    }
+
+    /**
+     * Trace a river path downhill from source to ocean/lake
+     * @private
+     * @param {Object} source - Source position {x, z, elevation}
+     * @param {number} riverSeed - Derived seed for determinism
+     * @returns {Array<{x: number, z: number}>} Path points
+     */
+    _traceRiverDownhill(source, riverSeed) {
+        const path = [{ x: source.x, z: source.z }];
+        let current = { x: source.x, z: source.z };
+        const stepSize = RIVER_CONFIG.stepSize;
+        const eps = RIVER_CONFIG.gradientEpsilon;
+
+        for (let i = 0; i < RIVER_CONFIG.maxPathLength; i++) {
+            // Calculate terrain gradient using central differences
+            const gradient = this._getTerrainGradient(current.x, current.z, eps);
+
+            // Check for flat area (lake/basin) or very gentle slope
+            if (gradient.magnitude < 0.001) {
+                break;
+            }
+
+            // Calculate meander offset based on flatness
+            // Flatter terrain = more meandering
+            const meander = this._getMeanderOffset(
+                current.x, current.z,
+                gradient.magnitude,
+                riverSeed + i
+            );
+
+            // Step downhill with meandering
+            const next = {
+                x: current.x + gradient.dx * stepSize + meander.x,
+                z: current.z + gradient.dz * stepSize + meander.z
+            };
+
+            // Check if we've reached water (ocean or lake)
+            const height = getHeightAtNormalized(next.x, next.z, this.seed, this.template);
+            if (height < RIVER_CONFIG.seaLevel) {
+                path.push(next);
+                break;
+            }
+
+            // Check if out of world bounds
+            if (next.x < WORLD_BOUNDS.min || next.x > WORLD_BOUNDS.max ||
+                next.z < WORLD_BOUNDS.min || next.z > WORLD_BOUNDS.max) {
+                break;
+            }
+
+            path.push(next);
+            current = next;
+        }
+
+        return path;
+    }
+
+    /**
+     * Calculate terrain gradient at a position (points downhill)
+     * @private
+     * @param {number} x - X coordinate
+     * @param {number} z - Z coordinate
+     * @param {number} eps - Sample distance for gradient
+     * @returns {{dx: number, dz: number, magnitude: number}} Normalized downhill direction
+     */
+    _getTerrainGradient(x, z, eps) {
+        // Central difference for accuracy
+        const hLeft = getHeightAtNormalized(x - eps, z, this.seed, this.template);
+        const hRight = getHeightAtNormalized(x + eps, z, this.seed, this.template);
+        const hBack = getHeightAtNormalized(x, z - eps, this.seed, this.template);
+        const hFront = getHeightAtNormalized(x, z + eps, this.seed, this.template);
+
+        // Gradient = direction of steepest ascent
+        const gradX = (hRight - hLeft) / (2 * eps);
+        const gradZ = (hFront - hBack) / (2 * eps);
+
+        const magnitude = Math.sqrt(gradX * gradX + gradZ * gradZ);
+
+        if (magnitude < 0.0001) {
+            return { dx: 0, dz: 0, magnitude: 0 };
+        }
+
+        // Return descent direction (negative gradient, normalized)
+        return {
+            dx: -gradX / magnitude,
+            dz: -gradZ / magnitude,
+            magnitude
+        };
+    }
+
+    /**
+     * Calculate meandering offset for river path
+     * More meandering in flatter terrain
+     * @private
+     * @param {number} x - Current X
+     * @param {number} z - Current Z
+     * @param {number} slopeMagnitude - Current slope steepness
+     * @param {number} seed - Seed for determinism
+     * @returns {{x: number, z: number}} Offset to apply
+     */
+    _getMeanderOffset(x, z, slopeMagnitude, seed) {
+        // Less meandering on steep slopes
+        const flatness = 1 - Math.min(1, slopeMagnitude * 10);
+        const strength = RIVER_CONFIG.meanderStrength * flatness * RIVER_CONFIG.stepSize;
+
+        // Use position-based noise for consistent meandering
+        const angle = this._hash(Math.floor(x / 32), Math.floor(z / 32), seed) * Math.PI * 2;
+
+        return {
+            x: Math.cos(angle) * strength,
+            z: Math.sin(angle) * strength
+        };
+    }
+
+    /**
+     * Calculate river widths along path (widens downstream)
+     * @private
+     * @param {Array<{x: number, z: number}>} path - River path points
+     * @param {Object} source - Source info for humidity-based scaling
+     * @returns {number[]} Width at each path point
+     */
+    _calculateRiverWidths(path, source) {
+        const widths = [];
+        const pathLength = path.length;
+
+        // Base width scaling from humidity
+        const humidityScale = 0.5 + source.humidity * 0.5;
+
+        for (let i = 0; i < pathLength; i++) {
+            // Progress along river (0 at source, 1 at mouth)
+            const t = i / Math.max(1, pathLength - 1);
+
+            // Width increases downstream (cubic for more gradual start)
+            const progressScale = t * t * t;
+
+            // Calculate width: starts as stream, grows to river
+            const minWidth = RIVER_CONFIG.widths.stream.min;
+            const maxWidth = RIVER_CONFIG.widths.river.max * humidityScale;
+
+            const width = minWidth + (maxWidth - minWidth) * progressScale;
+            widths.push(Math.round(width * 10) / 10); // Round to 0.1
+        }
+
+        return widths;
+    }
+
+    /**
+     * Get river type based on width
+     * @private
+     * @param {number} width - River width in blocks
+     * @returns {string} River type: 'stream', 'creek', 'river', or 'greatRiver'
+     */
+    _getRiverType(width) {
+        const w = RIVER_CONFIG.widths;
+        if (width <= w.stream.max) return 'stream';
+        if (width <= w.creek.max) return 'creek';
+        if (width <= w.river.max) return 'river';
+        return 'greatRiver';
+    }
+
+    /**
+     * Merge rivers that meet (create tributary system)
+     * @private
+     * @param {Array<LinearFeature>} rivers - Array of river features (modified in place)
+     */
+    _mergeRivers(rivers) {
+        // Track which rivers have been merged into others
+        const merged = new Set();
+
+        for (let i = 0; i < rivers.length; i++) {
+            if (merged.has(i)) continue;
+
+            const mainRiver = rivers[i];
+            const mainPath = mainRiver.path;
+
+            for (let j = i + 1; j < rivers.length; j++) {
+                if (merged.has(j)) continue;
+
+                const tributary = rivers[j];
+                const tribPath = tributary.path;
+
+                // Check if tributary end point is near main river
+                const tribEnd = tribPath[tribPath.length - 1];
+                const nearest = mainRiver.getNearestPoint(tribEnd.x, tribEnd.z);
+
+                // If tributary ends within 32 blocks of main river, mark as merged
+                if (nearest.distance < 32) {
+                    // Widen main river downstream of junction
+                    const junctionIndex = nearest.index;
+                    for (let k = junctionIndex; k < mainPath.length; k++) {
+                        const currentWidth = mainRiver.getWidthAt(k);
+                        const tribWidth = tributary.getWidthAt(Math.min(k - junctionIndex, tribPath.length - 1));
+                        // Add tributary flow (simplified: add 50% of tributary width)
+                        mainRiver.properties.widths[k] = currentWidth + tribWidth * 0.5;
+                    }
+
+                    // Mark tributary as merged but keep it (it's still a visible river)
+                    tributary.properties.mergedInto = mainRiver.id;
+                    tributary.properties.junctionPoint = { x: nearest.point.x, z: nearest.point.z };
+                }
+            }
+        }
     }
 
     /**
@@ -656,6 +959,130 @@ export class WorldGenerator {
                 }
             }
         }
+    }
+
+    // ========== Zone Lookup Methods ==========
+
+    /**
+     * Build spatial index for zone influence queries
+     * Creates a finer-grained grid (256×256) mapping cells to overlapping zones.
+     * Called lazily when getZoneInfluence() is first used.
+     */
+    buildZoneIndex() {
+        if (!this._cache) this.generate();
+
+        this._zoneIndex = new Map();
+
+        for (const [key, zone] of this._cache.zones) {
+            // Calculate which index cells this zone overlaps
+            const minCellX = Math.floor((zone.center.x - zone.radius) / ZONE_INDEX_CELL_SIZE);
+            const maxCellX = Math.floor((zone.center.x + zone.radius) / ZONE_INDEX_CELL_SIZE);
+            const minCellZ = Math.floor((zone.center.z - zone.radius) / ZONE_INDEX_CELL_SIZE);
+            const maxCellZ = Math.floor((zone.center.z + zone.radius) / ZONE_INDEX_CELL_SIZE);
+
+            for (let cx = minCellX; cx <= maxCellX; cx++) {
+                for (let cz = minCellZ; cz <= maxCellZ; cz++) {
+                    const cellKey = `${cx},${cz}`;
+                    if (!this._zoneIndex.has(cellKey)) {
+                        this._zoneIndex.set(cellKey, []);
+                    }
+                    this._zoneIndex.get(cellKey).push(zone);
+                }
+            }
+        }
+    }
+
+    /**
+     * Get the zone at a world position (O(1) lookup)
+     * @param {number} x - World X coordinate
+     * @param {number} z - World Z coordinate
+     * @returns {Object|null} Zone object or null if in wilderness (no zone)
+     */
+    getZoneAt(x, z) {
+        if (!this._cache) this.generate();
+
+        const gridX = Math.floor(x / ZONE_GRID_SIZE);
+        const gridZ = Math.floor(z / ZONE_GRID_SIZE);
+        const gridKey = `${gridX},${gridZ}`;
+
+        return this._cache.zones.get(gridKey) || null;
+    }
+
+    /**
+     * Get zone influence at a world position for smooth boundary blending
+     * Returns all zones that have influence at this position, sorted by influence.
+     * @param {number} x - World X coordinate
+     * @param {number} z - World Z coordinate
+     * @returns {Array<{zone: Object, influence: number}>} Array of zone/influence pairs
+     */
+    getZoneInfluence(x, z) {
+        if (!this._cache) this.generate();
+        if (!this._zoneIndex) this.buildZoneIndex();
+
+        const cellX = Math.floor(x / ZONE_INDEX_CELL_SIZE);
+        const cellZ = Math.floor(z / ZONE_INDEX_CELL_SIZE);
+
+        const results = [];
+        const checked = new Set();
+
+        // Check this cell and neighbors (3×3) to catch zones at boundaries
+        for (let dx = -1; dx <= 1; dx++) {
+            for (let dz = -1; dz <= 1; dz++) {
+                const cellKey = `${cellX + dx},${cellZ + dz}`;
+                const zones = this._zoneIndex.get(cellKey) || [];
+
+                for (const zone of zones) {
+                    if (checked.has(zone.id)) continue;
+                    checked.add(zone.id);
+
+                    const influence = this._calculateInfluence(x, z, zone);
+                    if (influence > 0) {
+                        results.push({ zone, influence });
+                    }
+                }
+            }
+        }
+
+        // Sort by influence (highest first)
+        results.sort((a, b) => b.influence - a.influence);
+        return results;
+    }
+
+    /**
+     * Calculate zone influence at a position
+     * @private
+     * @param {number} x - World X coordinate
+     * @param {number} z - World Z coordinate
+     * @param {Object} zone - Zone object
+     * @returns {number} Influence value in [0, 1]
+     */
+    _calculateInfluence(x, z, zone) {
+        const dx = x - zone.center.x;
+        const dz = z - zone.center.z;
+        const distance = Math.sqrt(dx * dx + dz * dz);
+
+        // Normalize distance by zone radius
+        const normalizedDist = distance / zone.radius;
+        if (normalizedDist >= 1.0) return 0;
+
+        // Smooth falloff: full influence until 50% radius, then smooth drop to 0
+        const influence = 1.0 - this._smoothstep(0.5, 1.0, normalizedDist);
+
+        // TODO(design): Add river/cliff boundary modifiers when rivers are implemented
+        return influence;
+    }
+
+    /**
+     * Smoothstep interpolation function
+     * @private
+     * @param {number} edge0 - Lower edge
+     * @param {number} edge1 - Upper edge
+     * @param {number} x - Value to interpolate
+     * @returns {number} Smoothed value in [0, 1]
+     */
+    _smoothstep(edge0, edge1, x) {
+        const t = Math.max(0, Math.min(1, (x - edge0) / (edge1 - edge0)));
+        return t * t * (3 - 2 * t);
     }
 }
 

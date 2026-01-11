@@ -11,6 +11,7 @@
 import { hash, octaveNoise2D, ridgedNoise2D, warpedNoise2D } from '../../utils/math/noise.js';
 import { DEFAULT_TEMPLATE, getTemplateModifiers } from './templates.js';
 import { getBiomeConfig } from './biomesystem.js';
+import { LinearFeatureIndex } from '../features/linearfeature.js';
 
 /**
  * Ocean threshold constants based on continentalness
@@ -58,6 +59,84 @@ export const HEIGHT_CONFIG = {
         return this.toWorld(this.bands.seaLevel);
     }
 };
+
+// =============================================================================
+// River Carving System
+// =============================================================================
+
+/**
+ * Module-level river spatial index for efficient carving queries
+ * Built once when world data is available, used by getHeightAtNormalized
+ */
+let _riverIndex = null;
+
+/**
+ * Build the river spatial index from generated river data
+ * Must be called before terrain generation to enable river carving
+ *
+ * @param {Array<LinearFeature>} rivers - Array of river features from WorldGenerator
+ * @returns {LinearFeatureIndex} The built index
+ */
+export function buildRiverIndex(rivers) {
+    _riverIndex = new LinearFeatureIndex(128);
+    for (const river of rivers) {
+        _riverIndex.add(river);
+    }
+    console.log(`River index built: ${rivers.length} rivers indexed`);
+    return _riverIndex;
+}
+
+/**
+ * Clear the river index (for cleanup or reinitialization)
+ */
+export function clearRiverIndex() {
+    _riverIndex = null;
+}
+
+/**
+ * Get river influence at a world position
+ * @param {number} x - World X coordinate
+ * @param {number} z - World Z coordinate
+ * @returns {Object|null} River influence data or null if not near a river
+ */
+function getRiverInfluenceAt(x, z) {
+    if (!_riverIndex) return null;
+
+    const result = _riverIndex.getInfluenceAt(x, z);
+    if (!result) return null;
+
+    return result.influence;
+}
+
+/**
+ * Apply river carving to terrain height
+ * Creates V-shaped valley profile with depth based on river width
+ *
+ * @param {number} baseHeight - Original normalized height [0, 1]
+ * @param {Object} riverInfluence - Influence data from getRiverInfluenceAt
+ * @returns {number} Carved normalized height [0, 1]
+ */
+function applyRiverCarving(baseHeight, riverInfluence) {
+    const { width, centerDistance, influence } = riverInfluence;
+
+    // River bed height (slightly below sea level for water fill)
+    const riverBed = HEIGHT_CONFIG.bands.seaLevel - 0.02;  // ~0.08 normalized
+
+    // Profile: V-shape using centerDistance
+    // centerDistance: 0 = center, 1 = edge
+    const carveProfile = Math.max(0, 1 - centerDistance);
+
+    // Smooth the profile edges (inline smoothstep)
+    const smoothedProfile = carveProfile * carveProfile * (3 - 2 * carveProfile);
+
+    // Calculate carved height
+    // Blend toward riverBed based on profile and influence
+    const carveStrength = smoothedProfile * influence * 0.8;
+    const carvedHeight = baseHeight + (riverBed - baseHeight) * carveStrength;
+
+    // Never carve below river bed
+    return Math.max(riverBed, carvedHeight);
+}
 
 /**
  * Biome height bands - defines the normalized height range [0, 1] for each biome
@@ -686,6 +765,12 @@ export function getHeightAtNormalized(x, z, seed, template = DEFAULT_TEMPLATE) {
     if (modifiers.elevationMultiplier < 1.0) {
         const flatBase = HEIGHT_CONFIG.bands.seaLevel + 0.03; // Slightly above sea level
         height = lerp(flatBase, height, modifiers.elevationMultiplier);
+    }
+
+    // Apply river carving (after all terrain modifiers)
+    const riverInfluence = getRiverInfluenceAt(x, z);
+    if (riverInfluence) {
+        height = applyRiverCarving(height, riverInfluence);
     }
 
     // Final clamp to valid normalized range

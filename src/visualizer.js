@@ -5,7 +5,7 @@
  * Single source of truth - no duplicated generation logic.
  */
 
-import { getTerrainParams } from './world/terrain/worldgen.js';
+import { getTerrainParams, buildRiverIndex } from './world/terrain/worldgen.js';
 import { DEFAULT_TEMPLATE, VERDANIA_TEMPLATE, debugTemplateAt } from './world/terrain/templates.js';
 import { TileCache } from './tools/mapvisualizer/tilecache.js';
 import { TerrainCache } from './visualizer/terraincache.js';
@@ -127,6 +127,11 @@ class TerrainVisualizer {
         this.worldGenerator = new WorldGenerator(this.seed, this.currentTemplate);
         this.worldData = this.worldGenerator.generate();
         console.log(`WorldGenerator initialized: ${this.worldData.zones.size} zones discovered`);
+
+        // Build river index for terrain carving
+        if (this.worldData.rivers && this.worldData.rivers.length > 0) {
+            buildRiverIndex(this.worldData.rivers);
+        }
 
         // Debug: list discovered zones
         for (const zone of this.worldData.zones.values()) {
