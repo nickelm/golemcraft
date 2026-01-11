@@ -89,6 +89,16 @@ export const CONTINENT_THRESHOLDS = {
     land: 0.30          // Above this = land; between = coastal transition
 };
 
+/**
+ * Continental shelf configuration
+ * Controls the transition from land to deep ocean
+ */
+export const CONTINENTAL_SHELF_CONFIG = {
+    shelfWidthNorm: 0.025,      // Normalized width of shallow shelf (100 blocks at 4000 world)
+    dropCurveExponent: 2,       // Steepness of shelf drop (higher = sharper)
+    deepFloorHeight: 0.005,     // Height of deep ocean floor (very deep)
+};
+
 // =============================================================================
 // River Carving System
 // =============================================================================
@@ -286,10 +296,11 @@ export function getSeaLevel() {
 }
 
 /**
- * Get water type at world position based on coast proximity gradient
- * Uses gradient-based classification:
- * - Near coast (high gradient) → shallow water
- * - Far from coast (low gradient) → deep water
+ * Get water type at world position based on spine distance
+ * Uses distance-based classification for continental shelf:
+ * - Within land extent but underwater → shallow (coastal)
+ * - Between land extent and shelf edge → shallow (continental shelf)
+ * - Beyond shelf edge → deep ocean
  *
  * @param {number} x - World X coordinate
  * @param {number} z - World Z coordinate
@@ -300,38 +311,46 @@ export function getSeaLevel() {
 export function getWaterType(x, z, seed, template = DEFAULT_TEMPLATE) {
     const continental = getEffectiveContinentalness(x, z, seed, template);
 
-    // Land
+    // Land check
     if (continental >= OCEAN_THRESHOLDS.shallow) {
         return 'none';
     }
 
-    // Use coast proximity for deep/shallow classification
-    const coastProximity = getCoastProximity(x, z, seed, template);
+    // Get spine distance (normalized 0-1)
+    const worldSize = (template.worldBounds?.max ?? 2000) - (template.worldBounds?.min ?? -2000);
+    const nx = (x - (template.worldBounds?.min ?? -2000)) / worldSize;
+    const nz = (z - (template.worldBounds?.min ?? -2000)) / worldSize;
+    const spineInfo = getSpineInfoAt(nx, nz, template);
 
-    // High proximity = shallow, low proximity = deep
-    // Add noise for organic boundary between shallow/deep
-    const boundaryNoiseSeed = deriveSeed(seed, 'deep_boundary');
-    const boundaryHash = (x, z) => hash(x, z, boundaryNoiseSeed);
-    const boundaryNoise = octaveNoise2D(x, z, 2, 0.008, boundaryHash) * 0.1;
-    const shallowThreshold = 0.3 + boundaryNoise;  // ~30% gradient = shallow
+    // Get land extent for this side of spine
+    const landExtent = template.landExtent || { inner: 0.20, outer: 0.20 };
+    const maxLandExtent = Math.max(landExtent.inner, landExtent.outer);
 
-    return coastProximity > shallowThreshold ? 'shallow' : 'deep';
+    // Define shelf boundary
+    const shelfEdge = maxLandExtent + CONTINENTAL_SHELF_CONFIG.shelfWidthNorm;
+
+    // Beyond shelf edge = deep ocean
+    if (spineInfo.distance > shelfEdge) {
+        return 'deep';
+    }
+
+    // Between land extent and shelf edge = shallow (continental shelf)
+    // Within land extent but underwater = also shallow (coastal)
+    return 'shallow';
 }
 
 /**
  * Get ocean depth at world position
- * Uses gradient-based coast proximity to determine depth:
- * - Near coast (high gradient) → shallow water
- * - Far from coast (low gradient) → deep water
+ * Uses spine distance for continental shelf with sharp drop:
+ * - Near coast → gradual slope from shore to shallow floor
+ * - On shelf (between land extent and shelf edge) → steep drop
+ * - Beyond shelf → deep ocean floor
  *
  * @param {number} x - World X coordinate
  * @param {number} z - World Z coordinate
  * @param {number} seed - World seed
  * @param {Object} template - Continent template (optional, defaults to DEFAULT_TEMPLATE)
  * @returns {number|null} Ocean floor height in blocks, or null if on land
- *   - Near coast: close to sea level
- *   - Far from coast: near floor
- *   - Land: null
  */
 export function getOceanDepth(x, z, seed, template = DEFAULT_TEMPLATE) {
     const continental = getEffectiveContinentalness(x, z, seed, template);
@@ -341,19 +360,36 @@ export function getOceanDepth(x, z, seed, template = DEFAULT_TEMPLATE) {
         return null;
     }
 
-    // Use gradient to determine coast proximity
-    const coastProximity = getCoastProximity(x, z, seed, template);
+    // Get spine distance (normalized 0-1)
+    const worldSize = (template.worldBounds?.max ?? 2000) - (template.worldBounds?.min ?? -2000);
+    const nx = (x - (template.worldBounds?.min ?? -2000)) / worldSize;
+    const nz = (z - (template.worldBounds?.min ?? -2000)) / worldSize;
+    const spineInfo = getSpineInfoAt(nx, nz, template);
 
-    const shallowOceanFloor = HEIGHT_CONFIG.toWorld(HEIGHT_CONFIG.bands.shallowOceanFloor);
+    // Get land extent
+    const landExtent = template.landExtent || { inner: 0.20, outer: 0.20 };
+    const maxLandExtent = Math.max(landExtent.inner, landExtent.outer);
+    const shelfEdge = maxLandExtent + CONTINENTAL_SHELF_CONFIG.shelfWidthNorm;
+
+    // Height references
     const seaLevel = HEIGHT_CONFIG.seaLevelWorld;
-    const deepFloor = HEIGHT_CONFIG.toWorld(0.01);
+    const shallowFloor = HEIGHT_CONFIG.toWorld(HEIGHT_CONFIG.bands.shallowOceanFloor);
 
-    // Blend based on coast proximity:
-    // High proximity (near coast) → shallower (closer to sea level)
-    // Low proximity (far from coast) → deeper (closer to floor)
-    const depth = deepFloor + coastProximity * (seaLevel - deepFloor);
+    // Beyond shelf = bottomless deep ocean (height 0)
+    if (spineInfo.distance > shelfEdge) {
+        return 0;
+    }
 
-    return Math.max(deepFloor, Math.min(seaLevel, depth));
+    // On the shelf (between land extent and shelf edge) = steep drop to 0
+    if (spineInfo.distance > maxLandExtent) {
+        const shelfProgress = (spineInfo.distance - maxLandExtent) / CONTINENTAL_SHELF_CONFIG.shelfWidthNorm;
+        const dropCurve = Math.pow(shelfProgress, CONTINENTAL_SHELF_CONFIG.dropCurveExponent);
+        return shallowFloor - dropCurve * shallowFloor;
+    }
+
+    // Near coast - gradual slope from shore to shallow floor
+    const coastProximity = getCoastProximity(x, z, seed, template);
+    return shallowFloor + coastProximity * (seaLevel - shallowFloor);
 }
 
 /**
@@ -975,15 +1011,37 @@ function getHeightAtNormalized_SpineFirst(x, z, seed, template) {
     // Combine: noise + spine boost
     const effectiveContinentalness = Math.min(1.0, baseContinentalness + spineContinentBoost);
 
-    // Determine ocean/land from effective continentalness
+    // =========================================================================
+    // CONTINENTAL SHELF: Use spine distance for deep ocean determination
+    // =========================================================================
+    const landExtent = template.landExtent || { inner: 0.20, outer: 0.20 };
+    const maxLandExtent = Math.max(landExtent.inner, landExtent.outer);
+    const shelfEdge = maxLandExtent + CONTINENTAL_SHELF_CONFIG.shelfWidthNorm;
+
+    // Beyond shelf edge = deep ocean (regardless of continentalness noise)
+    if (spineInfo.distance > shelfEdge) {
+        // Deep ocean - bottomless void, flat 0.0 height (no variation)
+        return 0.0;
+    }
+
+    // On continental shelf (between land extent and shelf edge) = steep underwater slope
+    if (spineInfo.distance > maxLandExtent && effectiveContinentalness < CONTINENT_THRESHOLDS.land) {
+        const shelfProgress = (spineInfo.distance - maxLandExtent) / CONTINENTAL_SHELF_CONFIG.shelfWidthNorm;
+        const dropCurve = Math.pow(shelfProgress, CONTINENTAL_SHELF_CONFIG.dropCurveExponent);
+        const shallowFloor = HEIGHT_CONFIG.bands.shallowOceanFloor;
+        // Drop to 0.0 for bottomless deep ocean
+        return shallowFloor - dropCurve * shallowFloor;
+    }
+
+    // Determine ocean/land from effective continentalness (within land extent)
     if (effectiveContinentalness < CONTINENT_THRESHOLDS.deepOcean) {
-        // Deep ocean - flat floor with slight variation
-        const oceanNoise = getBaseTerrainNoise(x, z, seed) * 0.01;
-        return HEIGHT_CONFIG.bands.deepOceanFloor + oceanNoise;
+        // Shallow ocean near coast - use shallow floor
+        const oceanNoise = getBaseTerrainNoise(x, z, seed) * 0.02;
+        return HEIGHT_CONFIG.bands.shallowOceanFloor + oceanNoise;
     }
 
     if (effectiveContinentalness < CONTINENT_THRESHOLDS.land) {
-        // Coastal transition zone - interpolate between ocean floor and sea level
+        // Coastal transition zone - interpolate between shallow floor and sea level
         const t = (effectiveContinentalness - CONTINENT_THRESHOLDS.deepOcean) /
                   (CONTINENT_THRESHOLDS.land - CONTINENT_THRESHOLDS.deepOcean);
         const shallowNoise = getBaseTerrainNoise(x, z, seed) * 0.03;

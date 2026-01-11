@@ -39,9 +39,9 @@ export const BIOMES = {
         name: 'Shallow Ocean',
         baseHeightFraction: 0.07,
         heightScaleFraction: 0.03,
-        terrain: { primary: 'sand', tint: [1.3, 1.5, 1.8] },  // Bright blue-tinted sand
-        subsurface: { primary: 'sand', tint: [1.0, 1.0, 1.0] },
-        underwater: { primary: 'sand', tint: [0.8, 0.95, 1.1] },
+        terrain: { primary: 'sand', tint: [0.7, 0.9, 1.3] },  // Medium blue-tinted sand
+        subsurface: { primary: 'sand', tint: [0.6, 0.8, 1.1] },
+        underwater: { primary: 'sand', tint: [0.5, 0.7, 1.0] },
         objects: [],
         objectDensities: {},
         mobs: [],

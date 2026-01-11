@@ -64,7 +64,8 @@ const ELEVATION_GRADIENT = [
 // Biome colors - discrete mapping for biome visualization
 const BIOME_COLORS = {
   // Water biomes
-  ocean: [30, 80, 160],
+  ocean: [15, 40, 100],           // Deep ocean - very dark blue
+  shallow_ocean: [50, 100, 180],  // Shallow ocean - medium blue
   beach: [220, 200, 120],
 
   // Temperate biomes
