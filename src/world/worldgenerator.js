@@ -11,7 +11,7 @@ import {
     deriveSeed,
     getTerrainParams,
     getCoastProximity,
-    getHeightAtNormalized,
+    getHeightForRiverGen,
     sampleHumidity
 } from './terrain/worldgen.js';
 import { DEFAULT_TEMPLATE, VERDANIA_TEMPLATE } from './terrain/templates.js';
@@ -31,21 +31,22 @@ const WORLD_BOUNDS = {
 
 // River generation configuration
 const RIVER_CONFIG = {
-    sourceGridSize: 512,        // One potential source per 512×512 area
-    minSourceElevation: 0.45,   // Minimum normalized height for river source
-    minHumidity: 0.25,          // Minimum humidity to spawn a river
-    stepSize: 16,               // Sample every 16 blocks when tracing
-    maxPathLength: 500,         // Maximum river path points
-    minPathLength: 10,          // Minimum points for valid river
-    seaLevel: 0.10,             // Normalized sea level
-    gradientEpsilon: 8,         // Sample distance for gradient calculation
-    meanderStrength: 0.3,       // How much rivers curve in flat areas
+    sourceGridSize: 300,        // One potential source per 300×300 area
+    minSourceElevation: 0.25,   // Minimum normalized height for river source
+    minHumidity: 0.15,          // Minimum humidity to spawn a river
+    stepSize: 12,               // Sample every 12 blocks when tracing (smaller for smoother paths)
+    maxPathLength: 800,         // Maximum river path points
+    minPathLength: 15,          // Minimum points for valid river
+    seaLevel: 0.12,             // Normalized sea level (slightly higher to ensure rivers reach)
+    gradientEpsilon: 16,        // Sample distance for gradient calculation (larger for smoother flow)
+    meanderStrength: 0.25,      // How much rivers curve in flat areas
+    minGradient: 0.0005,        // Minimum gradient before stopping (very small to keep flowing)
     // River width categories (blocks)
     widths: {
-        stream: { min: 2, max: 3 },
-        creek: { min: 4, max: 6 },
-        river: { min: 8, max: 15 },
-        greatRiver: { min: 20, max: 40 }
+        stream: { min: 3, max: 5 },
+        creek: { min: 6, max: 10 },
+        river: { min: 12, max: 20 },
+        greatRiver: { min: 25, max: 50 }
     }
 };
 
@@ -117,6 +118,7 @@ export class WorldGenerator {
 
         // Find river sources (high elevation points with sufficient humidity)
         const sources = this._findRiverSources(riverSeed);
+        console.log(`River generation: found ${sources.length} potential sources`);
 
         for (const source of sources) {
             // Trace river path downhill
@@ -168,32 +170,32 @@ export class WorldGenerator {
                 const z = gz * gridSize + offsetZ;
 
                 // Check elevation and humidity
-                const elevation = getHeightAtNormalized(x, z, this.seed, this.template);
+                const elevation = getHeightForRiverGen(x, z, this.seed, this.template);
                 const humidity = sampleHumidity(x, z, this.seed, this.template);
                 const params = getTerrainParams(x, z, this.seed, this.template);
 
                 // Source requirements:
-                // - Above minimum elevation (mountains/highlands)
+                // - Above minimum elevation (hills/highlands)
                 // - Sufficient humidity
                 // - Not in water
                 if (elevation >= RIVER_CONFIG.minSourceElevation &&
                     humidity >= RIVER_CONFIG.minHumidity &&
                     params.waterType === 'none') {
 
-                    // Use humidity as probability modifier
-                    const spawnChance = humidity * 0.8 + 0.2;
-                    if (this._hash(gx + 200, gz + 200, riverSeed) < spawnChance) {
-                        sources.push({ x, z, elevation, humidity });
-                    }
+                    // Add source - higher elevation and humidity = better source
+                    sources.push({ x, z, elevation, humidity, score: elevation + humidity });
                 }
             }
         }
 
+        // Sort by score (best sources first) and return all
+        sources.sort((a, b) => b.score - a.score);
         return sources;
     }
 
     /**
      * Trace a river path downhill from source to ocean/lake
+     * Uses a combination of gradient descent and ocean-seeking behavior
      * @private
      * @param {Object} source - Source position {x, z, elevation}
      * @param {number} riverSeed - Derived seed for determinism
@@ -202,50 +204,154 @@ export class WorldGenerator {
     _traceRiverDownhill(source, riverSeed) {
         const path = [{ x: source.x, z: source.z }];
         let current = { x: source.x, z: source.z };
+        let currentHeight = source.elevation;
         const stepSize = RIVER_CONFIG.stepSize;
         const eps = RIVER_CONFIG.gradientEpsilon;
+        let stuckCounter = 0;
+
+        // Find nearest ocean direction for bias
+        const oceanDir = this._findOceanDirection(source.x, source.z);
 
         for (let i = 0; i < RIVER_CONFIG.maxPathLength; i++) {
             // Calculate terrain gradient using central differences
             const gradient = this._getTerrainGradient(current.x, current.z, eps);
 
-            // Check for flat area (lake/basin) or very gentle slope
-            if (gradient.magnitude < 0.001) {
-                break;
+            let dx, dz;
+
+            // If gradient is too flat, use ocean direction with noise
+            if (gradient.magnitude < RIVER_CONFIG.minGradient) {
+                stuckCounter++;
+
+                if (stuckCounter > 3) {
+                    // Strongly bias toward ocean when stuck
+                    const oceanBias = 0.8;
+                    const noiseBias = 0.2;
+                    dx = oceanDir.dx * oceanBias + (this._hash(i, 0, riverSeed) - 0.5) * noiseBias;
+                    dz = oceanDir.dz * oceanBias + (this._hash(i, 1, riverSeed) - 0.5) * noiseBias;
+                    const len = Math.sqrt(dx * dx + dz * dz);
+                    if (len > 0) { dx /= len; dz /= len; }
+                } else {
+                    // Mix gradient with ocean direction
+                    dx = gradient.dx * 0.4 + oceanDir.dx * 0.6;
+                    dz = gradient.dz * 0.4 + oceanDir.dz * 0.6;
+                    const len = Math.sqrt(dx * dx + dz * dz);
+                    if (len > 0) { dx /= len; dz /= len; }
+                }
+            } else {
+                stuckCounter = 0;
+                // Blend gradient with ocean bias for consistent flow toward sea
+                const oceanWeight = 0.2;
+                dx = gradient.dx * (1 - oceanWeight) + oceanDir.dx * oceanWeight;
+                dz = gradient.dz * (1 - oceanWeight) + oceanDir.dz * oceanWeight;
+                const len = Math.sqrt(dx * dx + dz * dz);
+                if (len > 0) { dx /= len; dz /= len; }
             }
 
             // Calculate meander offset based on flatness
-            // Flatter terrain = more meandering
             const meander = this._getMeanderOffset(
                 current.x, current.z,
                 gradient.magnitude,
                 riverSeed + i
             );
 
-            // Step downhill with meandering
+            // Step in chosen direction with meandering
             const next = {
-                x: current.x + gradient.dx * stepSize + meander.x,
-                z: current.z + gradient.dz * stepSize + meander.z
+                x: current.x + dx * stepSize + meander.x,
+                z: current.z + dz * stepSize + meander.z
             };
 
             // Check if we've reached water (ocean or lake)
-            const height = getHeightAtNormalized(next.x, next.z, this.seed, this.template);
-            if (height < RIVER_CONFIG.seaLevel) {
+            const nextHeight = getHeightForRiverGen(next.x, next.z, this.seed, this.template);
+            if (nextHeight < RIVER_CONFIG.seaLevel) {
                 path.push(next);
                 break;
             }
 
-            // Check if out of world bounds
+            // Check if out of world bounds - but add the edge point first
             if (next.x < WORLD_BOUNDS.min || next.x > WORLD_BOUNDS.max ||
                 next.z < WORLD_BOUNDS.min || next.z > WORLD_BOUNDS.max) {
+                path.push({
+                    x: Math.max(WORLD_BOUNDS.min, Math.min(WORLD_BOUNDS.max, next.x)),
+                    z: Math.max(WORLD_BOUNDS.min, Math.min(WORLD_BOUNDS.max, next.z))
+                });
                 break;
             }
 
             path.push(next);
             current = next;
+            // Rivers always carve down - never let currentHeight increase
+            currentHeight = Math.min(currentHeight, nextHeight);
         }
 
         return path;
+    }
+
+    /**
+     * Find direction toward nearest ocean
+     * Samples in a large radius to find the closest ocean point
+     * @private
+     */
+    _findOceanDirection(x, z) {
+        // Sample points in concentric circles to find ocean
+        const sampleRadii = [150, 300, 500, 800, 1200, 1600];
+        const sampleCount = 16; // Points per circle
+
+        let bestOceanDist = Infinity;
+        let bestOceanDir = { dx: 0, dz: -1 }; // Default: flow north if no ocean found
+
+        for (const radius of sampleRadii) {
+            for (let i = 0; i < sampleCount; i++) {
+                const angle = (i / sampleCount) * Math.PI * 2;
+                const sx = x + Math.cos(angle) * radius;
+                const sz = z + Math.sin(angle) * radius;
+
+                const height = getHeightForRiverGen(sx, sz, this.seed, this.template);
+
+                if (height < RIVER_CONFIG.seaLevel) {
+                    // Found ocean! Calculate direction
+                    if (radius < bestOceanDist) {
+                        bestOceanDist = radius;
+                        const dx = sx - x;
+                        const dz = sz - z;
+                        const len = Math.sqrt(dx * dx + dz * dz);
+                        bestOceanDir = { dx: dx / len, dz: dz / len };
+                    }
+                }
+            }
+            // If we found ocean at this radius, don't need to search further
+            if (bestOceanDist < Infinity) break;
+        }
+
+        return bestOceanDir;
+    }
+
+    /**
+     * Find the lowest neighboring point in 8 directions
+     * @private
+     */
+    _findLowestNeighbor(x, z, radius) {
+        let lowestHeight = getHeightForRiverGen(x, z, this.seed, this.template);
+        let bestDir = null;
+
+        const directions = [
+            { dx: 1, dz: 0 }, { dx: -1, dz: 0 },
+            { dx: 0, dz: 1 }, { dx: 0, dz: -1 },
+            { dx: 0.707, dz: 0.707 }, { dx: -0.707, dz: 0.707 },
+            { dx: 0.707, dz: -0.707 }, { dx: -0.707, dz: -0.707 }
+        ];
+
+        for (const dir of directions) {
+            const nx = x + dir.dx * radius;
+            const nz = z + dir.dz * radius;
+            const height = getHeightForRiverGen(nx, nz, this.seed, this.template);
+
+            if (height < lowestHeight) {
+                lowestHeight = height;
+                bestDir = { dx: dir.dx, dz: dir.dz, height };
+            }
+        }
+
+        return bestDir;
     }
 
     /**
@@ -258,10 +364,10 @@ export class WorldGenerator {
      */
     _getTerrainGradient(x, z, eps) {
         // Central difference for accuracy
-        const hLeft = getHeightAtNormalized(x - eps, z, this.seed, this.template);
-        const hRight = getHeightAtNormalized(x + eps, z, this.seed, this.template);
-        const hBack = getHeightAtNormalized(x, z - eps, this.seed, this.template);
-        const hFront = getHeightAtNormalized(x, z + eps, this.seed, this.template);
+        const hLeft = getHeightForRiverGen(x - eps, z, this.seed, this.template);
+        const hRight = getHeightForRiverGen(x + eps, z, this.seed, this.template);
+        const hBack = getHeightForRiverGen(x, z - eps, this.seed, this.template);
+        const hFront = getHeightForRiverGen(x, z + eps, this.seed, this.template);
 
         // Gradient = direction of steepest ascent
         const gradX = (hRight - hLeft) / (2 * eps);
@@ -316,19 +422,22 @@ export class WorldGenerator {
         const widths = [];
         const pathLength = path.length;
 
-        // Base width scaling from humidity
-        const humidityScale = 0.5 + source.humidity * 0.5;
+        // Base width scaling from humidity (more humidity = wider rivers)
+        const humidityScale = 0.6 + source.humidity * 0.6;
+
+        // Longer rivers get wider
+        const lengthScale = Math.min(2.0, 1.0 + pathLength / 100);
 
         for (let i = 0; i < pathLength; i++) {
             // Progress along river (0 at source, 1 at mouth)
             const t = i / Math.max(1, pathLength - 1);
 
-            // Width increases downstream (cubic for more gradual start)
-            const progressScale = t * t * t;
+            // Width increases downstream (quadratic for smoother growth)
+            const progressScale = t * t;
 
             // Calculate width: starts as stream, grows to river
             const minWidth = RIVER_CONFIG.widths.stream.min;
-            const maxWidth = RIVER_CONFIG.widths.river.max * humidityScale;
+            const maxWidth = RIVER_CONFIG.widths.river.max * humidityScale * lengthScale;
 
             const width = minWidth + (maxWidth - minWidth) * progressScale;
             widths.push(Math.round(width * 10) / 10); // Round to 0.1

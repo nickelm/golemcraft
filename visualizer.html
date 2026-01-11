@@ -29,6 +29,45 @@
             min-width: 300px;
         }
 
+        #controls.collapsed {
+            min-width: auto;
+            padding: 8px 12px;
+        }
+
+        #controls.collapsed .control-content {
+            display: none;
+        }
+
+        #controls-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 10px;
+        }
+
+        #controls.collapsed #controls-header {
+            margin-bottom: 0;
+        }
+
+        #controls-title {
+            font-weight: bold;
+            font-size: 14px;
+        }
+
+        #controls-toggle {
+            background: none;
+            border: none;
+            color: #fff;
+            font-size: 18px;
+            cursor: pointer;
+            padding: 0 5px;
+            line-height: 1;
+        }
+
+        #controls-toggle:hover {
+            color: #4a9eff;
+        }
+
         .control-row {
             display: flex;
             align-items: center;
@@ -176,49 +215,60 @@
     <canvas id="terrain-canvas"></canvas>
 
     <div id="controls">
-        <div class="control-row">
-            <label for="seed-input">Seed:</label>
-            <input type="number" id="seed-input" value="12345" step="1">
+        <div id="controls-header">
+            <span id="controls-title">Controls</span>
+            <button id="controls-toggle">−</button>
         </div>
-        <div class="control-row">
-            <label for="template-select">Template:</label>
-            <select id="template-select">
-                <option value="default">Default</option>
-                <option value="verdania">Verdania</option>
-            </select>
-        </div>
-        <div class="control-row">
-            <label for="mode-select">Mode:</label>
-            <select id="mode-select">
-                <option value="continental">Continentalness</option>
-                <option value="temperature">Temperature</option>
-                <option value="humidity">Humidity</option>
-                <option value="erosion">Erosion</option>
-                <option value="ridgeness">Ridgeness</option>
-                <option value="biome">Biome</option>
-                <option value="elevation">Elevation</option>
-                <option value="composite">Composite (Map)</option>
-            </select>
-        </div>
-        <div class="mode-desc" id="mode-description">
-            Land/ocean distribution (black = ocean, white = highlands)
-        </div>
-        <div class="control-row" style="margin-top: 10px;">
-            <label for="zones-checkbox">
-                <input type="checkbox" id="zones-checkbox"> Show Zones
-            </label>
-        </div>
-        <div class="control-row">
-            <label for="zone-style-select">Zone Style:</label>
-            <select id="zone-style-select">
-                <option value="circles">Circles</option>
-                <option value="voronoi" disabled>Voronoi (coming soon)</option>
-                <option value="grid" disabled>Grid (debug)</option>
-            </select>
-        </div>
-        <div class="control-row" style="margin-top: 10px;">
-            <button id="clear-cache-btn">Clear Cache</button>
-            <span id="cache-stats">-</span>
+        <div class="control-content">
+            <div class="control-row">
+                <label for="seed-input">Seed:</label>
+                <input type="number" id="seed-input" value="12345" step="1">
+            </div>
+            <div class="control-row">
+                <label for="template-select">Template:</label>
+                <select id="template-select">
+                    <option value="default">Default</option>
+                    <option value="verdania">Verdania</option>
+                </select>
+            </div>
+            <div class="control-row">
+                <label for="mode-select">Mode:</label>
+                <select id="mode-select">
+                    <option value="continental">Continentalness</option>
+                    <option value="temperature">Temperature</option>
+                    <option value="humidity">Humidity</option>
+                    <option value="erosion">Erosion</option>
+                    <option value="ridgeness">Ridgeness</option>
+                    <option value="biome">Biome</option>
+                    <option value="elevation">Elevation</option>
+                    <option value="composite">Composite (Map)</option>
+                </select>
+            </div>
+            <div class="mode-desc" id="mode-description">
+                Land/ocean distribution (black = ocean, white = highlands)
+            </div>
+            <div class="control-row" style="margin-top: 10px;">
+                <label for="rivers-checkbox">
+                    <input type="checkbox" id="rivers-checkbox" checked> Show Rivers
+                </label>
+            </div>
+            <div class="control-row">
+                <label for="zones-checkbox">
+                    <input type="checkbox" id="zones-checkbox"> Show Zones
+                </label>
+            </div>
+            <div class="control-row">
+                <label for="zone-style-select">Zone Style:</label>
+                <select id="zone-style-select">
+                    <option value="circles">Circles</option>
+                    <option value="voronoi" disabled>Voronoi (coming soon)</option>
+                    <option value="grid" disabled>Grid (debug)</option>
+                </select>
+            </div>
+            <div class="control-row" style="margin-top: 10px;">
+                <button id="clear-cache-btn">Clear Cache</button>
+                <span id="cache-stats">-</span>
+            </div>
         </div>
     </div>
 
@@ -240,15 +290,6 @@
         <div>Adjacent: <span id="zone-info-adjacent">None</span></div>
     </div>
 
-    <div id="instructions">
-        <strong>Arrow keys:</strong> Pan view<br>
-        <strong>+/- or Mouse wheel:</strong> Zoom<br>
-        <strong>Touch:</strong> Drag to pan, pinch to zoom<br>
-        <strong>Click:</strong> Show zone info (when zones enabled)<br>
-        <strong>1-8:</strong> Switch mode<br>
-        <strong>D/V:</strong> Switch template<br>
-        <strong>Z:</strong> Toggle zone overlay
-    </div>
 
     <script type="module" src="/src/visualizer.js"></script>
 </body>

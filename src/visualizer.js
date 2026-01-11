@@ -102,6 +102,9 @@ class TerrainVisualizer {
         this.worldGenerator = null;
         this.worldData = null;
 
+        // River overlay state
+        this.showRivers = true;  // Rivers visible by default
+
         // Set canvas to full window size
         this.resizeCanvas();
         window.addEventListener('resize', () => {
@@ -131,6 +134,17 @@ class TerrainVisualizer {
         // Build river index for terrain carving
         if (this.worldData.rivers && this.worldData.rivers.length > 0) {
             buildRiverIndex(this.worldData.rivers);
+            console.log(`Rivers loaded: ${this.worldData.rivers.length} rivers`);
+            // Log all rivers
+            for (let i = 0; i < this.worldData.rivers.length; i++) {
+                const river = this.worldData.rivers[i];
+                const bounds = river.getBounds();
+                const centerX = (bounds.minX + bounds.maxX) / 2;
+                const centerZ = (bounds.minZ + bounds.maxZ) / 2;
+                console.log(`  River ${i + 1}: center (${centerX.toFixed(0)}, ${centerZ.toFixed(0)}), ${river.path.length} points, type: ${river.properties.riverType}`);
+            }
+        } else {
+            console.log('No rivers generated for this seed/template');
         }
 
         // Debug: list discovered zones
@@ -307,6 +321,27 @@ class TerrainVisualizer {
                 case 'V':
                     this.setTemplate('verdania');
                     console.log('Switched to VERDANIA template');
+                    break;
+                case 'r':
+                    this.setShowRivers(!this.showRivers);
+                    const riversCheckbox = document.getElementById('rivers-checkbox');
+                    if (riversCheckbox) riversCheckbox.checked = this.showRivers;
+                    console.log(`River overlay ${this.showRivers ? 'enabled' : 'disabled'}`);
+                    break;
+                case 'R':
+                    // Jump to first river (Shift+R)
+                    if (this.worldData?.rivers?.length > 0) {
+                        const river = this.worldData.rivers[0];
+                        const bounds = river.getBounds();
+                        this.viewX = (bounds.minX + bounds.maxX) / 2;
+                        this.viewZ = (bounds.minZ + bounds.maxZ) / 2;
+                        this.zoom = 1.0;
+                        console.log(`Jumped to river at (${this.viewX.toFixed(0)}, ${this.viewZ.toFixed(0)})`);
+                        this.updateInfoDisplay();
+                        this.scheduleRender();
+                    } else {
+                        console.log('No rivers to jump to');
+                    }
                     break;
                 case 'z':
                 case 'Z':
@@ -728,7 +763,12 @@ class TerrainVisualizer {
             this._renderSync(startTime, width, height, tileSize);
         }
 
-        // Render zone overlay on top of terrain
+        // Render river overlay on top of terrain
+        if (this.showRivers) {
+            this._renderRiverOverlay();
+        }
+
+        // Render zone overlay on top of terrain (and rivers)
         if (this.showZones) {
             this._renderZoneOverlay();
         }
@@ -876,6 +916,165 @@ class TerrainVisualizer {
         console.log(`Sync render: ${renderTime.toFixed(1)}ms (${tilesRendered} new, ${tilesCached} cached, ${stats.size}/${stats.maxTiles} in cache, LOD ${lodLevel})`);
     }
 
+    // ========== River Overlay Methods ==========
+
+    /**
+     * Render rivers as vector overlay
+     * @private
+     */
+    _renderRiverOverlay() {
+        if (!this.worldData?.rivers || this.worldData.rivers.length === 0) {
+            return;
+        }
+
+        const halfWidth = this.canvas.width / 2;
+        const halfHeight = this.canvas.height / 2;
+
+        // Calculate view bounds for culling
+        const viewBounds = {
+            minX: this.viewX - halfWidth / this.zoom,
+            maxX: this.viewX + halfWidth / this.zoom,
+            minZ: this.viewZ - halfHeight / this.zoom,
+            maxZ: this.viewZ + halfHeight / this.zoom
+        };
+
+        for (const river of this.worldData.rivers) {
+            // Skip rivers outside view bounds
+            const bounds = river.getBounds();
+            if (bounds.maxX < viewBounds.minX || bounds.minX > viewBounds.maxX ||
+                bounds.maxZ < viewBounds.minZ || bounds.minZ > viewBounds.maxZ) {
+                continue;
+            }
+
+            // Choose rendering method based on zoom level
+            if (this.zoom >= 0.5) {
+                this._renderRiverPolygon(river, halfWidth, halfHeight);
+            } else {
+                this._renderRiverLine(river, halfWidth, halfHeight);
+            }
+        }
+    }
+
+    /**
+     * Render river as simple line (for zoomed-out view)
+     * @private
+     */
+    _renderRiverLine(river, halfWidth, halfHeight) {
+        const ctx = this.ctx;
+        const path = river.path;
+
+        if (path.length < 2) return;
+
+        ctx.beginPath();
+
+        for (let i = 0; i < path.length; i++) {
+            const p = path[i];
+            const screenX = halfWidth + (p.x - this.viewX) * this.zoom;
+            const screenY = halfHeight + (p.z - this.viewZ) * this.zoom;
+
+            if (i === 0) {
+                ctx.moveTo(screenX, screenY);
+            } else {
+                ctx.lineTo(screenX, screenY);
+            }
+        }
+
+        // Average width for line mode
+        const avgWidth = (river.getWidthAt(0) + river.getWidthAt(path.length - 1)) / 2;
+        ctx.strokeStyle = '#4080C0';  // River blue
+        ctx.lineWidth = Math.max(1, avgWidth * this.zoom);
+        ctx.lineCap = 'round';
+        ctx.lineJoin = 'round';
+        ctx.stroke();
+    }
+
+    /**
+     * Render river as polygon with varying width (for zoomed-in view)
+     * @private
+     */
+    _renderRiverPolygon(river, halfWidth, halfHeight) {
+        const ctx = this.ctx;
+        const path = river.path;
+
+        if (path.length < 2) return;
+
+        // Build left and right bank arrays
+        const leftBank = [];
+        const rightBank = [];
+
+        for (let i = 0; i < path.length; i++) {
+            const p = path[i];
+            const width = river.getWidthAt(i);
+            const normal = this._getRiverNormal(path, i);
+
+            leftBank.push({
+                x: p.x + normal.x * width / 2,
+                z: p.z + normal.z * width / 2
+            });
+            rightBank.push({
+                x: p.x - normal.x * width / 2,
+                z: p.z - normal.z * width / 2
+            });
+        }
+
+        // Draw filled polygon
+        ctx.beginPath();
+
+        // Trace left bank forward
+        for (let i = 0; i < leftBank.length; i++) {
+            const p = leftBank[i];
+            const screenX = halfWidth + (p.x - this.viewX) * this.zoom;
+            const screenY = halfHeight + (p.z - this.viewZ) * this.zoom;
+
+            if (i === 0) {
+                ctx.moveTo(screenX, screenY);
+            } else {
+                ctx.lineTo(screenX, screenY);
+            }
+        }
+
+        // Trace right bank backward
+        for (let i = rightBank.length - 1; i >= 0; i--) {
+            const p = rightBank[i];
+            const screenX = halfWidth + (p.x - this.viewX) * this.zoom;
+            const screenY = halfHeight + (p.z - this.viewZ) * this.zoom;
+            ctx.lineTo(screenX, screenY);
+        }
+
+        ctx.closePath();
+        ctx.fillStyle = '#4080C0';  // River blue
+        ctx.fill();
+    }
+
+    /**
+     * Calculate normal (perpendicular) vector at a path point
+     * @private
+     */
+    _getRiverNormal(path, index) {
+        let dx, dz;
+
+        if (index === 0) {
+            // First point: use direction to next
+            dx = path[1].x - path[0].x;
+            dz = path[1].z - path[0].z;
+        } else if (index === path.length - 1) {
+            // Last point: use direction from previous
+            dx = path[index].x - path[index - 1].x;
+            dz = path[index].z - path[index - 1].z;
+        } else {
+            // Middle point: average of adjacent directions
+            dx = path[index + 1].x - path[index - 1].x;
+            dz = path[index + 1].z - path[index - 1].z;
+        }
+
+        // Normalize and rotate 90 degrees
+        const len = Math.sqrt(dx * dx + dz * dz);
+        if (len === 0) return { x: 0, z: 1 };
+
+        // Perpendicular: rotate (dx, dz) by 90 degrees -> (-dz, dx)
+        return { x: -dz / len, z: dx / len };
+    }
+
     // ========== Zone Overlay Methods ==========
 
     /**
@@ -884,6 +1083,15 @@ class TerrainVisualizer {
      */
     setShowZones(enabled) {
         this.showZones = enabled;
+        this.scheduleRender();
+    }
+
+    /**
+     * Toggle river overlay visibility
+     * @param {boolean} enabled - Whether to show rivers
+     */
+    setShowRivers(enabled) {
+        this.showRivers = enabled;
         this.scheduleRender();
     }
 
@@ -1075,6 +1283,12 @@ window.addEventListener('DOMContentLoaded', () => {
         visualizer.setTemplate(e.target.value);
     });
 
+    // River overlay toggle
+    const riversCheckbox = document.getElementById('rivers-checkbox');
+    riversCheckbox.addEventListener('change', (e) => {
+        visualizer.setShowRivers(e.target.checked);
+    });
+
     // Zone overlay toggle
     const zonesCheckbox = document.getElementById('zones-checkbox');
     zonesCheckbox.addEventListener('change', (e) => {
@@ -1117,9 +1331,17 @@ window.addEventListener('DOMContentLoaded', () => {
     setInterval(updateCacheStats, 5000);
     updateCacheStats();
 
+    // Control panel collapse/expand toggle
+    const controlsPanel = document.getElementById('controls');
+    const controlsToggle = document.getElementById('controls-toggle');
+    controlsToggle.addEventListener('click', () => {
+        controlsPanel.classList.toggle('collapsed');
+        controlsToggle.textContent = controlsPanel.classList.contains('collapsed') ? '+' : '−';
+    });
+
     // Make visualizer globally accessible for debugging
     window.visualizer = visualizer;
 
     console.log('Terrain Visualizer initialized');
-    console.log('Controls: Arrow keys = pan, +/- = zoom, 1-8 = switch mode, D/V = switch template, Z = toggle zones');
+    console.log('Controls: Arrow keys = pan, +/- = zoom, 1-8 = switch mode, D/V = switch template, R = toggle rivers, Z = toggle zones');
 });

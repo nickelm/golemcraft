@@ -109,6 +109,29 @@ function getRiverInfluenceAt(x, z) {
 }
 
 /**
+ * Flag to skip river carving - used during river generation to avoid feedback loop
+ * @private
+ */
+let _skipRiverCarving = false;
+
+/**
+ * Get height for river generation (without river carving applied)
+ * This prevents feedback loops during river tracing
+ *
+ * @param {number} x - World X coordinate
+ * @param {number} z - World Z coordinate
+ * @param {number} seed - World seed
+ * @param {Object} template - Continent template
+ * @returns {number} Normalized height [0, 1] without river carving
+ */
+export function getHeightForRiverGen(x, z, seed, template) {
+    _skipRiverCarving = true;
+    const height = getHeightAtNormalized(x, z, seed, template);
+    _skipRiverCarving = false;
+    return height;
+}
+
+/**
  * Apply river carving to terrain height
  * Creates V-shaped valley profile with depth based on river width
  *
@@ -698,6 +721,52 @@ function getBaseTerrainNoise(x, z, seed) {
 }
 
 /**
+ * Calculate inland distance factor for elevation gradient
+ * Creates higher elevation in continental interiors, lower near coasts
+ * This is critical for river flow - rivers need consistent downhill to ocean
+ *
+ * @param {number} x - World X coordinate
+ * @param {number} z - World Z coordinate
+ * @param {number} seed - World seed
+ * @param {Object} template - Continent template
+ * @returns {number} Inland factor [0, 1]: 0 = at coast, 1 = deep inland
+ */
+function getInlandFactor(x, z, seed, template) {
+    // Sample continentalness in a ring around the point to estimate coast distance
+    const sampleDistances = [50, 100, 200, 400];
+    const sampleCount = 8;
+
+    let totalOceanProximity = 0;
+    let samples = 0;
+
+    for (const radius of sampleDistances) {
+        for (let i = 0; i < sampleCount; i++) {
+            const angle = (i / sampleCount) * Math.PI * 2;
+            const sx = x + Math.cos(angle) * radius;
+            const sz = z + Math.sin(angle) * radius;
+
+            const continental = getEffectiveContinentalness(sx, sz, seed, template);
+
+            // If any nearby sample is ocean (continental < 0.15), we're near coast
+            if (continental < 0.15) {
+                // Weight by inverse distance - closer ocean = lower inland factor
+                totalOceanProximity += (1 - radius / 500);
+                samples++;
+            }
+        }
+    }
+
+    if (samples === 0) {
+        // No ocean found nearby - we're deep inland
+        return 1.0;
+    }
+
+    // Average ocean proximity, invert to get inland factor
+    const avgOceanProximity = totalOceanProximity / samples;
+    return Math.max(0, 1 - avgOceanProximity * 1.5);
+}
+
+/**
  * Calculate normalized terrain height at world position
  * All calculations work in [0, 1] space before final scaling.
  *
@@ -736,6 +805,12 @@ export function getHeightAtNormalized(x, z, seed, template = DEFAULT_TEMPLATE) {
     // Map noise to biome's height range
     let height = biomeHeightBand.min + baseNoise * (biomeHeightBand.max - biomeHeightBand.min);
 
+    // INLAND ELEVATION BOOST - Critical for river flow!
+    // Adds elevation based on distance from coast, creating consistent slope toward ocean
+    const inlandFactor = getInlandFactor(x, z, seed, template);
+    const inlandBoost = inlandFactor * 0.15; // Up to 15% height boost deep inland
+    height += inlandBoost;
+
     // Mountain boost - ADDITIVE to push toward peaks
     if (modifiers.mountainBoost > 0) {
         // Get ridge noise for mountain detail
@@ -768,9 +843,12 @@ export function getHeightAtNormalized(x, z, seed, template = DEFAULT_TEMPLATE) {
     }
 
     // Apply river carving (after all terrain modifiers)
-    const riverInfluence = getRiverInfluenceAt(x, z);
-    if (riverInfluence) {
-        height = applyRiverCarving(height, riverInfluence);
+    // Skip during river generation to avoid feedback loop
+    if (!_skipRiverCarving) {
+        const riverInfluence = getRiverInfluenceAt(x, z);
+        if (riverInfluence) {
+            height = applyRiverCarving(height, riverInfluence);
+        }
     }
 
     // Final clamp to valid normalized range
