@@ -216,17 +216,30 @@ export function getHeightForRiverGen(x, z, seed, template) {
 
 /**
  * Apply river carving to terrain height
- * Creates V-shaped valley profile with depth based on river width
+ * Creates V-shaped valley profile with depth based on river's stored elevation.
+ * Rivers with per-point elevation carve to their stored elevation;
+ * legacy rivers without elevation data fall back to fixed depth.
  *
  * @param {number} baseHeight - Original normalized height [0, 1]
  * @param {Object} riverInfluence - Influence data from getRiverInfluenceAt
  * @returns {number} Carved normalized height [0, 1]
  */
 function applyRiverCarving(baseHeight, riverInfluence) {
-    const { width, centerDistance, influence } = riverInfluence;
+    const { width, centerDistance, influence, elevation } = riverInfluence;
 
-    // River bed height (slightly below sea level for water fill)
-    const riverBed = HEIGHT_CONFIG.bands.seaLevel - 0.02;  // ~0.08 normalized
+    // Determine river bed height:
+    // - If river has stored elevation, use it (slightly below for water channel)
+    // - Otherwise fall back to fixed depth (legacy behavior)
+    let riverBed;
+    if (elevation !== null && elevation !== undefined) {
+        // River bed is slightly below the stored river elevation
+        // This creates a shallow channel for water to fill
+        const bedDepth = 0.02;  // 2% below river surface elevation
+        riverBed = Math.max(HEIGHT_CONFIG.bands.deepOceanFloor, elevation - bedDepth);
+    } else {
+        // Legacy fallback: fixed depth below sea level
+        riverBed = HEIGHT_CONFIG.bands.seaLevel - 0.02;  // ~0.08 normalized
+    }
 
     // Profile: V-shape using centerDistance
     // centerDistance: 0 = center, 1 = edge

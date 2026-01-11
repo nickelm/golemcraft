@@ -72,6 +72,7 @@ export class LinearFeature {
      * @param {Object} properties - Additional properties
      * @param {number} [properties.width=2] - Default width of the feature
      * @param {number[]} [properties.widths] - Per-point widths (optional, for varying width)
+     * @param {number[]} [properties.elevations] - Per-point elevations (optional, for rivers)
      */
     constructor(type, path, properties = {}) {
         this.id = `feature_${featureIdCounter++}`;
@@ -81,6 +82,8 @@ export class LinearFeature {
             width: properties.width || 2,
             ...properties
         };
+        // Store elevations array if provided (for rivers with per-point elevation)
+        this.elevations = properties.elevations || null;
     }
 
     /**
@@ -106,6 +109,33 @@ export class LinearFeature {
         const nextIndex = Math.min(index + 1, this.path.length - 1);
         const width2 = this.getWidthAt(nextIndex);
         return width1 + (width2 - width1) * t;
+    }
+
+    /**
+     * Get elevation at a specific path point index
+     * @param {number} index - Path point index
+     * @returns {number|null} Normalized elevation [0, 1] or null if not available
+     */
+    getElevationAt(index) {
+        if (!this.elevations || this.elevations[index] === undefined) {
+            return null;
+        }
+        return this.elevations[index];
+    }
+
+    /**
+     * Get interpolated elevation at a position along a segment
+     * @param {number} index - Start index of segment
+     * @param {number} t - Interpolation factor (0-1 along segment)
+     * @returns {number|null} Interpolated elevation or null if not available
+     */
+    getElevationAtT(index, t) {
+        if (!this.elevations) return null;
+        const elev1 = this.getElevationAt(index);
+        const nextIndex = Math.min(index + 1, this.path.length - 1);
+        const elev2 = this.getElevationAt(nextIndex);
+        if (elev1 === null || elev2 === null) return null;
+        return elev1 + (elev2 - elev1) * t;
     }
 
     /**
@@ -149,7 +179,7 @@ export class LinearFeature {
      * Get influence at world position
      * @param {number} worldX - World X coordinate
      * @param {number} worldZ - World Z coordinate
-     * @returns {{ distance: number, width: number, influence: number, centerDistance: number } | null}
+     * @returns {{ distance: number, width: number, influence: number, centerDistance: number, elevation: number|null } | null}
      */
     getInfluence(worldX, worldZ) {
         const nearest = this.getNearestPoint(worldX, worldZ);
@@ -160,11 +190,15 @@ export class LinearFeature {
             return null;
         }
 
+        // Get elevation if available (for rivers with per-point elevation)
+        const elevation = this.getElevationAtT(nearest.index, nearest.t);
+
         return {
             distance: nearest.distance,
             width: width,
             influence: 1 - (nearest.distance / blendDistance),
-            centerDistance: nearest.distance / (width / 2)  // 0 = center, 1 = edge, >1 = outside core
+            centerDistance: nearest.distance / (width / 2),  // 0 = center, 1 = edge, >1 = outside core
+            elevation: elevation  // null if not available, otherwise normalized [0,1]
         };
     }
 

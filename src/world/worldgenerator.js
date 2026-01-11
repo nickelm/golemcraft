@@ -44,6 +44,7 @@ const RIVER_CONFIG = {
     gradientEpsilon: 16,        // Sample distance for gradient calculation (larger for smoother flow)
     meanderStrength: 0.25,      // How much rivers curve in flat areas
     minGradient: 0.0005,        // Minimum gradient before stopping (very small to keep flowing)
+    minDescentPerStep: 0.001,   // Minimum elevation drop per step in flat terrain
     // River width categories (blocks)
     widths: {
         stream: { min: 3, max: 5 },
@@ -156,17 +157,18 @@ export class WorldGenerator {
         console.log(`River generation: found ${sources.length} potential sources`);
 
         for (const source of sources) {
-            // Trace river path downhill
-            const riverPath = this._traceRiverDownhill(source, riverSeed);
+            // Trace river path downhill (now returns { path, elevations })
+            const { path: riverPath, elevations } = this._traceRiverDownhill(source, riverSeed);
 
             if (riverPath.length >= RIVER_CONFIG.minPathLength) {
                 // Calculate width at each point (widens downstream)
                 const widths = this._calculateRiverWidths(riverPath, source);
 
-                // Create LinearFeature for this river
+                // Create LinearFeature for this river with per-point elevations
                 const river = new LinearFeature('river', riverPath, {
                     width: widths[0],
                     widths: widths,
+                    elevations: elevations,  // Per-point monotonically descending elevations
                     sourceElevation: source.elevation,
                     riverType: this._getRiverType(widths[widths.length - 1])
                 });
@@ -230,14 +232,16 @@ export class WorldGenerator {
 
     /**
      * Trace a river path downhill from source to ocean/lake
-     * Uses a combination of gradient descent and ocean-seeking behavior
+     * Uses a combination of gradient descent and ocean-seeking behavior.
+     * Tracks elevation at each point and enforces monotonic descent.
      * @private
      * @param {Object} source - Source position {x, z, elevation}
      * @param {number} riverSeed - Derived seed for determinism
-     * @returns {Array<{x: number, z: number}>} Path points
+     * @returns {{path: Array<{x: number, z: number}>, elevations: number[]}} Path points and elevations
      */
     _traceRiverDownhill(source, riverSeed) {
         const path = [{ x: source.x, z: source.z }];
+        const elevations = [source.elevation];  // Track elevation at each point
         let current = { x: source.x, z: source.z };
         let currentHeight = source.elevation;
         const stepSize = RIVER_CONFIG.stepSize;
@@ -296,9 +300,11 @@ export class WorldGenerator {
             };
 
             // Check if we've reached water (ocean or lake)
-            const nextHeight = getHeightForRiverGen(next.x, next.z, this.seed, this.template);
-            if (nextHeight < RIVER_CONFIG.seaLevel) {
+            const nextTerrainHeight = getHeightForRiverGen(next.x, next.z, this.seed, this.template);
+            if (nextTerrainHeight < RIVER_CONFIG.seaLevel) {
                 path.push(next);
+                // Final elevation at sea level
+                elevations.push(RIVER_CONFIG.seaLevel);
                 break;
             }
 
@@ -309,16 +315,33 @@ export class WorldGenerator {
                     x: Math.max(WORLD_BOUNDS.min, Math.min(WORLD_BOUNDS.max, next.x)),
                     z: Math.max(WORLD_BOUNDS.min, Math.min(WORLD_BOUNDS.max, next.z))
                 });
+                // Use current height at boundary
+                elevations.push(currentHeight);
                 break;
             }
 
+            // ENFORCE MONOTONIC DESCENT
+            // River elevation must never increase - take minimum of current and terrain
+            let monotonicHeight = Math.min(currentHeight, nextTerrainHeight);
+
+            // In flat terrain, force minimum descent to ensure river always flows downhill
+            if (stuckCounter > 0) {
+                monotonicHeight = Math.min(
+                    monotonicHeight,
+                    currentHeight - RIVER_CONFIG.minDescentPerStep
+                );
+            }
+
+            // Never go below sea level
+            monotonicHeight = Math.max(RIVER_CONFIG.seaLevel, monotonicHeight);
+
             path.push(next);
+            elevations.push(monotonicHeight);
             current = next;
-            // Rivers always carve down - never let currentHeight increase
-            currentHeight = Math.min(currentHeight, nextHeight);
+            currentHeight = monotonicHeight;
         }
 
-        return path;
+        return { path, elevations };
     }
 
     /**
@@ -497,6 +520,7 @@ export class WorldGenerator {
 
     /**
      * Merge rivers that meet (create tributary system)
+     * Handles width widening and elevation smoothing at confluences.
      * @private
      * @param {Array<LinearFeature>} rivers - Array of river features (modified in place)
      */
@@ -529,6 +553,26 @@ export class WorldGenerator {
                         const tribWidth = tributary.getWidthAt(Math.min(k - junctionIndex, tribPath.length - 1));
                         // Add tributary flow (simplified: add 50% of tributary width)
                         mainRiver.properties.widths[k] = currentWidth + tribWidth * 0.5;
+                    }
+
+                    // Smooth tributary elevation at junction
+                    // Snap tributary end elevation to main river elevation at junction point
+                    if (tributary.elevations && mainRiver.elevations) {
+                        const mainElevation = mainRiver.getElevationAtT(nearest.index, nearest.t);
+                        if (mainElevation !== null) {
+                            const tribEndIndex = tributary.elevations.length - 1;
+                            // Smooth last few points of tributary to join main river elevation
+                            const smoothLength = Math.min(5, tribEndIndex);
+                            for (let k = 0; k <= smoothLength; k++) {
+                                const idx = tribEndIndex - smoothLength + k;
+                                if (idx >= 0) {
+                                    const t = k / smoothLength;  // 0 at start of smooth, 1 at junction
+                                    const originalElev = tributary.elevations[idx];
+                                    // Interpolate toward main river elevation
+                                    tributary.elevations[idx] = originalElev + (mainElevation - originalElev) * t * t;
+                                }
+                            }
+                        }
                     }
 
                     // Mark tributary as merged but keep it (it's still a visible river)
