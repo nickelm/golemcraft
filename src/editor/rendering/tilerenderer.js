@@ -53,37 +53,47 @@ export class TileRenderer {
         // Subscribe to state changes
         this.state.subscribe(this._onStateChange);
 
-        // Initialize
+        // Start with sync rendering immediately (no waiting)
+        this.useAsyncRendering = false;
+        this.tileManagerReady = false;
+
+        // Initialize worker in background (non-blocking)
         this._initTileManager();
+
+        // Render immediately with sync fallback
+        this.scheduleRender();
     }
 
     /**
-     * Initialize the tile manager with web worker
+     * Initialize the tile manager with web worker (non-blocking)
+     * Runs in background while sync rendering provides immediate feedback
      */
     async _initTileManager() {
         try {
             this.tileManager = new TileManager(this.tileCache, this._onTileReady);
 
-            const success = await this.tileManager.initWorker(
+            // Don't await - let it initialize in background
+            this.tileManager.initWorker(
                 this.state.seed,
                 this.state.template
-            );
-
-            if (success) {
-                this.tileManager.setMode(this.state.mode);
-                this.tileManagerReady = true;
-                this.useAsyncRendering = true;
-                console.log('TileRenderer: Worker initialized');
-                this.scheduleRender();
-            } else {
-                console.warn('TileRenderer: Worker failed, using sync fallback');
-                this.useAsyncRendering = false;
-                this.scheduleRender();
-            }
+            ).then(success => {
+                if (success) {
+                    this.tileManager.setMode(this.state.mode);
+                    this.tileManagerReady = true;
+                    this.useAsyncRendering = true;
+                    console.log('TileRenderer: Worker ready, switching to async rendering');
+                    this.scheduleRender();
+                } else {
+                    console.warn('TileRenderer: Worker failed, continuing with sync rendering');
+                    // Already using sync, no change needed
+                }
+            }).catch(error => {
+                console.error('TileRenderer: Worker init error:', error);
+                // Already using sync, no change needed
+            });
         } catch (error) {
-            console.error('TileRenderer: Failed to init TileManager:', error);
-            this.useAsyncRendering = false;
-            this.scheduleRender();
+            console.error('TileRenderer: Failed to create TileManager:', error);
+            // Already using sync, no change needed
         }
     }
 
@@ -371,7 +381,7 @@ export class TileRenderer {
     }
 
     /**
-     * Synchronous render path - blocks while generating tiles
+     * Synchronous render path - uses fast instant previews
      * Used as fallback when Web Worker is not available
      */
     _renderSync(width, height) {
@@ -392,19 +402,32 @@ export class TileRenderer {
         const tileStartZ = alignToGrid(Math.floor(bounds.minZ));
         const tileEndZ = alignToGrid(Math.ceil(bounds.maxZ)) + worldTileSize;
 
-        this.ctx.imageSmoothingEnabled = zoom < 1;
+        // Use blocky upscaling for instant previews (pixel art style)
+        this.ctx.imageSmoothingEnabled = false;
 
         for (let tileWorldZ = tileStartZ; tileWorldZ < tileEndZ; tileWorldZ += worldTileSize) {
             for (let tileWorldX = tileStartX; tileWorldX < tileEndX; tileWorldX += worldTileSize) {
-                // Get tile (from cache or render it synchronously)
-                const tileImageData = this.tileCache.getTile(
-                    tileWorldX,
-                    tileWorldZ,
-                    mode,
-                    seed,
-                    template,
-                    lodLevel
+                // Check cache first for any existing tile
+                const cached = this.tileCache.getBestAvailable(
+                    tileWorldX, tileWorldZ, mode, seed, lodLevel
                 );
+
+                let tileImageData;
+                let imageSize;
+
+                if (cached) {
+                    // Use cached tile (any refinement level)
+                    tileImageData = cached.imageData;
+                    imageSize = cached.imageData.width;
+                } else {
+                    // Generate fast instant preview (4x4 grid = 16 samples, <1ms)
+                    tileImageData = this._generateInstantPreview(
+                        tileWorldX, tileWorldZ, lodLevel, seed, template, mode
+                    );
+                    imageSize = tileImageData.width;
+                    // Cache the preview for next render
+                    this.tileCache.setTile(tileWorldX, tileWorldZ, mode, seed, lodLevel, tileImageData, 0);
+                }
 
                 // Calculate screen position
                 const canvasX = halfWidth + (tileWorldX - viewX) * zoom;
@@ -412,12 +435,12 @@ export class TileRenderer {
                 const scaledSize = worldTileSize * zoom;
 
                 // Draw tile using reusable temp canvas
-                const { canvas: tempCanvas, ctx: tempCtx } = this._getTempCanvas(TILE_SIZE, TILE_SIZE);
+                const { canvas: tempCanvas, ctx: tempCtx } = this._getTempCanvas(imageSize, imageSize);
                 tempCtx.putImageData(tileImageData, 0, 0);
 
                 this.ctx.drawImage(
                     tempCanvas,
-                    0, 0, TILE_SIZE, TILE_SIZE,  // source rect
+                    0, 0, imageSize, imageSize,  // source rect
                     canvasX, canvasY, scaledSize, scaledSize  // dest rect
                 );
             }
