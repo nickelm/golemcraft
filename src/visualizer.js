@@ -1,6 +1,15 @@
 /**
  * Terrain Visualizer - 2D color map of noise layers
  *
+ * @deprecated This file is deprecated in favor of src/editor/
+ * The new Template Editor provides improved functionality including:
+ * - Multi-seed comparison view
+ * - Layer toggles
+ * - Modular component architecture
+ *
+ * See src/editor/editor.js for the new implementation.
+ * This file will be removed in a future version.
+ *
  * Imports worldgen.js to visualize terrain parameters in real-time.
  * Single source of truth - no duplicated generation logic.
  */
@@ -834,14 +843,20 @@ class TerrainVisualizer {
         const visibleTiles = this.tileManager.getVisibleTiles();
         let tilesDrawn = 0;
 
-        // Enable smoothing when zoomed out
-        this.ctx.imageSmoothingEnabled = this.zoom < 1;
-
-        // Draw cached tiles
+        // Draw cached tiles (supports progressive refinement with varying image sizes)
         for (const tile of visibleTiles) {
-            const tempCanvas = new OffscreenCanvas(tileSize, tileSize);
+            // Get actual image dimensions (may be smaller than tileSize for progressive previews)
+            const imageWidth = tile.imageData.width;
+            const imageHeight = tile.imageData.height;
+
+            const tempCanvas = new OffscreenCanvas(imageWidth, imageHeight);
             const tempCtx = tempCanvas.getContext('2d');
             tempCtx.putImageData(tile.imageData, 0, 0);
+
+            // Use blocky upscaling for low-resolution previews (pixel art style)
+            // Use smooth interpolation only for full resolution tiles when zoomed out
+            const isFullResolution = imageWidth >= tileSize;
+            this.ctx.imageSmoothingEnabled = isFullResolution && this.zoom < 1;
 
             this.ctx.drawImage(
                 tempCanvas,

@@ -7,6 +7,7 @@
 
 const MAX_PENDING_REQUESTS = 8;     // Max concurrent worker requests
 const TILE_SIZE = 128;              // Must match worker
+const MAX_REFINEMENT_LEVEL = 5;     // Full resolution level
 
 export class TileManager {
     /**
@@ -37,11 +38,14 @@ export class TileManager {
 
         // Request tracking
         this.nextRequestId = 1;
-        this.pendingRequests = new Map();  // requestId -> { tileX, tileZ, lodLevel, mode }
+        this.pendingRequests = new Map();  // requestId -> { tileX, tileZ, lodLevel, mode, refinementLevel }
         this.requestQueue = [];            // Tiles waiting to be sent to worker
 
         // Visible tiles cache (updated on viewport change)
         this.visibleTileCoords = [];
+
+        // Progressive rendering configuration
+        this.progressiveEnabled = true;    // Enable coarse-to-fine rendering
     }
 
     /**
@@ -148,7 +152,8 @@ export class TileManager {
 
     /**
      * Get tiles that are visible and cached (for render loop)
-     * @returns {Array<{tileX: number, tileZ: number, imageData: ImageData, screenX: number, screenY: number, scaledSize: number}>}
+     * Returns best available refinement level for each tile
+     * @returns {Array<{tileX: number, tileZ: number, imageData: ImageData, screenX: number, screenY: number, scaledSize: number, refinementLevel: number}>}
      */
     getVisibleTiles() {
         const result = [];
@@ -157,11 +162,12 @@ export class TileManager {
         const halfHeight = this.canvasHeight / 2;
 
         for (const { tileX, tileZ } of this.visibleTileCoords) {
-            const imageData = this.tileCache.getFromMemory(
+            // Get best available refinement for this tile
+            const best = this.tileCache.getBestAvailable(
                 tileX, tileZ, this.mode, this.seed, this.lodLevel
             );
 
-            if (imageData) {
+            if (best) {
                 // Calculate screen position
                 const screenX = halfWidth + (tileX - this.viewX) * this.zoom;
                 const screenY = halfHeight + (tileZ - this.viewZ) * this.zoom;
@@ -170,10 +176,11 @@ export class TileManager {
                 result.push({
                     tileX,
                     tileZ,
-                    imageData,
+                    imageData: best.imageData,
                     screenX,
                     screenY,
-                    scaledSize
+                    scaledSize,
+                    refinementLevel: best.refinementLevel
                 });
             }
         }
@@ -281,8 +288,8 @@ export class TileManager {
                     height
                 );
 
-                // Store in cache
-                this.tileCache.setTile(tileX, tileZ, mode, this.seed, lodLevel, imageData);
+                // Store in cache at full refinement level (5)
+                this.tileCache.setTile(tileX, tileZ, mode, this.seed, lodLevel, imageData, MAX_REFINEMENT_LEVEL);
 
                 // Trigger re-render
                 if (this.onTileReady) {
@@ -290,6 +297,33 @@ export class TileManager {
                 }
 
                 // Process more from queue
+                this._processQueue();
+                break;
+            }
+
+            case 'tile_progressive': {
+                // Progressive refinement tile
+                const { requestId, tileX, tileZ, lodLevel, refinementLevel, mode, buffer, width, height } = message;
+
+                // Remove from pending
+                this.pendingRequests.delete(requestId);
+
+                // Create ImageData from buffer (may be smaller than TILE_SIZE)
+                const imageData = new ImageData(
+                    new Uint8ClampedArray(buffer),
+                    width,
+                    height
+                );
+
+                // Store in cache with refinement level
+                this.tileCache.setTile(tileX, tileZ, mode, this.seed, lodLevel, imageData, refinementLevel);
+
+                // Trigger re-render
+                if (this.onTileReady) {
+                    this.onTileReady(tileX, tileZ);
+                }
+
+                // Process more from queue (including next refinement level)
                 this._processQueue();
                 break;
             }
@@ -395,39 +429,75 @@ export class TileManager {
     }
 
     /**
-     * Queue tiles that need generation
+     * Queue tiles that need generation (with progressive refinement support)
      * @private
      */
     _queueMissingTiles() {
         // Clear existing queue (viewport may have changed)
         this.requestQueue = [];
 
-        // Build set of already pending tile keys
+        // Build set of already pending tile keys (including refinement level)
         const pendingKeys = new Set();
         for (const req of this.pendingRequests.values()) {
-            pendingKeys.add(`${req.tileX},${req.tileZ},${req.lodLevel},${req.mode}`);
+            const refLevel = req.refinementLevel !== undefined ? req.refinementLevel : MAX_REFINEMENT_LEVEL;
+            pendingKeys.add(`${req.tileX},${req.tileZ},${req.lodLevel},${req.mode},${refLevel}`);
         }
 
-        // Add missing tiles to queue (already sorted by distance)
-        for (const { tileX, tileZ } of this.visibleTileCoords) {
-            const key = `${tileX},${tileZ},${this.lodLevel},${this.mode}`;
+        if (this.progressiveEnabled) {
+            // Progressive mode: queue next refinement level for each tile
+            for (const { tileX, tileZ } of this.visibleTileCoords) {
+                // Check current refinement level
+                const currentLevel = this.tileCache.getCurrentRefinementLevel(
+                    tileX, tileZ, this.mode, this.seed, this.lodLevel
+                );
 
-            // Skip if already cached
-            if (this.tileCache.hasTile(tileX, tileZ, this.mode, this.seed, this.lodLevel)) {
-                continue;
+                // If already at full resolution, skip
+                if (currentLevel >= MAX_REFINEMENT_LEVEL) {
+                    continue;
+                }
+
+                // Queue next refinement level (starting from 1, since 0 is done synchronously)
+                const nextLevel = Math.max(1, currentLevel + 1);
+                const key = `${tileX},${tileZ},${this.lodLevel},${this.mode},${nextLevel}`;
+
+                // Skip if already pending
+                if (pendingKeys.has(key)) {
+                    continue;
+                }
+
+                this.requestQueue.push({
+                    tileX,
+                    tileZ,
+                    lodLevel: this.lodLevel,
+                    mode: this.mode,
+                    refinementLevel: nextLevel,
+                    progressive: true
+                });
             }
+        } else {
+            // Non-progressive mode: queue full resolution tiles
+            for (const { tileX, tileZ } of this.visibleTileCoords) {
+                const key = `${tileX},${tileZ},${this.lodLevel},${this.mode},${MAX_REFINEMENT_LEVEL}`;
 
-            // Skip if already pending
-            if (pendingKeys.has(key)) {
-                continue;
+                // Skip if already cached at full resolution
+                if (this.tileCache.hasTile(tileX, tileZ, this.mode, this.seed, this.lodLevel)) {
+                    continue;
+                }
+
+                // Skip if already pending
+                if (pendingKeys.has(key)) {
+                    continue;
+                }
+
+                this.requestQueue.push({
+                    tileX,
+                    tileZ,
+                    lodLevel: this.lodLevel,
+                    mode: this.mode,
+                    refinementLevel: MAX_REFINEMENT_LEVEL,
+                    progressive: false
+                });
             }
-
-            this.requestQueue.push({
-                tileX,
-                tileZ,
-                lodLevel: this.lodLevel,
-                mode: this.mode
-            });
         }
     }
 
@@ -450,23 +520,49 @@ export class TileManager {
                 tileX: item.tileX,
                 tileZ: item.tileZ,
                 lodLevel: item.lodLevel,
-                mode: item.mode
+                mode: item.mode,
+                refinementLevel: item.refinementLevel
             });
 
-            // Send to worker
-            this.worker.postMessage({
-                type: 'generate',
-                data: {
-                    requestId,
-                    tileX: item.tileX,
-                    tileZ: item.tileZ,
-                    lodLevel: item.lodLevel,
-                    tileSize: TILE_SIZE,
-                    seed: this.seed,
-                    mode: item.mode,
-                    template: this.template
-                }
-            });
+            if (item.progressive) {
+                // Send progressive refinement request
+                this.worker.postMessage({
+                    type: 'generate_progressive',
+                    data: {
+                        requestId,
+                        tileX: item.tileX,
+                        tileZ: item.tileZ,
+                        lodLevel: item.lodLevel,
+                        refinementLevel: item.refinementLevel,
+                        seed: this.seed,
+                        mode: item.mode,
+                        template: this.template
+                    }
+                });
+            } else {
+                // Send full resolution request
+                this.worker.postMessage({
+                    type: 'generate',
+                    data: {
+                        requestId,
+                        tileX: item.tileX,
+                        tileZ: item.tileZ,
+                        lodLevel: item.lodLevel,
+                        tileSize: TILE_SIZE,
+                        seed: this.seed,
+                        mode: item.mode,
+                        template: this.template
+                    }
+                });
+            }
         }
+    }
+
+    /**
+     * Enable or disable progressive rendering
+     * @param {boolean} enabled - Whether to use coarse-to-fine rendering
+     */
+    setProgressiveEnabled(enabled) {
+        this.progressiveEnabled = enabled;
     }
 }

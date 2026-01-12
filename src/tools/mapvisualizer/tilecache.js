@@ -35,9 +35,18 @@ export class TileCache {
    * @param {string} mode - Visualization mode
    * @param {number} seed - World seed
    * @param {number} lodLevel - LOD level (0 = 1:1, 1 = 1:2, 2 = 1:4, etc.)
+   * @param {number} refinementLevel - Progressive refinement level (0-5)
    * @returns {string} Cache key
    */
-  _makeKey(worldX, worldZ, mode, seed, lodLevel = 0) {
+  _makeKey(worldX, worldZ, mode, seed, lodLevel = 0, refinementLevel = 5) {
+    return `${worldX},${worldZ},${mode},${seed},${lodLevel},${refinementLevel}`;
+  }
+
+  /**
+   * Generate base key for a tile (without refinement level, for lookups)
+   * @private
+   */
+  _makeBaseKey(worldX, worldZ, mode, seed, lodLevel = 0) {
     return `${worldX},${worldZ},${mode},${seed},${lodLevel}`;
   }
 
@@ -367,17 +376,32 @@ export class TileCache {
   }
 
   /**
-   * Check if tile exists in memory cache
+   * Check if tile exists in memory cache at full resolution (refinement level 5)
+   * For progressive rendering, use getCurrentRefinementLevel() instead
    * @param {number} worldX - Tile world X coordinate
    * @param {number} worldZ - Tile world Z coordinate
    * @param {string} mode - Visualization mode
    * @param {number} seed - World seed
    * @param {number} lodLevel - LOD level
-   * @returns {boolean} True if tile is cached in memory
+   * @returns {boolean} True if tile is cached at full resolution
    */
   hasTile(worldX, worldZ, mode, seed, lodLevel = 0) {
-    const key = this._makeKey(worldX, worldZ, mode, seed, lodLevel);
+    // Check for full resolution (level 5) for backwards compatibility
+    const key = this._makeKey(worldX, worldZ, mode, seed, lodLevel, 5);
     return this.cache.has(key);
+  }
+
+  /**
+   * Check if tile has any refinement level cached
+   * @param {number} worldX - Tile world X coordinate
+   * @param {number} worldZ - Tile world Z coordinate
+   * @param {string} mode - Visualization mode
+   * @param {number} seed - World seed
+   * @param {number} lodLevel - LOD level
+   * @returns {boolean} True if any refinement level is cached
+   */
+  hasAnyRefinement(worldX, worldZ, mode, seed, lodLevel = 0) {
+    return this.getCurrentRefinementLevel(worldX, worldZ, mode, seed, lodLevel) >= 0;
   }
 
   /**
@@ -388,9 +412,10 @@ export class TileCache {
    * @param {number} seed - World seed
    * @param {number} lodLevel - LOD level
    * @param {ImageData} imageData - Tile image data to store
+   * @param {number} refinementLevel - Progressive refinement level (0-5, default 5 = full)
    */
-  setTile(worldX, worldZ, mode, seed, lodLevel, imageData) {
-    const key = this._makeKey(worldX, worldZ, mode, seed, lodLevel);
+  setTile(worldX, worldZ, mode, seed, lodLevel, imageData, refinementLevel = 5) {
+    const key = this._makeKey(worldX, worldZ, mode, seed, lodLevel, refinementLevel);
 
     // Evict oldest if over capacity
     while (this.cache.size >= this.maxTiles && this.accessOrder.length > 0) {
@@ -404,9 +429,79 @@ export class TileCache {
       this.accessOrder.splice(idx, 1);
     }
 
-    // Cache the tile
-    this.cache.set(key, { imageData, lastUsed: Date.now() });
+    // Cache the tile with refinement metadata
+    this.cache.set(key, { imageData, lastUsed: Date.now(), refinementLevel });
     this.accessOrder.push(key);
+  }
+
+  /**
+   * Get the best available refinement level for a tile
+   * Returns the highest refinement level cached, or null if none cached
+   * @param {number} worldX - Tile world X coordinate
+   * @param {number} worldZ - Tile world Z coordinate
+   * @param {string} mode - Visualization mode
+   * @param {number} seed - World seed
+   * @param {number} lodLevel - LOD level
+   * @returns {{imageData: ImageData, refinementLevel: number}|null}
+   */
+  getBestAvailable(worldX, worldZ, mode, seed, lodLevel = 0) {
+    let best = null;
+    let bestLevel = -1;
+
+    // Check all refinement levels (0-5), return highest available
+    for (let refLevel = 5; refLevel >= 0; refLevel--) {
+      const key = this._makeKey(worldX, worldZ, mode, seed, lodLevel, refLevel);
+      if (this.cache.has(key)) {
+        const entry = this.cache.get(key);
+        if (refLevel > bestLevel) {
+          best = { imageData: entry.imageData, refinementLevel: refLevel };
+          bestLevel = refLevel;
+        }
+        // Update LRU for accessed entry
+        const idx = this.accessOrder.indexOf(key);
+        if (idx !== -1) {
+          this.accessOrder.splice(idx, 1);
+        }
+        this.accessOrder.push(key);
+        // Return immediately if we found the highest level (full resolution)
+        if (refLevel === 5) break;
+      }
+    }
+
+    return best;
+  }
+
+  /**
+   * Check if a tile has full resolution (refinement level 5) cached
+   * @param {number} worldX - Tile world X coordinate
+   * @param {number} worldZ - Tile world Z coordinate
+   * @param {string} mode - Visualization mode
+   * @param {number} seed - World seed
+   * @param {number} lodLevel - LOD level
+   * @returns {boolean}
+   */
+  hasFullResolution(worldX, worldZ, mode, seed, lodLevel = 0) {
+    const key = this._makeKey(worldX, worldZ, mode, seed, lodLevel, 5);
+    return this.cache.has(key);
+  }
+
+  /**
+   * Get the current refinement level for a tile
+   * @param {number} worldX - Tile world X coordinate
+   * @param {number} worldZ - Tile world Z coordinate
+   * @param {string} mode - Visualization mode
+   * @param {number} seed - World seed
+   * @param {number} lodLevel - LOD level
+   * @returns {number} Current refinement level (0-5), or -1 if not cached
+   */
+  getCurrentRefinementLevel(worldX, worldZ, mode, seed, lodLevel = 0) {
+    for (let refLevel = 5; refLevel >= 0; refLevel--) {
+      const key = this._makeKey(worldX, worldZ, mode, seed, lodLevel, refLevel);
+      if (this.cache.has(key)) {
+        return refLevel;
+      }
+    }
+    return -1;
   }
 
   /**

@@ -1,12 +1,15 @@
 /**
- * TileGeneratorWorker - Web Worker for off-thread terrain tile generation
+ * Template Editor - Tile Generation Worker
  *
+ * Web Worker for off-thread terrain tile generation.
  * Generates 128x128 ImageData tiles for the terrain visualizer.
  * Uses Transferable ArrayBuffers for zero-copy data transfer.
+ *
+ * Based on tilegenerator.worker.js with editor-specific adaptations.
  */
 
-import { getTerrainParams } from '../world/terrain/worldgen.js';
-import { getColorForMode } from '../tools/mapvisualizer/colors.js';
+import { getTerrainParams } from '../../world/terrain/worldgen.js';
+import { getColorForMode } from '../../tools/mapvisualizer/colors.js';
 
 const TILE_SIZE = 128;
 
@@ -170,7 +173,7 @@ self.onmessage = function(e) {
                     height: TILE_SIZE
                 }, [buffer]);
             } catch (error) {
-                console.error(`Worker: Error generating tile ${requestId}:`, error);
+                console.error(`EditorWorker: Error generating tile ${requestId}:`, error);
                 self.postMessage({
                     type: 'error',
                     requestId,
@@ -211,7 +214,7 @@ self.onmessage = function(e) {
                     height: result.height
                 }, [result.buffer]);
             } catch (error) {
-                console.error(`Worker: Error generating progressive tile ${requestId}:`, error);
+                console.error(`EditorWorker: Error generating progressive tile ${requestId}:`, error);
                 self.postMessage({
                     type: 'error',
                     requestId,
@@ -231,7 +234,7 @@ self.onmessage = function(e) {
         }
 
         default:
-            console.warn('TileGeneratorWorker: Unknown message type:', type);
+            console.warn('EditorWorker: Unknown message type:', type);
     }
 };
 

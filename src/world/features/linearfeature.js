@@ -221,6 +221,41 @@ export class LinearFeature {
 
         return { minX, maxX, minZ, maxZ };
     }
+
+    // =========================================================================
+    // Serialization
+    // =========================================================================
+
+    /**
+     * Serialize feature to JSON-compatible object
+     * @returns {Object} Serialized feature data
+     */
+    toJSON() {
+        return {
+            id: this.id,
+            type: this.type,
+            path: this.path,
+            properties: this.properties,
+            elevations: this.elevations
+        };
+    }
+
+    /**
+     * Create a LinearFeature from serialized JSON data
+     * @param {Object} json - Serialized feature data
+     * @returns {LinearFeature} Restored feature instance
+     */
+    static fromJSON(json) {
+        const feature = new LinearFeature(json.type, json.path, {
+            ...json.properties,
+            elevations: json.elevations
+        });
+        // Restore original ID
+        if (json.id) {
+            feature.id = json.id;
+        }
+        return feature;
+    }
 }
 
 // =============================================================================
