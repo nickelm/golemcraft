@@ -1,17 +1,16 @@
 /**
  * Template Editor - StatusBar
  *
- * Displays cache statistics, pending tiles, and LOD information.
+ * Displays render progress and bounds information.
  */
 
 import { EVENTS } from '../core/constants.js';
-import { calculateLOD } from '../utils/coordinates.js';
 
 export class StatusBar {
     /**
      * @param {EditorState} state - Editor state instance
      * @param {EventBus} eventBus - Event bus for communication
-     * @param {TileRenderer} tileRenderer - Tile renderer for cache stats
+     * @param {TileRenderer} tileRenderer - Tile renderer for render stats
      */
     constructor(state, eventBus, tileRenderer) {
         this.state = state;
@@ -25,33 +24,61 @@ export class StatusBar {
             lod: document.getElementById('status-lod')
         };
 
-        // Update interval
-        this.updateInterval = null;
-
         // Bind methods
+        this._onRefinementProgress = this._onRefinementProgress.bind(this);
+        this._onBoundsChange = this._onBoundsChange.bind(this);
         this._update = this._update.bind(this);
 
-        // Start periodic updates
-        this._startUpdates();
+        // Subscribe to events
+        this.eventBus.on(EVENTS.REFINEMENT_PROGRESS, this._onRefinementProgress);
+        this.eventBus.on(EVENTS.RENDER_BOUNDS_CHANGE, this._onBoundsChange);
+
+        // Initial update
+        this._update();
     }
 
-    _startUpdates() {
-        // Update every 250ms for smooth stats display
-        this.updateInterval = setInterval(this._update, 250);
-        this._update(); // Initial update
+    _onRefinementProgress({ level, total, progress }) {
+        const percent = Math.round(progress * 100);
+        if (level < total - 1) {
+            this.elements.lod.textContent = `Rendering: ${percent}%`;
+        } else {
+            this.elements.lod.textContent = `Ready`;
+        }
+    }
+
+    _onBoundsChange({ bounds }) {
+        if (bounds) {
+            const width = Math.round(bounds.maxX - bounds.minX);
+            const height = Math.round(bounds.maxZ - bounds.minZ);
+            this.elements.cache.textContent = `${width}x${height} blocks`;
+        }
     }
 
     _update() {
-        const stats = this.tileRenderer.getCacheStats();
+        const stats = this.tileRenderer.getRenderStats();
 
-        this.elements.cache.textContent = `Cache: ${stats.cached}/${stats.maxTiles} tiles`;
-        this.elements.pending.textContent = `Pending: ${stats.pending}`;
-        this.elements.lod.textContent = `LOD: ${stats.lod}`;
+        if (stats.renderInProgress) {
+            const percent = Math.round(((stats.level + 1) / stats.totalLevels) * 100);
+            this.elements.lod.textContent = `Rendering: ${percent}%`;
+        } else if (stats.level >= 0) {
+            this.elements.lod.textContent = `Ready`;
+        } else {
+            this.elements.lod.textContent = `Starting...`;
+        }
+
+        if (stats.bounds) {
+            const width = Math.round(stats.bounds.maxX - stats.bounds.minX);
+            const height = Math.round(stats.bounds.maxZ - stats.bounds.minZ);
+            this.elements.cache.textContent = `${width}x${height} blocks`;
+        } else {
+            this.elements.cache.textContent = `Probing...`;
+        }
+
+        this.elements.pending.textContent = ``;
     }
 
     destroy() {
-        if (this.updateInterval) {
-            clearInterval(this.updateInterval);
-        }
+        this.eventBus.off(EVENTS.REFINEMENT_PROGRESS, this._onRefinementProgress);
+        this.eventBus.off(EVENTS.RENDER_BOUNDS_CHANGE, this._onBoundsChange);
     }
 }

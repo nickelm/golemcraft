@@ -6,7 +6,7 @@
  * parts of the state change.
  */
 
-import { LAYERS, DEFAULT_ZOOM, EVENTS } from './constants.js';
+import { LAYERS, DEFAULT_ZOOM, EVENTS, EDIT_STAGES } from './constants.js';
 import { VERDANIA_TEMPLATE } from '../../world/terrain/templates.js';
 import { WorldGenerator } from '../../world/worldgenerator.js';
 
@@ -48,6 +48,15 @@ export class EditorState {
         // World data (lazy-loaded via WorldGenerator)
         this._worldData = null;
         this._worldDataDirty = true;
+
+        // Edit mode state
+        this._isEditMode = false;
+        this._editStage = 1;
+        this._editData = null;
+        this._selectedTool = 'select';
+        this._selectedPointIndex = -1;
+        this._hoveredPointIndex = -1;
+        this._selectedFeature = null; // { type: 'primarySpine'|'secondarySpine'|'hill'|etc, index: number }
     }
 
     // --- View State ---
@@ -144,6 +153,187 @@ export class EditorState {
         this._emit(EVENTS.HOVER_UPDATE, { x, z, params });
     }
 
+    // --- Edit Mode State ---
+
+    get isEditMode() { return this._isEditMode; }
+
+    setEditMode(enabled) {
+        if (this._isEditMode !== enabled) {
+            this._isEditMode = enabled;
+            if (enabled && !this._editData) {
+                this._initializeEditData();
+            }
+            this._emit(EVENTS.EDIT_MODE_TOGGLE, { enabled });
+        }
+    }
+
+    get editStage() { return this._editStage; }
+
+    setEditStage(stage) {
+        if (stage >= 1 && stage <= 4 && this._editStage !== stage) {
+            this._editStage = stage;
+            this._selectedTool = EDIT_STAGES[stage].defaultTool;
+            this._selectedPointIndex = -1;
+            this._selectedFeature = null;
+            this._emit(EVENTS.EDIT_STAGE_CHANGE, { stage });
+            this._emit(EVENTS.EDIT_TOOL_CHANGE, { tool: this._selectedTool });
+        }
+    }
+
+    get editData() { return this._editData; }
+
+    setEditData(data) {
+        this._editData = data;
+        this._emit(EVENTS.EDIT_DATA_CHANGE, { editData: data, source: 'set' });
+    }
+
+    get selectedTool() { return this._selectedTool; }
+
+    setSelectedTool(tool) {
+        if (this._selectedTool !== tool) {
+            this._selectedTool = tool;
+            this._emit(EVENTS.EDIT_TOOL_CHANGE, { tool });
+        }
+    }
+
+    get selectedPointIndex() { return this._selectedPointIndex; }
+
+    setSelectedPointIndex(index) {
+        if (this._selectedPointIndex !== index) {
+            this._selectedPointIndex = index;
+            this._emit(EVENTS.EDIT_SELECTION_CHANGE, { pointIndex: index, feature: this._selectedFeature });
+        }
+    }
+
+    get hoveredPointIndex() { return this._hoveredPointIndex; }
+
+    setHoveredPointIndex(index) {
+        this._hoveredPointIndex = index;
+    }
+
+    get selectedFeature() { return this._selectedFeature; }
+
+    setSelectedFeature(feature) {
+        this._selectedFeature = feature;
+        this._emit(EVENTS.EDIT_SELECTION_CHANGE, { pointIndex: this._selectedPointIndex, feature });
+    }
+
+    /**
+     * Initialize empty edit data structure
+     * @private
+     */
+    _initializeEditData() {
+        this._editData = {
+            stage1: {
+                spine: {
+                    points: [],
+                    elevation: 0.8,
+                    width: 0.1
+                },
+                landExtent: { inner: 0.2, outer: 0.2 },
+                bayCenter: null
+            },
+            stage2: {
+                secondarySpines: [],
+                hills: [],
+                depressions: []
+            },
+            stage3: {
+                waterSources: [],
+                lakeRegions: [],
+                riverDensity: 0.5,
+                riverMeandering: 0.5
+            },
+            stage4: {
+                temperatureGradient: { direction: { x: 0, z: -1 }, strength: 1.0 },
+                baseHumidity: 0.5,
+                excludedBiomes: []
+            },
+            lastModified: Date.now()
+        };
+    }
+
+    /**
+     * Initialize edit data from an existing template
+     * @param {Object} template - Template to convert to edit data
+     */
+    initializeEditDataFromTemplate(template) {
+        this._initializeEditData();
+
+        // Copy primary spine if present
+        if (template.spine && template.spine.points) {
+            this._editData.stage1.spine = {
+                points: template.spine.points.map(p => ({ x: p.x, z: p.z })),
+                elevation: template.spine.elevation || 0.8,
+                width: template.spine.width || 0.1
+            };
+        }
+
+        // Copy land extent
+        if (template.landExtent) {
+            this._editData.stage1.landExtent = { ...template.landExtent };
+        }
+
+        // Copy bay center
+        if (template.bayCenter) {
+            this._editData.stage1.bayCenter = { ...template.bayCenter };
+        }
+
+        // Copy secondary spines
+        if (template.secondarySpines) {
+            this._editData.stage2.secondarySpines = template.secondarySpines.map(spine => ({
+                points: spine.points.map(p => ({ x: p.x, z: p.z })),
+                elevation: spine.elevation || 0.6
+            }));
+        }
+
+        this._editData.lastModified = Date.now();
+        this._emit(EVENTS.EDIT_DATA_CHANGE, { editData: this._editData, source: 'template' });
+    }
+
+    /**
+     * Check if a stage is valid (has required data)
+     * @param {number} stage - Stage number (1-4)
+     * @returns {boolean}
+     */
+    isStageValid(stage) {
+        if (!this._editData) return false;
+
+        switch (stage) {
+            case 1:
+                return this._editData.stage1.spine.points.length >= 2;
+            case 2:
+                return this.isStageValid(1);
+            case 3:
+                return this.isStageValid(2);
+            case 4:
+                return this.isStageValid(3);
+            default:
+                return false;
+        }
+    }
+
+    /**
+     * Check if a stage can be advanced to
+     * @param {number} stage - Stage number (1-4)
+     * @returns {boolean}
+     */
+    canAdvanceToStage(stage) {
+        if (stage <= 1) return true;
+        return this.isStageValid(stage - 1);
+    }
+
+    /**
+     * Mark edit data as modified and emit change event
+     * @param {string} source - Source of the change
+     */
+    markEditDataModified(source = 'unknown') {
+        if (this._editData) {
+            this._editData.lastModified = Date.now();
+            this._emit(EVENTS.EDIT_DATA_CHANGE, { editData: this._editData, source });
+        }
+    }
+
     // --- World Data ---
 
     get worldData() {
@@ -221,7 +411,12 @@ export class EditorState {
             layers: { ...this._layers },
             mode: this._mode,
             compareMode: this._compareMode,
-            compareSeeds: [...this._compareSeeds]
+            compareSeeds: [...this._compareSeeds],
+            // Edit mode state
+            isEditMode: this._isEditMode,
+            editStage: this._editStage,
+            editData: this._editData ? JSON.parse(JSON.stringify(this._editData)) : null,
+            selectedTool: this._selectedTool
         };
     }
 
@@ -239,6 +434,12 @@ export class EditorState {
         if (data.mode !== undefined) this._mode = data.mode;
         if (data.compareMode !== undefined) this._compareMode = data.compareMode;
         if (data.compareSeeds) this._compareSeeds = [...data.compareSeeds];
+
+        // Edit mode state
+        if (data.isEditMode !== undefined) this._isEditMode = data.isEditMode;
+        if (data.editStage !== undefined) this._editStage = data.editStage;
+        if (data.editData) this._editData = JSON.parse(JSON.stringify(data.editData));
+        if (data.selectedTool !== undefined) this._selectedTool = data.selectedTool;
 
         this._worldDataDirty = true;
         this._emit(EVENTS.STATE_CHANGE, { type: 'restore', data: this.toJSON() });

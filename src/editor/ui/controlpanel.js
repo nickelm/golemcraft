@@ -166,7 +166,8 @@ export class ControlPanel {
     }
 
     _onClearCache() {
-        this.tileRenderer.clearCache();
+        // No caching - just trigger re-render
+        this.state.seed = this.state.seed; // Trigger update
     }
 
     /**

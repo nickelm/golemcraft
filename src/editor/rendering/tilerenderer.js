@@ -1,116 +1,60 @@
 /**
- * Template Editor - TileRenderer
+ * Template Editor - TileRenderer (Offscreen Canvas Version)
  *
- * Manages the main canvas and tile-based terrain rendering.
- * Uses TileManager for async worker-based tile generation.
- * Supports progressive coarse-to-fine rendering for instant feedback.
+ * Pre-renders terrain to a 1024x1024 offscreen canvas with progressive refinement.
+ * Pan/zoom just transforms that image - no terrain sampling during navigation.
  */
 
-import { TILE_SIZE, MAX_CACHED_TILES, COLORS, EVENTS, REFINEMENT_LEVELS, MAX_REFINEMENT_LEVEL } from '../core/constants.js';
-import { calculateLOD, worldToCanvas, getVisibleWorldBounds } from '../utils/coordinates.js';
-import { TileCache } from '../../tools/mapvisualizer/tilecache.js';
-import { TileManager } from '../../visualizer/tilemanager.js';
+import {
+    COLORS, EVENTS, MIN_ZOOM, MAX_ZOOM,
+    OFFSCREEN_SIZE, PROBE_GRID_SIZE, PROBE_BOUNDS,
+    DEEP_OCEAN_THRESHOLD, CONTINENT_MARGIN, CHUNK_BUDGET_MS,
+    OFFSCREEN_REFINEMENT_LEVELS
+} from '../core/constants.js';
 import { getTerrainParams } from '../../world/terrain/worldgen.js';
 import { getColorForMode } from '../../tools/mapvisualizer/colors.js';
 
+// How often to update display during rendering (ms)
+const DISPLAY_UPDATE_INTERVAL = 50;
+
 export class TileRenderer {
     /**
-     * @param {HTMLCanvasElement} canvas - The main rendering canvas
+     * @param {HTMLCanvasElement} canvas - The main display canvas
      * @param {EditorState} state - Editor state instance
      * @param {EventBus} eventBus - Event bus for communication
      */
     constructor(canvas, state, eventBus) {
-        this.canvas = canvas;
-        this.ctx = canvas.getContext('2d', { willReadFrequently: true });
+        this.displayCanvas = canvas;
+        this.displayCtx = canvas.getContext('2d');
         this.state = state;
         this.eventBus = eventBus;
 
-        // Tile caching
-        this.tileCache = new TileCache(TILE_SIZE, MAX_CACHED_TILES);
+        // Offscreen canvas for pre-rendered terrain
+        this.offscreen = new OffscreenCanvas(OFFSCREEN_SIZE, OFFSCREEN_SIZE);
+        this.offscreenCtx = this.offscreen.getContext('2d');
+        this.imageData = this.offscreenCtx.createImageData(OFFSCREEN_SIZE, OFFSCREEN_SIZE);
 
-        // Tile manager for async generation
-        this.tileManager = null;
-        this.tileManagerReady = false;
-        this.useAsyncRendering = true;
+        // Render state
+        this.renderBounds = null;       // World bounds being rendered { minX, maxX, minZ, maxZ }
+        this.currentLevel = -1;         // Current completed refinement level
+        this.renderAborted = false;     // Flag to abort in-progress render
+        this.renderInProgress = false;  // Prevent concurrent renders
+        this.renderVersion = 0;         // Incremented on each config change
+        this.lastDisplayUpdate = 0;     // Last time display was updated during render
 
-        // Render scheduling
-        this.renderPending = false;
-        this.renderRequestId = null;
-
-        // Reusable temporary canvas for tile drawing (avoids allocation per tile)
-        this._tempCanvas = null;
-        this._tempCtx = null;
-
-        // Previous viewport state for incremental pan optimization
-        this._lastViewX = null;
-        this._lastViewZ = null;
-        this._lastZoom = null;
+        // Display scheduling
+        this.displayPending = false;
+        this.displayRequestId = null;
 
         // Bind methods
-        this._onTileReady = this._onTileReady.bind(this);
         this._onStateChange = this._onStateChange.bind(this);
+        this._scheduleDisplay = this._scheduleDisplay.bind(this);
 
         // Subscribe to state changes
         this.state.subscribe(this._onStateChange);
 
-        // Start with sync rendering immediately (no waiting)
-        this.useAsyncRendering = false;
-        this.tileManagerReady = false;
-
-        // Initialize worker in background (non-blocking)
-        this._initTileManager();
-
-        // Render immediately with sync fallback
-        this.scheduleRender();
-    }
-
-    /**
-     * Initialize the tile manager with web worker (non-blocking)
-     * Runs in background while sync rendering provides immediate feedback
-     */
-    async _initTileManager() {
-        try {
-            this.tileManager = new TileManager(this.tileCache, this._onTileReady);
-
-            // Don't await - let it initialize in background
-            this.tileManager.initWorker(
-                this.state.seed,
-                this.state.template
-            ).then(success => {
-                if (success) {
-                    this.tileManager.setMode(this.state.mode);
-                    this.tileManagerReady = true;
-                    this.useAsyncRendering = true;
-                    console.log('TileRenderer: Worker ready, switching to async rendering');
-                    this.scheduleRender();
-                } else {
-                    console.warn('TileRenderer: Worker failed, continuing with sync rendering');
-                    // Already using sync, no change needed
-                }
-            }).catch(error => {
-                console.error('TileRenderer: Worker init error:', error);
-                // Already using sync, no change needed
-            });
-        } catch (error) {
-            console.error('TileRenderer: Failed to create TileManager:', error);
-            // Already using sync, no change needed
-        }
-    }
-
-    /**
-     * Handle tile ready from worker
-     */
-    _onTileReady(tileX, tileZ) {
-        // Check if worker recovered after timeout (tileX/tileZ will be null)
-        if (tileX === null && tileZ === null && this.tileManager?.isWorkerAvailable()) {
-            console.log('TileRenderer: Worker recovered, switching to async rendering');
-            this.tileManagerReady = true;
-            this.useAsyncRendering = true;
-            this.tileManager.setMode(this.state.mode);
-        }
-
-        this.scheduleRender();
-        this.eventBus.emit(EVENTS.TILE_READY, { tileX, tileZ });
+        // Defer initial render to next frame to ensure canvas is sized
+        requestAnimationFrame(() => this._startFullRender());
     }
 
     /**
@@ -119,373 +63,481 @@ export class TileRenderer {
     _onStateChange({ type, data }) {
         switch (type) {
             case EVENTS.VIEWPORT_CHANGE:
-                this.scheduleRender();
+                // Just redraw the offscreen to display - no terrain sampling
+                this._scheduleDisplay();
                 break;
 
             case EVENTS.SEED_CHANGE:
             case EVENTS.TEMPLATE_CHANGE:
-                this._onConfigChange();
-                break;
-
             case EVENTS.MODE_CHANGE:
-                this._onModeChange(data.mode);
+                // Config changed - need full re-render
+                this._startFullRender();
                 break;
 
             case EVENTS.LAYER_TOGGLE:
-                // Overlays are rendered separately, just schedule redraw
-                this.scheduleRender();
+                // Overlays are rendered separately, just schedule display
+                this._scheduleDisplay();
                 break;
         }
     }
 
     /**
-     * Handle seed/template change
+     * Start a full render from scratch
      */
-    _onConfigChange() {
-        // Clear tile cache
-        this.tileCache.invalidate();
+    async _startFullRender() {
+        // Abort any in-progress render
+        this.renderAborted = true;
+        this.renderVersion++;
+        const thisVersion = this.renderVersion;
 
-        // Update tile manager
-        if (this.tileManager) {
-            this.tileManager.updateConfig(
-                this.state.seed,
-                this.state.template,
-                this.state.mode
-            );
+        // Wait a frame to ensure any in-progress chunk stops
+        await new Promise(resolve => requestAnimationFrame(resolve));
+
+        // Reset state
+        this.renderAborted = false;
+        this.currentLevel = -1;
+
+        // Clear offscreen canvas and imageData
+        this.offscreenCtx.fillStyle = COLORS.background;
+        this.offscreenCtx.fillRect(0, 0, OFFSCREEN_SIZE, OFFSCREEN_SIZE);
+
+        // Clear imageData buffer
+        const data = this.imageData.data;
+        for (let i = 0; i < data.length; i += 4) {
+            data[i] = 26;     // R (matches background #1a1a2e)
+            data[i + 1] = 26; // G
+            data[i + 2] = 46; // B
+            data[i + 3] = 255;
         }
 
-        this.scheduleRender();
+        // Probe bounds to find continent extent
+        console.time('Bounds probing');
+        this.renderBounds = this._probeBounds();
+        console.timeEnd('Bounds probing');
+        console.log('Render bounds:', this.renderBounds);
+
+        this.eventBus.emit(EVENTS.RENDER_BOUNDS_CHANGE, { bounds: this.renderBounds });
+
+        // Calculate and set initial view to fit continent
+        const initialView = this._calculateInitialView();
+        console.log('Initial view:', initialView);
+        this.state.setViewport(initialView.viewX, initialView.viewZ, initialView.zoom);
+
+        // Start progressive rendering
+        this.renderInProgress = true;
+        await this._progressiveRender(thisVersion);
+        this.renderInProgress = false;
     }
 
     /**
-     * Handle visualization mode change
+     * Probe world bounds to find continent extent
+     * Samples a grid and finds bounding box of all land and shallow ocean
+     * Uses elevation as the definitive source - land is height > 0, shallow ocean is nearby
      */
-    _onModeChange(mode) {
-        // Clear cache since colors change with mode
-        this.tileCache.invalidate();
+    _probeBounds() {
+        const { seed, template } = this.state;
+        const probeRange = PROBE_BOUNDS.max - PROBE_BOUNDS.min;
+        const probeStep = probeRange / PROBE_GRID_SIZE;
 
-        if (this.tileManager) {
-            this.tileManager.setMode(mode);
+        // Threshold for including in bounds:
+        // - Land: continentalness >= 0.12 (above sea level)
+        // - Shallow ocean: continentalness >= 0.05 (visible shallow water)
+        const INCLUDE_THRESHOLD = 0.05;
+
+        let minX = Infinity, maxX = -Infinity;
+        let minZ = Infinity, maxZ = -Infinity;
+        let foundLand = false;
+
+        for (let gz = 0; gz < PROBE_GRID_SIZE; gz++) {
+            for (let gx = 0; gx < PROBE_GRID_SIZE; gx++) {
+                const worldX = PROBE_BOUNDS.min + gx * probeStep;
+                const worldZ = PROBE_BOUNDS.min + gz * probeStep;
+
+                // Get terrain params to check elevation/continentalness
+                const params = getTerrainParams(worldX, worldZ, seed, template);
+
+                // Include land (height > 0) and shallow ocean (continental >= threshold)
+                const isLandOrShallow = params.height > 0 || params.effectiveContinental >= INCLUDE_THRESHOLD;
+
+                if (isLandOrShallow) {
+                    foundLand = true;
+                    minX = Math.min(minX, worldX);
+                    maxX = Math.max(maxX, worldX);
+                    minZ = Math.min(minZ, worldZ);
+                    maxZ = Math.max(maxZ, worldZ);
+                }
+            }
         }
 
-        this.scheduleRender();
+        if (!foundLand) {
+            // Fallback to template bounds
+            const bounds = template.worldBounds || { min: -2000, max: 2000 };
+            return {
+                minX: bounds.min,
+                maxX: bounds.max,
+                minZ: bounds.min,
+                maxZ: bounds.max
+            };
+        }
+
+        // Add margin for ocean buffer around land
+        return {
+            minX: minX - CONTINENT_MARGIN,
+            maxX: maxX + CONTINENT_MARGIN,
+            minZ: minZ - CONTINENT_MARGIN,
+            maxZ: maxZ + CONTINENT_MARGIN
+        };
     }
 
     /**
-     * Schedule a render on the next animation frame
+     * Calculate initial view to fit entire continent
      */
-    scheduleRender() {
-        if (this.renderPending) return;
+    _calculateInitialView() {
+        const { width, height } = this._getCanvasSize();
 
-        this.renderPending = true;
-        this.renderRequestId = requestAnimationFrame(() => {
-            this.renderPending = false;
-            this.render();
+        if (!this.renderBounds) {
+            return { viewX: 0, viewZ: 0, zoom: 0.5 };
+        }
+
+        // If canvas not sized yet, use a default
+        if (width <= 0 || height <= 0) {
+            const viewX = (this.renderBounds.minX + this.renderBounds.maxX) / 2;
+            const viewZ = (this.renderBounds.minZ + this.renderBounds.maxZ) / 2;
+            return { viewX, viewZ, zoom: 0.5 };
+        }
+
+        const worldWidth = this.renderBounds.maxX - this.renderBounds.minX;
+        const worldHeight = this.renderBounds.maxZ - this.renderBounds.minZ;
+
+        // Center of continent
+        const viewX = (this.renderBounds.minX + this.renderBounds.maxX) / 2;
+        const viewZ = (this.renderBounds.minZ + this.renderBounds.maxZ) / 2;
+
+        // Zoom to fit with 5% margin
+        // zoom = screen pixels per world unit
+        // To fit worldWidth in width pixels: zoom = width / worldWidth
+        const zoomX = (width * 0.95) / worldWidth;
+        const zoomZ = (height * 0.95) / worldHeight;
+        const zoom = Math.min(zoomX, zoomZ);  // Use smaller to ensure both dimensions fit
+
+        console.log(`Initial view calc: canvas=${width}x${height}, world=${worldWidth}x${worldHeight}, zoom=${zoom}`);
+
+        // Clamp to reasonable range but allow very low zoom for large worlds
+        return { viewX, viewZ, zoom: Math.max(0.001, Math.min(MAX_ZOOM, zoom)) };
+    }
+
+    /**
+     * Progressive render through all refinement levels
+     */
+    async _progressiveRender(version) {
+        for (let levelIdx = 0; levelIdx < OFFSCREEN_REFINEMENT_LEVELS.length; levelIdx++) {
+            // Check for abort
+            if (this.renderAborted || this.renderVersion !== version) {
+                console.log(`Render aborted at level ${levelIdx}`);
+                return;
+            }
+
+            console.time(`Render level ${levelIdx}`);
+            await this._renderLevel(levelIdx, version);
+            console.timeEnd(`Render level ${levelIdx}`);
+
+            if (this.renderAborted || this.renderVersion !== version) return;
+
+            this.currentLevel = levelIdx;
+
+            // Emit progress event
+            const progress = (levelIdx + 1) / OFFSCREEN_REFINEMENT_LEVELS.length;
+            this.eventBus.emit(EVENTS.REFINEMENT_PROGRESS, {
+                level: levelIdx,
+                total: OFFSCREEN_REFINEMENT_LEVELS.length,
+                progress
+            });
+
+            // Final display update after level completes
+            this._updateDisplayFromImageData();
+        }
+
+        console.log('Progressive render complete');
+    }
+
+    /**
+     * Update the offscreen canvas from imageData and render to display
+     */
+    _updateDisplayFromImageData() {
+        this.offscreenCtx.putImageData(this.imageData, 0, 0);
+        this._renderToDisplay();
+    }
+
+    /**
+     * Render a single refinement level using chunked processing
+     * Renders from center outward for viewport priority
+     */
+    async _renderLevel(levelIdx, version) {
+        const { pixelStep, gridSize } = OFFSCREEN_REFINEMENT_LEVELS[levelIdx];
+        const { seed, template, mode } = this.state;
+        const data = this.imageData.data;
+
+        const worldRangeX = this.renderBounds.maxX - this.renderBounds.minX;
+        const worldRangeZ = this.renderBounds.maxZ - this.renderBounds.minZ;
+
+        const needsNeighbors = mode === 'elevation' || mode === 'composite';
+
+        // Calculate world units per offscreen pixel
+        const worldPerPixelX = worldRangeX / OFFSCREEN_SIZE;
+        const worldPerPixelZ = worldRangeZ / OFFSCREEN_SIZE;
+
+        // Build list of pixels to render, sorted by distance from center
+        const pixels = this._buildRenderOrder(levelIdx, gridSize, pixelStep);
+        const totalPixels = pixels.length;
+        let processedPixels = 0;
+
+        this.lastDisplayUpdate = performance.now();
+
+        return new Promise((resolve) => {
+            const processChunk = () => {
+                // Check for abort
+                if (this.renderAborted || this.renderVersion !== version) {
+                    resolve();
+                    return;
+                }
+
+                const startTime = performance.now();
+
+                while (processedPixels < totalPixels) {
+                    // Check time budget
+                    if (performance.now() - startTime > CHUNK_BUDGET_MS) {
+                        // Update display periodically during rendering
+                        if (performance.now() - this.lastDisplayUpdate > DISPLAY_UPDATE_INTERVAL) {
+                            this._updateDisplayFromImageData();
+                            this.lastDisplayUpdate = performance.now();
+                        }
+                        requestAnimationFrame(processChunk);
+                        return;
+                    }
+
+                    const { px, pz } = pixels[processedPixels];
+                    processedPixels++;
+
+                    // Calculate world position
+                    const worldX = this.renderBounds.minX + px * worldPerPixelX;
+                    const worldZ = this.renderBounds.minZ + pz * worldPerPixelZ;
+
+                    // Sample terrain
+                    const params = getTerrainParams(worldX, worldZ, seed, template);
+
+                    let rgb;
+                    if (needsNeighbors) {
+                        // Sample neighbors for hillshade - use world step based on pixel step
+                        const neighborDistX = pixelStep * worldPerPixelX;
+                        const neighborDistZ = pixelStep * worldPerPixelZ;
+                        const leftParams = getTerrainParams(worldX - neighborDistX, worldZ, seed, template);
+                        const rightParams = getTerrainParams(worldX + neighborDistX, worldZ, seed, template);
+                        const upParams = getTerrainParams(worldX, worldZ - neighborDistZ, seed, template);
+                        const downParams = getTerrainParams(worldX, worldZ + neighborDistZ, seed, template);
+
+                        const neighbors = {
+                            left: leftParams.height,
+                            right: rightParams.height,
+                            up: upParams.height,
+                            down: downParams.height
+                        };
+
+                        rgb = getColorForMode(params, mode, neighbors);
+                    } else {
+                        rgb = getColorForMode(params, mode);
+                    }
+
+                    // Fill pixel block
+                    this._fillPixelBlock(data, px, pz, pixelStep, rgb);
+                }
+
+                // Level complete
+                resolve();
+            };
+
+            requestAnimationFrame(processChunk);
         });
+    }
+
+    /**
+     * Build render order: viewport center first, then expand outward
+     * Skip pixels already rendered at coarser levels
+     */
+    _buildRenderOrder(levelIdx, gridSize, pixelStep) {
+        const pixels = [];
+
+        // Get current viewport center in offscreen pixel coordinates
+        const { viewX, viewZ } = this.state;
+        const worldRangeX = this.renderBounds.maxX - this.renderBounds.minX;
+        const worldRangeZ = this.renderBounds.maxZ - this.renderBounds.minZ;
+
+        // Convert viewport world position to offscreen pixel position
+        const viewportPixelX = ((viewX - this.renderBounds.minX) / worldRangeX) * OFFSCREEN_SIZE;
+        const viewportPixelZ = ((viewZ - this.renderBounds.minZ) / worldRangeZ) * OFFSCREEN_SIZE;
+
+        for (let gz = 0; gz < gridSize; gz++) {
+            for (let gx = 0; gx < gridSize; gx++) {
+                const px = gx * pixelStep;
+                const pz = gz * pixelStep;
+
+                // Skip pixels that were already rendered at a coarser level
+                if (levelIdx > 0) {
+                    const prevStep = OFFSCREEN_REFINEMENT_LEVELS[levelIdx - 1].pixelStep;
+                    if (px % prevStep === 0 && pz % prevStep === 0) {
+                        continue;
+                    }
+                }
+
+                // Calculate distance from viewport center for sorting
+                const dx = px - viewportPixelX;
+                const dz = pz - viewportPixelZ;
+                const dist = dx * dx + dz * dz;
+
+                pixels.push({ px, pz, dist });
+            }
+        }
+
+        // Sort by distance from viewport center (closest first)
+        pixels.sort((a, b) => a.dist - b.dist);
+
+        return pixels;
+    }
+
+    /**
+     * Fill a block of pixels with a color
+     */
+    _fillPixelBlock(data, startX, startZ, blockSize, rgb) {
+        const endX = Math.min(startX + blockSize, OFFSCREEN_SIZE);
+        const endZ = Math.min(startZ + blockSize, OFFSCREEN_SIZE);
+
+        for (let z = startZ; z < endZ; z++) {
+            for (let x = startX; x < endX; x++) {
+                const idx = (z * OFFSCREEN_SIZE + x) * 4;
+                data[idx] = rgb[0];
+                data[idx + 1] = rgb[1];
+                data[idx + 2] = rgb[2];
+                data[idx + 3] = 255;
+            }
+        }
+    }
+
+    /**
+     * Schedule a display update on next animation frame
+     */
+    _scheduleDisplay() {
+        if (this.displayPending) return;
+
+        this.displayPending = true;
+        this.displayRequestId = requestAnimationFrame(() => {
+            this.displayPending = false;
+            this._renderToDisplay();
+        });
+    }
+
+    /**
+     * Render offscreen canvas to display canvas with current viewport transform
+     */
+    _renderToDisplay() {
+        const { width, height } = this._getCanvasSize();
+        const { viewX, viewZ, zoom } = this.state;
+
+        // Clear display
+        this.displayCtx.fillStyle = COLORS.background;
+        this.displayCtx.fillRect(0, 0, width, height);
+
+        if (!this.renderBounds) return;
+
+        // Calculate transform
+        // zoom = screen pixels per world unit
+        // We need to convert world coordinates to screen coordinates
+        const worldRangeX = this.renderBounds.maxX - this.renderBounds.minX;
+        const worldRangeZ = this.renderBounds.maxZ - this.renderBounds.minZ;
+
+        // The offscreen canvas represents worldRange in OFFSCREEN_SIZE pixels
+        // To display, we need: worldRange * zoom screen pixels
+        const drawWidth = worldRangeX * zoom;
+        const drawHeight = worldRangeZ * zoom;
+
+        // The center of the display should show world position (viewX, viewZ)
+        // Calculate where the top-left of the offscreen canvas should be drawn
+        // viewX is at screen center (width/2), so bounds.minX should be at:
+        const drawX = width / 2 - (viewX - this.renderBounds.minX) * zoom;
+        const drawY = height / 2 - (viewZ - this.renderBounds.minZ) * zoom;
+
+        // Debug: log draw parameters occasionally
+        if (Math.random() < 0.01) {
+            console.log(`Display: canvas=${width}x${height}, zoom=${zoom.toFixed(4)}, drawSize=${drawWidth.toFixed(0)}x${drawHeight.toFixed(0)}, drawPos=${drawX.toFixed(0)},${drawY.toFixed(0)}`);
+        }
+
+        // Use pixel art style when zoomed in, smooth when zoomed out
+        this.displayCtx.imageSmoothingEnabled = zoom < 2;
+
+        this.displayCtx.drawImage(
+            this.offscreen,
+            drawX, drawY,
+            drawWidth, drawHeight
+        );
+
+        // Emit render complete event (overlays listen to this)
+        this.eventBus.emit(EVENTS.RENDER_REQUEST, { width, height, ctx: this.displayCtx });
     }
 
     /**
      * Resize canvas to match container
      */
     resize() {
-        const container = this.canvas.parentElement;
+        const container = this.displayCanvas.parentElement;
         const rect = container.getBoundingClientRect();
 
         const dpr = window.devicePixelRatio || 1;
-        this.canvas.width = rect.width * dpr;
-        this.canvas.height = rect.height * dpr;
-        this.canvas.style.width = `${rect.width}px`;
-        this.canvas.style.height = `${rect.height}px`;
+        this.displayCanvas.width = rect.width * dpr;
+        this.displayCanvas.height = rect.height * dpr;
+        this.displayCanvas.style.width = `${rect.width}px`;
+        this.displayCanvas.style.height = `${rect.height}px`;
 
-        this.ctx.scale(dpr, dpr);
+        this.displayCtx.scale(dpr, dpr);
 
-        this.scheduleRender();
+        this._scheduleDisplay();
     }
 
     /**
      * Get canvas dimensions (CSS pixels, not device pixels)
      */
-    getCanvasSize() {
+    _getCanvasSize() {
         const dpr = window.devicePixelRatio || 1;
         return {
-            width: this.canvas.width / dpr,
-            height: this.canvas.height / dpr
+            width: this.displayCanvas.width / dpr,
+            height: this.displayCanvas.height / dpr
         };
     }
 
     /**
-     * Get or create a reusable temporary canvas for tile drawing
-     * Resizes as needed to accommodate different tile sizes
-     * @private
+     * Get render statistics (for status display)
      */
-    _getTempCanvas(width, height) {
-        if (!this._tempCanvas || this._tempCanvas.width < width || this._tempCanvas.height < height) {
-            // Create or resize temp canvas to accommodate the tile
-            const newWidth = Math.max(width, this._tempCanvas?.width || 0);
-            const newHeight = Math.max(height, this._tempCanvas?.height || 0);
-            this._tempCanvas = new OffscreenCanvas(newWidth, newHeight);
-            this._tempCtx = this._tempCanvas.getContext('2d');
-        }
-        return { canvas: this._tempCanvas, ctx: this._tempCtx };
-    }
-
-    /**
-     * Main render method
-     */
-    render() {
-        const { width, height } = this.getCanvasSize();
-
-        // Clear canvas
-        this.ctx.fillStyle = COLORS.background;
-        this.ctx.fillRect(0, 0, width, height);
-
-        // Render tiles
-        if (this.useAsyncRendering && this.tileManagerReady) {
-            this._renderAsync(width, height);
-        } else {
-            this._renderSync(width, height);
-        }
-
-        // Emit render complete event (overlays listen to this)
-        this.eventBus.emit(EVENTS.RENDER_REQUEST, { width, height, ctx: this.ctx });
-    }
-
-    /**
-     * Async render path - uses Web Worker for tile generation
-     * Non-blocking: only draws tiles that are already cached
-     * Generates synchronous level 0 previews for instant feedback
-     */
-    _renderAsync(width, height) {
-        const { viewX, viewZ, zoom, seed, template, mode } = this.state;
-        const lodLevel = calculateLOD(zoom);
-        const worldTileSize = TILE_SIZE * (1 << lodLevel);
-        const halfWidth = width / 2;
-        const halfHeight = height / 2;
-
-        // Update tile manager with current viewport
-        this.tileManager.updateViewport(viewX, viewZ, zoom, width, height);
-
-        // Get visible tile coordinates
-        const visibleCoords = this.tileManager.visibleTileCoords;
-
-        // Generate synchronous level 0 previews for tiles that have nothing cached
-        for (const { tileX, tileZ } of visibleCoords) {
-            const currentLevel = this.tileCache.getCurrentRefinementLevel(
-                tileX, tileZ, mode, seed, lodLevel
-            );
-
-            // If no refinement cached, generate level 0 synchronously
-            if (currentLevel < 0) {
-                const preview = this._generateInstantPreview(tileX, tileZ, lodLevel, seed, template, mode);
-                this.tileCache.setTile(tileX, tileZ, mode, seed, lodLevel, preview, 0);
-            }
-        }
-
-        // Get tiles that are ready (from memory cache) - now includes level 0 previews
-        const visibleTiles = this.tileManager.getVisibleTiles();
-
-        // Draw cached tiles with appropriate upscaling
-        for (const tile of visibleTiles) {
-            // Get the actual size of the cached image
-            const imageWidth = tile.imageData.width;
-            const imageHeight = tile.imageData.height;
-
-            // Reuse temp canvas to avoid allocation per tile
-            const { canvas: tempCanvas, ctx: tempCtx } = this._getTempCanvas(imageWidth, imageHeight);
-            tempCtx.putImageData(tile.imageData, 0, 0);
-
-            // Use blocky upscaling for non-full-resolution tiles (pixel art style)
-            // Use smooth interpolation only when zoomed out with full resolution tiles
-            const isFullResolution = tile.refinementLevel >= MAX_REFINEMENT_LEVEL;
-            this.ctx.imageSmoothingEnabled = isFullResolution && zoom < 1;
-
-            // Draw from the portion of tempCanvas that has the tile data
-            this.ctx.drawImage(
-                tempCanvas,
-                0, 0, imageWidth, imageHeight,  // source rect
-                tile.screenX, tile.screenY, tile.scaledSize, tile.scaledSize  // dest rect
-            );
-        }
-
-        // Draw loading indicators for tiles still refining (but only if not at level 0+)
-        const pendingTiles = this.tileManager.getPendingTiles();
-        if (pendingTiles.length > 0) {
-            // Only show indicator for tiles with no preview at all
-            this.ctx.fillStyle = COLORS.pendingTile;
-            for (const { tileX, tileZ } of pendingTiles) {
-                const currentLevel = this.tileCache.getCurrentRefinementLevel(
-                    tileX, tileZ, mode, seed, lodLevel
-                );
-                // Only show loading for tiles with nothing cached
-                if (currentLevel < 0) {
-                    const screenX = halfWidth + (tileX - viewX) * zoom;
-                    const screenY = halfHeight + (tileZ - viewZ) * zoom;
-                    const scaledSize = worldTileSize * zoom;
-                    this.ctx.fillRect(screenX, screenY, scaledSize, scaledSize);
-                }
-            }
-        }
-    }
-
-    /**
-     * Generate an instant preview at refinement level 0 (4x4 grid)
-     * This runs synchronously on the main thread for immediate feedback
-     * @private
-     */
-    _generateInstantPreview(tileX, tileZ, lodLevel, seed, template, mode) {
-        const gridSize = REFINEMENT_LEVELS[0].gridSize;  // 4
-        const sampling = REFINEMENT_LEVELS[0].sampling;  // 32
-
-        const buffer = new Uint8ClampedArray(gridSize * gridSize * 4);
-        const needsNeighbors = mode === 'elevation' || mode === 'composite';
-
-        // Combined step: LOD step * refinement sampling
-        const lodStep = 1 << lodLevel;
-        const totalStep = sampling * lodStep;
-
-        for (let py = 0; py < gridSize; py++) {
-            for (let px = 0; px < gridSize; px++) {
-                const wx = tileX + px * totalStep;
-                const wz = tileZ + py * totalStep;
-
-                const params = getTerrainParams(wx, wz, seed, template);
-
-                let rgb;
-                if (needsNeighbors) {
-                    const leftParams = getTerrainParams(wx - totalStep, wz, seed, template);
-                    const rightParams = getTerrainParams(wx + totalStep, wz, seed, template);
-                    const upParams = getTerrainParams(wx, wz - totalStep, seed, template);
-                    const downParams = getTerrainParams(wx, wz + totalStep, seed, template);
-
-                    const neighbors = {
-                        left: leftParams.height,
-                        right: rightParams.height,
-                        up: upParams.height,
-                        down: downParams.height
-                    };
-
-                    rgb = getColorForMode(params, mode, neighbors);
-                } else {
-                    rgb = getColorForMode(params, mode);
-                }
-
-                const i = (py * gridSize + px) * 4;
-                buffer[i] = rgb[0];
-                buffer[i + 1] = rgb[1];
-                buffer[i + 2] = rgb[2];
-                buffer[i + 3] = 255;
-            }
-        }
-
-        return new ImageData(buffer, gridSize, gridSize);
-    }
-
-    /**
-     * Synchronous render path - uses fast instant previews
-     * Used as fallback when Web Worker is not available
-     */
-    _renderSync(width, height) {
-        const { viewX, viewZ, zoom, seed, template, mode } = this.state;
-        const halfWidth = width / 2;
-        const halfHeight = height / 2;
-
-        const lodLevel = calculateLOD(zoom);
-        const worldTileSize = TILE_SIZE * (1 << lodLevel);
-
-        // Calculate visible world bounds
-        const bounds = getVisibleWorldBounds({ viewX, viewZ, zoom }, width, height);
-
-        // Calculate tile range
-        const alignToGrid = (coord) => Math.floor(coord / worldTileSize) * worldTileSize;
-        const tileStartX = alignToGrid(Math.floor(bounds.minX));
-        const tileEndX = alignToGrid(Math.ceil(bounds.maxX)) + worldTileSize;
-        const tileStartZ = alignToGrid(Math.floor(bounds.minZ));
-        const tileEndZ = alignToGrid(Math.ceil(bounds.maxZ)) + worldTileSize;
-
-        // Use blocky upscaling for instant previews (pixel art style)
-        this.ctx.imageSmoothingEnabled = false;
-
-        for (let tileWorldZ = tileStartZ; tileWorldZ < tileEndZ; tileWorldZ += worldTileSize) {
-            for (let tileWorldX = tileStartX; tileWorldX < tileEndX; tileWorldX += worldTileSize) {
-                // Check cache first for any existing tile
-                const cached = this.tileCache.getBestAvailable(
-                    tileWorldX, tileWorldZ, mode, seed, lodLevel
-                );
-
-                let tileImageData;
-                let imageSize;
-
-                if (cached) {
-                    // Use cached tile (any refinement level)
-                    tileImageData = cached.imageData;
-                    imageSize = cached.imageData.width;
-                } else {
-                    // Generate fast instant preview (4x4 grid = 16 samples, <1ms)
-                    tileImageData = this._generateInstantPreview(
-                        tileWorldX, tileWorldZ, lodLevel, seed, template, mode
-                    );
-                    imageSize = tileImageData.width;
-                    // Cache the preview for next render
-                    this.tileCache.setTile(tileWorldX, tileWorldZ, mode, seed, lodLevel, tileImageData, 0);
-                }
-
-                // Calculate screen position
-                const canvasX = halfWidth + (tileWorldX - viewX) * zoom;
-                const canvasY = halfHeight + (tileWorldZ - viewZ) * zoom;
-                const scaledSize = worldTileSize * zoom;
-
-                // Draw tile using reusable temp canvas
-                const { canvas: tempCanvas, ctx: tempCtx } = this._getTempCanvas(imageSize, imageSize);
-                tempCtx.putImageData(tileImageData, 0, 0);
-
-                this.ctx.drawImage(
-                    tempCanvas,
-                    0, 0, imageSize, imageSize,  // source rect
-                    canvasX, canvasY, scaledSize, scaledSize  // dest rect
-                );
-            }
-        }
-    }
-
-    /**
-     * Get cache statistics
-     */
-    getCacheStats() {
-        const stats = this.tileCache.getStats();
-        const pending = this.tileManager ? this.tileManager.getPendingCount() : 0;
-        const lod = calculateLOD(this.state.zoom);
-
+    getRenderStats() {
         return {
-            cached: stats.size,
-            maxTiles: stats.maxTiles,
-            pending,
-            lod
+            level: this.currentLevel,
+            totalLevels: OFFSCREEN_REFINEMENT_LEVELS.length,
+            renderInProgress: this.renderInProgress,
+            bounds: this.renderBounds
         };
     }
 
     /**
-     * Clear the tile cache
+     * Get the current render bounds
      */
-    clearCache() {
-        this.tileCache.invalidate();
-        if (this.tileManager) {
-            this.tileManager.cancelAllPending();
-        }
-        this.scheduleRender();
+    getRenderBounds() {
+        return this.renderBounds;
     }
 
     /**
      * Clean up resources
      */
     destroy() {
-        if (this.renderRequestId) {
-            cancelAnimationFrame(this.renderRequestId);
-        }
+        this.renderAborted = true;
 
-        if (this.tileManager) {
-            this.tileManager.destroy();
+        if (this.displayRequestId) {
+            cancelAnimationFrame(this.displayRequestId);
         }
-
-        this.tileCache.invalidate();
     }
 }

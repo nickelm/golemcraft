@@ -21,6 +21,8 @@ import { ControlPanel } from './ui/controlpanel.js';
 import { InfoPanel } from './ui/infopanel.js';
 import { StatusBar } from './ui/statusbar.js';
 
+import { EditModeController } from './editmode/editmodecontroller.js';
+
 import { buildRiverIndex, buildSpineIndex } from '../world/terrain/worldgen.js';
 
 class EditorApp {
@@ -46,6 +48,9 @@ class EditorApp {
         this.controlPanel = null;
         this.infoPanel = null;
         this.statusBar = null;
+
+        // Edit mode
+        this.editModeController = null;
 
         // Bind methods
         this._onResize = this._onResize.bind(this);
@@ -83,6 +88,15 @@ class EditorApp {
         this.controlPanel = new ControlPanel(this.state, this.eventBus, this.tileRenderer);
         this.infoPanel = new InfoPanel(this.state, this.eventBus);
         this.statusBar = new StatusBar(this.state, this.eventBus, this.tileRenderer);
+
+        // Create edit mode controller
+        const controlPanelElement = document.getElementById('control-panel');
+        this.editModeController = new EditModeController(
+            this.canvas,
+            controlPanelElement,
+            this.state,
+            this.eventBus
+        );
 
         // Setup global event listeners
         window.addEventListener('resize', this._onResize);
@@ -147,6 +161,15 @@ class EditorApp {
     _onKeyDown(e) {
         // Ignore if typing in an input
         if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT') return;
+
+        // In edit mode, let the tool manager handle most keys
+        // Only allow navigation keys to pass through
+        if (this.state.isEditMode) {
+            const allowedInEditMode = ['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', '+', '=', '-', '_', 'Home'];
+            if (!allowedInEditMode.includes(e.key)) {
+                return;
+            }
+        }
 
         switch (e.key) {
             // Layer toggles
@@ -242,6 +265,8 @@ class EditorApp {
     destroy() {
         window.removeEventListener('resize', this._onResize);
         window.removeEventListener('keydown', this._onKeyDown);
+
+        this.editModeController?.destroy();
 
         this.controlPanel?.destroy();
         this.infoPanel?.destroy();

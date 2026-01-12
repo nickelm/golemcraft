@@ -38,8 +38,11 @@ export class TileManager {
 
         // Request tracking
         this.nextRequestId = 1;
-        this.pendingRequests = new Map();  // requestId -> { tileX, tileZ, lodLevel, mode, refinementLevel }
+        this.pendingRequests = new Map();  // requestId -> { tileX, tileZ, lodLevel, mode, refinementLevel, configVersion }
         this.requestQueue = [];            // Tiles waiting to be sent to worker
+
+        // Config version - incremented on every seed/template/mode change to invalidate stale results
+        this.configVersion = 0;
 
         // Visible tiles cache (updated on viewport change)
         this.visibleTileCoords = [];
@@ -109,6 +112,9 @@ export class TileManager {
             this.mode = mode;
         }
 
+        // Increment config version to invalidate any stale worker results
+        this.configVersion++;
+
         // Cancel all pending work
         this.cancelAllPending();
     }
@@ -120,6 +126,7 @@ export class TileManager {
     setMode(mode) {
         if (this.mode !== mode) {
             this.mode = mode;
+            this.configVersion++;
             this.cancelAllPending();
         }
     }
@@ -278,6 +285,22 @@ export class TileManager {
             case 'tile': {
                 const { requestId, tileX, tileZ, lodLevel, mode, buffer, width, height } = message;
 
+                // Check if request is still valid (not cancelled by config change)
+                const pendingReq = this.pendingRequests.get(requestId);
+                if (!pendingReq) {
+                    // Request was cancelled - discard stale result
+                    this._processQueue();
+                    break;
+                }
+
+                // Check config version - discard if template/seed/mode changed since request was sent
+                if (pendingReq.configVersion !== this.configVersion) {
+                    // Stale result from old config - discard
+                    this.pendingRequests.delete(requestId);
+                    this._processQueue();
+                    break;
+                }
+
                 // Remove from pending
                 this.pendingRequests.delete(requestId);
 
@@ -304,6 +327,22 @@ export class TileManager {
             case 'tile_progressive': {
                 // Progressive refinement tile
                 const { requestId, tileX, tileZ, lodLevel, refinementLevel, mode, buffer, width, height } = message;
+
+                // Check if request is still valid (not cancelled by config change)
+                const pendingReqProg = this.pendingRequests.get(requestId);
+                if (!pendingReqProg) {
+                    // Request was cancelled - discard stale result
+                    this._processQueue();
+                    break;
+                }
+
+                // Check config version - discard if template/seed/mode changed since request was sent
+                if (pendingReqProg.configVersion !== this.configVersion) {
+                    // Stale result from old config - discard
+                    this.pendingRequests.delete(requestId);
+                    this._processQueue();
+                    break;
+                }
 
                 // Remove from pending
                 this.pendingRequests.delete(requestId);
@@ -515,13 +554,14 @@ export class TileManager {
             const item = this.requestQueue.shift();
             const requestId = this.nextRequestId++;
 
-            // Track pending request
+            // Track pending request with config version for stale result detection
             this.pendingRequests.set(requestId, {
                 tileX: item.tileX,
                 tileZ: item.tileZ,
                 lodLevel: item.lodLevel,
                 mode: item.mode,
-                refinementLevel: item.refinementLevel
+                refinementLevel: item.refinementLevel,
+                configVersion: this.configVersion
             });
 
             if (item.progressive) {

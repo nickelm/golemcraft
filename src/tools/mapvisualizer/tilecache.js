@@ -15,9 +15,20 @@ export class TileCache {
   constructor(tileSize = 128, maxTiles = 64) {
     this.tileSize = tileSize;
     this.maxTiles = maxTiles;
-    this.cache = new Map(); // Key: "worldX,worldZ,mode,seed" -> { imageData, lastUsed }
+    this.cache = new Map(); // Key: "worldX,worldZ,mode,seed,configVersion" -> { imageData, lastUsed }
     this.accessOrder = []; // Track access order for LRU eviction
     this.terrainCache = null; // Optional TerrainCache for IndexedDB persistence
+
+    // Config version - incremented when template changes to invalidate stale tiles
+    this.configVersion = 0;
+  }
+
+  /**
+   * Increment config version (call when template changes)
+   * This invalidates all cached tiles without clearing memory
+   */
+  incrementConfigVersion() {
+    this.configVersion++;
   }
 
   /**
@@ -39,7 +50,8 @@ export class TileCache {
    * @returns {string} Cache key
    */
   _makeKey(worldX, worldZ, mode, seed, lodLevel = 0, refinementLevel = 5) {
-    return `${worldX},${worldZ},${mode},${seed},${lodLevel},${refinementLevel}`;
+    // Include configVersion so template changes invalidate cache
+    return `${worldX},${worldZ},${mode},${seed},${lodLevel},${refinementLevel},${this.configVersion}`;
   }
 
   /**
