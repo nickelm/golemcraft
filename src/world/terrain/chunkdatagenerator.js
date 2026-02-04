@@ -75,7 +75,11 @@ export const BLOCK_TYPES = {
     cave_stone: { tile: [1, 0] },   // Placeholder: uses stone texture
     cave_floor: { tile: [3, 0] },   // Placeholder: uses dirt texture
     bedrock: { tile: [1, 0] },      // Indestructible bottom layer (uses stone texture)
-    tnt: { tile: [8, 0] }           // Explosive block (red texture at [8,0])
+    tnt: { tile: [8, 0] },          // Explosive block (red texture at [8,0])
+    // Biome terrain textures (mapped to base textures)
+    rock: { tile: [1, 0] },         // Mountains, highlands, volcanic - uses stone texture
+    forest_floor: { tile: [3, 0] }, // Jungle, rainforest, swamp, forests - uses dirt texture
+    gravel: { tile: [1, 0] }        // Riverbeds, paths - uses stone texture
 };
 
 export const BLOCK_TYPE_IDS = {
@@ -92,7 +96,11 @@ export const BLOCK_TYPE_IDS = {
     cave_stone: 10,
     cave_floor: 11,
     bedrock: 12,
-    tnt: 13
+    tnt: 13,
+    // Biome terrain types
+    rock: 14,
+    forest_floor: 15,
+    gravel: 16
 };
 
 // Biome ID encoding for transfer to main thread (expanded to 21 biomes)
@@ -117,7 +125,9 @@ export const BIOME_IDS = {
     meadow: 17,
     deciduous_forest: 18,
     autumn_forest: 19,
-    glacier: 20
+    glacier: 20,
+    deep_ocean: 21,
+    shallow_ocean: 22
 };
 
 // Reverse mapping for decoding on main thread
@@ -142,7 +152,9 @@ export const BIOME_NAMES = {
     17: 'meadow',
     18: 'deciduous_forest',
     19: 'autumn_forest',
-    20: 'glacier'
+    20: 'glacier',
+    21: 'deep_ocean',
+    22: 'shallow_ocean'
 };
 
 // Face definitions - correct CCW winding
@@ -1075,58 +1087,67 @@ function generateSurfaceMesh(heightmap, voxelMask, heightfieldHoleMask, surfaceT
 // WATER MESH - MORE TRANSPARENT
 // ============================================================================
 
-function generateWaterMesh(heightmap) {
+function generateWaterMesh(heightmap, biomeData = null) {
     const positions = [];
     const normals = [];
     const uvs = [];
     const colors = [];
     const indices = [];
-    
+
     const waterUvs = getBlockUVs('water');
     const waterY = WATER_LEVEL - 0.15;
-    
+
     for (let lz = 0; lz < CHUNK_SIZE; lz++) {
         for (let lx = 0; lx < CHUNK_SIZE; lx++) {
             const cellHeight = heightmap[lz * HEIGHTMAP_SIZE + lx];
             if (cellHeight >= WATER_LEVEL) continue;
-            
+
             const baseVertex = positions.length / 3;
             const depth = WATER_LEVEL - cellHeight;
-            
-            // Less aggressive darkening for more transparent water
-            // Material opacity is 0.65, vertex colors add depth variation
-            const depthFactor = Math.max(0.6, 1.0 - depth * 0.05);
-            
-            // Brighter, more cyan-tinted water
-            const r = 0.6 * depthFactor;
-            const g = 0.88 * depthFactor;
-            const b = 0.98 * depthFactor;
-            
+
+            // Check if this is deep ocean for darker water
+            const biomeId = biomeData ? biomeData[lz * CHUNK_SIZE + lx] : null;
+            const isDeepOcean = biomeId === BIOME_IDS.deep_ocean;
+
+            let r, g, b;
+            if (isDeepOcean) {
+                // Deep ocean: very dark blue water (bottomless abyss)
+                r = 0.08;
+                g = 0.15;
+                b = 0.35;
+            } else {
+                // Coastal/normal water: brighter cyan-tinted
+                const depthFactor = Math.max(0.6, 1.0 - depth * 0.05);
+                r = 0.6 * depthFactor;
+                g = 0.88 * depthFactor;
+                b = 0.98 * depthFactor;
+            }
+
             positions.push(lx, waterY, lz);
             normals.push(0, 1, 0);
             uvs.push(waterUvs.uMin, waterUvs.vMin);
             colors.push(r, g, b);
-            
+
             positions.push(lx + 1, waterY, lz);
             normals.push(0, 1, 0);
             uvs.push(waterUvs.uMax, waterUvs.vMin);
             colors.push(r, g, b);
-            
+
             positions.push(lx + 1, waterY, lz + 1);
             normals.push(0, 1, 0);
             uvs.push(waterUvs.uMax, waterUvs.vMax);
             colors.push(r, g, b);
-            
+
             positions.push(lx, waterY, lz + 1);
             normals.push(0, 1, 0);
             uvs.push(waterUvs.uMin, waterUvs.vMax);
             colors.push(r, g, b);
-            
+
             indices.push(baseVertex, baseVertex + 2, baseVertex + 1);
             indices.push(baseVertex, baseVertex + 3, baseVertex + 2);
         }
     }
-    
+
     return {
         positions: new Float32Array(positions),
         normals: new Float32Array(normals),
@@ -1308,7 +1329,7 @@ export function generateChunkData(terrainProvider, chunkX, chunkZ, useDithering 
 
     const surface = generateSurfaceMesh(heightmap, voxelMask, heightfieldHoleMask, surfaceTypes, terrainProvider, chunkX, chunkZ, useDithering);
     const { opaque: voxelOpaque } = generateVoxelMesh(terrainProvider, voxelMask, chunkX, chunkZ, heightfieldHoleMask);
-    const water = generateWaterMesh(heightmap);
+    const water = generateWaterMesh(heightmap, biomeData);
 
     return {
         heightmap,

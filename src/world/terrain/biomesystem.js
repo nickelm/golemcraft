@@ -22,11 +22,28 @@
  */
 export const BIOMES = {
     // WATER BIOMES (sand-based)
+
+    // Deep ocean: bottomless abyss separating continents
+    // Players sink endlessly - need boats to cross
+    deep_ocean: {
+        name: 'Abyss',
+        baseHeightFraction: 0.0,       // Floor at y=0 (bottomless effect)
+        heightScaleFraction: 0.0,      // Flat - no terrain variation
+        terrain: { primary: 'sand', tint: [0.2, 0.3, 0.5] },     // Dark blue (not visible - no floor)
+        subsurface: { primary: 'sand', tint: [0.2, 0.3, 0.5] },
+        underwater: { primary: 'sand', tint: [0.2, 0.3, 0.5] },
+        objects: [],
+        objectDensities: {},
+        mobs: [],
+        spawnWeights: {}
+    },
+
+    // Coastal ocean: shallow water with sandy floor
     ocean: {
-        name: 'Deep Ocean',
+        name: 'Ocean',
         baseHeightFraction: 0.02,
         heightScaleFraction: 0.02,
-        terrain: { primary: 'sand', tint: [0.8, 1.0, 1.4] },  // Dark blue-tinted sand (deep)
+        terrain: { primary: 'sand', tint: [0.8, 1.0, 1.4] },  // Blue-tinted sand
         subsurface: { primary: 'sand', tint: [0.7, 0.8, 1.0] },
         underwater: { primary: 'sand', tint: [0.5, 0.7, 1.0] },
         objects: [],
@@ -192,12 +209,12 @@ export const BIOMES = {
         spawnWeights: { zombie: 30, skeleton: 25 }
     },
 
-    // COLD BIOMES (snow-based)
+    // COLD BIOMES (ice-based, like glacier but with different vegetation)
     snow: {
         name: 'Snowy Plains',
         baseHeightFraction: 0.14,
         heightScaleFraction: 0.08,
-        terrain: { primary: 'snow', tint: [2.0, 2.0, 2.0] },  // Bright white snow
+        terrain: { primary: 'ice', tint: [3.0, 3.0, 3.0] },  // Ice texture washed out to bright white
         subsurface: { primary: 'dirt', tint: [1.0, 1.0, 1.0] },
         underwater: { primary: 'sand', tint: [1.0, 1.0, 1.0] },
         objects: ['snowTree', 'rock'],
@@ -216,7 +233,7 @@ export const BIOMES = {
         name: 'Tundra',
         baseHeightFraction: 0.13,
         heightScaleFraction: 0.05,
-        terrain: { primary: 'snow', tint: [1.7, 1.8, 2.0] },  // Bright blue-white snow
+        terrain: { primary: 'ice', tint: [2.5, 2.6, 2.8] },  // Ice texture, slightly blue-white
         subsurface: { primary: 'dirt', tint: [0.85, 0.85, 0.9] },
         underwater: { primary: 'sand', tint: [1.0, 1.0, 1.0] },
         objects: ['rock'],
@@ -229,7 +246,7 @@ export const BIOMES = {
         name: 'Alpine',
         baseHeightFraction: 0.32,
         heightScaleFraction: 0.24,
-        terrain: { primary: 'snow', tint: [2.0, 1.8, 1.9] },  // Bright pink-tinted alpine snow
+        terrain: { primary: 'ice', tint: [2.8, 2.6, 2.7] },  // Ice texture, washed out with slight pink tint
         subsurface: { primary: 'rock', tint: [0.9, 0.9, 0.9] },
         underwater: { primary: 'sand', tint: [1.0, 1.0, 1.0] },
         objects: ['boulder', 'rock'],

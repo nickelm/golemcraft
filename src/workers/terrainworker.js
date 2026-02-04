@@ -131,6 +131,48 @@ function octaveNoise2D(x, z, octaves = 4, baseFreq = 0.05, hashFn = hash) {
 }
 
 // ============================================================================
+// CONTINENTAL NOISE (Phase 3: Deep Oceans)
+// ============================================================================
+
+/**
+ * Continental noise configuration
+ * Very low frequency creates continent-scale land/ocean distribution
+ */
+const CONTINENTAL_CONFIG = {
+    frequency: 0.002,        // Very low freq = ~500 block wavelength
+    octaves: 2,              // Smooth continental shapes
+    threshold_deep: 0.22,    // Below = deep_ocean (bottomless abyss)
+    threshold_land: 0.38,    // Above = land biomes; between = coastal ocean
+};
+
+/**
+ * Sample continental noise at world position
+ * Returns [0, 1] value indicating how "continental" (land-like) the position is
+ * Low values = deep ocean, mid values = coastal ocean, high values = land
+ *
+ * @param {number} x - World X coordinate
+ * @param {number} z - World Z coordinate
+ * @returns {number} Continentalness value [0, 1]
+ */
+function getContinentalNoise(x, z) {
+    // Domain warping for organic coastlines
+    const warpStrength = 40;
+    const warpX = octaveNoise2D(x + 1000, z, 2, 0.003, hash) * warpStrength;
+    const warpZ = octaveNoise2D(x, z + 1000, 2, 0.003, hash) * warpStrength;
+
+    const raw = octaveNoise2D(
+        x + warpX,
+        z + warpZ,
+        CONTINENTAL_CONFIG.octaves,
+        CONTINENTAL_CONFIG.frequency,
+        (x, z) => hash(x, z, 99999)  // Unique seed for continental noise
+    );
+
+    // Normalize from typical noise range [0.08, 0.45] to [0, 1]
+    return Math.max(0, Math.min(1, (raw - 0.08) / 0.37));
+}
+
+// ============================================================================
 // CLIMATE-BASED BIOME SELECTION (16-biome system)
 // ============================================================================
 
@@ -138,68 +180,97 @@ function octaveNoise2D(x, z, octaves = 4, baseFreq = 0.05, hashFn = hash) {
 const PEAK_BIOMES = ['mountains', 'glacier', 'alpine', 'badlands', 'highlands'];
 
 /**
- * Select biome from climate parameters using 16-biome matrix
- * Pure function - temperature × humidity × elevation → biome name
+ * Select biome using Whittaker diagram approach
+ * Uses continuous temperature and precipitation values with elevation modifiers
  *
- * @param {string} temp - 'hot', 'temperate', or 'cold'
- * @param {string} humidity - 'dry', 'moderate', or 'wet'
- * @param {string} elev - 'low', 'mid', or 'high'
+ * Temperature × Precipitation as primary 2D axes (like a real Whittaker diagram)
+ * Elevation modifies effective temperature (mountains are colder) and provides overrides
+ *
+ * @param {number} temp - Raw temperature [0, 1]
+ * @param {number} precip - Precipitation/humidity [0, 1]
+ * @param {number} elevation - Terrain elevation [0, 1]
  * @returns {string} Biome name
  */
-function selectBiomeFromClimate(temp, humidity, elev) {
-    // HOT CLIMATES
-    if (temp === 'hot') {
-        if (humidity === 'dry') {
-            if (elev === 'low') return 'desert';
-            if (elev === 'mid') return 'red_desert';
-            return 'badlands';  // high
-        }
-        if (humidity === 'moderate') {
-            if (elev === 'low' || elev === 'mid') return 'savanna';
-            return 'badlands';  // high
-        }
-        // wet
-        if (elev === 'low') return 'jungle';  // Will be replaced by beach near ocean
-        if (elev === 'mid') return 'jungle';
-        return 'jungle';  // high
+function selectBiomeFromWhittaker(temp, precip, elevation) {
+    // Apply elevation cooling (one-directional, above tree line only)
+    const TREE_LINE = 0.55;
+    const COOLING_RATE = 0.45;
+
+    let effectiveTemp = temp;
+    if (elevation > TREE_LINE) {
+        effectiveTemp = temp - (elevation - TREE_LINE) * COOLING_RATE;
+    }
+    effectiveTemp = Math.max(0, effectiveTemp);
+
+    // High elevation overrides (above 0.75)
+    if (elevation > 0.75) {
+        if (effectiveTemp < 0.20) return 'glacier';
+        if (effectiveTemp < 0.50) return 'alpine';
+        return 'mountains';
     }
 
-    // TEMPERATE CLIMATES
-    if (temp === 'temperate') {
-        if (humidity === 'dry') {
-            if (elev === 'low') return 'meadow';
-            if (elev === 'mid') return 'plains';
-            return 'mountains';  // high
-        }
-        if (humidity === 'moderate') {
-            if (elev === 'low') return 'meadow';
-            if (elev === 'mid') return 'deciduous_forest';
-            return 'mountains';  // high
-        }
-        // wet
-        if (elev === 'low') return 'swamp';
-        if (elev === 'mid') return 'autumn_forest';
-        return 'deciduous_forest';  // high
+    // Mid-high elevation (0.60-0.75)
+    if (elevation > 0.60) {
+        if (effectiveTemp < 0.25) return 'glacier';
+        if (effectiveTemp < 0.55) return 'alpine';
+        if (precip < 0.35) return 'highlands';
+        return 'mountains';
     }
 
-    // COLD CLIMATES
-    if (temp === 'cold') {
-        if (humidity === 'dry') {
-            if (elev === 'low' || elev === 'mid') return 'tundra';
-            return 'mountains';  // high
-        }
-        if (humidity === 'moderate') {
-            if (elev === 'low') return 'glacier';
-            if (elev === 'mid') return 'taiga';
-            return 'glacier';  // high
-        }
-        // wet
-        if (elev === 'low') return 'glacier';
-        if (elev === 'mid') return 'taiga';
-        return 'glacier';  // high
+    // FROZEN ZONE (effectiveTemp < 0.20)
+    if (effectiveTemp < 0.20) {
+        if (precip < 0.35) return 'tundra';
+        return 'glacier';
     }
 
-    return 'plains';  // Fallback
+    // COLD ZONE (0.20-0.50) - widened for more contiguous snow/taiga regions
+    if (effectiveTemp < 0.50) {
+        if (precip < 0.30) return 'tundra';
+        if (precip < 0.65) return 'snow';  // Wider range for snow
+        return 'taiga';
+    }
+
+    // TEMPERATE ZONE (0.50-0.72)
+    if (effectiveTemp < 0.72) {
+        if (precip < 0.28) return 'meadow';
+        if (precip < 0.50) return 'plains';
+        if (precip < 0.68) return 'deciduous_forest';
+        if (precip < 0.82) return 'autumn_forest';
+        return 'swamp';
+    }
+
+    // HOT ZONE (>= 0.70)
+    if (precip < 0.20) return 'desert';
+    if (precip < 0.35) return 'red_desert';
+    if (precip < 0.50) return 'savanna';
+    if (precip < 0.70) return 'jungle';
+    return elevation < 0.25 ? 'rainforest' : 'jungle';
+}
+
+/**
+ * Apply sub-biome variation for natural patchiness within larger biomes
+ * Uses high-frequency noise to create patches of variant biomes
+ *
+ * @param {string} baseBiome - Primary biome from Whittaker lookup
+ * @param {number} x - World X coordinate
+ * @param {number} z - World Z coordinate
+ * @returns {string} Final biome (possibly a variant)
+ */
+function applySubBiomeVariation(baseBiome, x, z) {
+    const variationNoise = octaveNoise2D(x, z, 2, 0.08, (x, z) => hash(x, z, 88888));
+
+    const SUB_BIOMES = {
+        'plains': { threshold: 0.7, variant: 'meadow' },
+        'deciduous_forest': { threshold: 0.75, variant: 'autumn_forest' },
+        'desert': { threshold: 0.8, variant: 'red_desert' },
+        'jungle': { threshold: 0.85, variant: 'rainforest' }
+    };
+
+    const subBiome = SUB_BIOMES[baseBiome];
+    if (subBiome && variationNoise > subBiome.threshold) {
+        return subBiome.variant;
+    }
+    return baseBiome;
 }
 
 // ============================================================================
@@ -241,28 +312,39 @@ class WorkerTerrainProvider {
             return this.biomeCache.get(key);
         }
 
-        const biomeNoise = octaveNoise2D(x, z, 4, 0.015, hash);      // Elevation noise (unchanged)
-        const tempNoise = octaveNoise2D(x, z, 4, 0.018, hash2);      // Temperature noise (0.02 → 0.018)
-        const humidityNoise = octaveNoise2D(x, z, 3, 0.012, (x, z) => hash(x, z, 77777)); // Humidity noise (unchanged)
+        // Continental noise determines ocean vs land at large scale
+        const continentalness = getContinentalNoise(x, z);
 
-        const elevation = Math.max(0, Math.min(1, (biomeNoise - 0.08) / 0.37));
+        // Deep ocean: bottomless abyss separating continents
+        if (continentalness < CONTINENTAL_CONFIG.threshold_deep) {
+            this.biomeCache.set(key, 'deep_ocean');
+            return 'deep_ocean';
+        }
+
+        // Coastal ocean: transition zone with sandy floor
+        if (continentalness < CONTINENTAL_CONFIG.threshold_land) {
+            this.biomeCache.set(key, 'ocean');
+            return 'ocean';
+        }
+
+        // Land biomes: use Whittaker climate-based selection
+        const elevationNoise = octaveNoise2D(x, z, 4, 0.015, hash);
+        const tempNoise = octaveNoise2D(x, z, 4, 0.018, hash2);
+        const humidityNoise = octaveNoise2D(x, z, 3, 0.012, (x, z) => hash(x, z, 77777));
+
+        // Normalize to [0, 1]
+        const elevation = Math.max(0, Math.min(1, (elevationNoise - 0.08) / 0.37));
         const temp = Math.max(0, Math.min(1, (tempNoise - 0.08) / 0.37));
         const humidity = Math.max(0, Math.min(1, (humidityNoise - 0.08) / 0.37));
 
-        let biome;
+        // Whittaker-based selection using continuous values
+        let biome = selectBiomeFromWhittaker(temp, humidity, elevation);
 
-        // Ocean check first (below 15% elevation threshold)
-        if (elevation < 0.15) {
-            biome = 'ocean';
-        } else {
-            // Classify climate axes into bands
-            const tempBand = temp < 0.33 ? 'cold' : (temp < 0.66 ? 'temperate' : 'hot');
-            const humidityBand = humidity < 0.33 ? 'dry' : (humidity < 0.66 ? 'moderate' : 'wet');
-            const elevBand = elevation < 0.3 ? 'low' : (elevation < 0.6 ? 'mid' : 'high');
+        // Apply sub-biome variation for natural patchiness
+        biome = applySubBiomeVariation(biome, x, z);
 
-            // Select biome from 16-biome climate matrix
-            biome = selectBiomeFromClimate(tempBand, humidityBand, elevBand);
-        }
+        // Note: Beach detection happens in getBlockType() via isNearOcean(),
+        // not here, to avoid infinite recursion (isNearOcean calls getBiome)
 
         this.biomeCache.set(key, biome);
         return biome;
@@ -279,7 +361,15 @@ class WorkerTerrainProvider {
 
         const biome = this.getBiome(x, z);
         const biomeData = BIOMES[biome];
-        
+
+        // Deep ocean: bottomless abyss (very low floor)
+        // Returns height just above bedrock - player sinks endlessly
+        if (biome === 'deep_ocean') {
+            const deepOceanFloor = 0.5;
+            this.continuousHeightCache.set(key, deepOceanFloor);
+            return deepOceanFloor;
+        }
+
         // Domain warping for organic terrain shapes
         const warpStrength = 2.5;
         const warpX = octaveNoise2D(x + 500, z, 2, 0.015, hash) * warpStrength;
@@ -323,7 +413,7 @@ class WorkerTerrainProvider {
             height += jungleHillNoise * 4;
         }
 
-        if (biome !== 'ocean' && biome !== 'desert' && this.isRiver(x, z)) {
+        if (biome !== 'ocean' && biome !== 'deep_ocean' && biome !== 'desert' && this.isRiver(x, z)) {
             height = Math.min(height, WATER_LEVEL - 1);
         }
 
@@ -374,6 +464,15 @@ class WorkerTerrainProvider {
     }
 
     /**
+     * Check if a biome is any type of ocean
+     * @param {string} biome - Biome name
+     * @returns {boolean} True if ocean or deep_ocean
+     */
+    isOceanBiome(biome) {
+        return biome === 'ocean' || biome === 'deep_ocean';
+    }
+
+    /**
      * Check if position is within 5 blocks of ocean horizontally
      * Samples in square pattern for efficiency
      * @param {number} x - World X coordinate
@@ -384,22 +483,22 @@ class WorkerTerrainProvider {
         const BEACH_RADIUS = 5;
         const SAMPLE_STEP = 2;  // Sample every 2 blocks for efficiency
 
-        // Quick check: if this cell is ocean, it's not a beach
-        if (this.getBiome(x, z) === 'ocean') return false;
+        // Quick check: if this cell is any ocean type, it's not a beach
+        if (this.isOceanBiome(this.getBiome(x, z))) return false;
 
         // Sample in expanding squares
         for (let r = SAMPLE_STEP; r <= BEACH_RADIUS; r += SAMPLE_STEP) {
             // Check cardinal directions
-            if (this.getBiome(x + r, z) === 'ocean') return true;
-            if (this.getBiome(x - r, z) === 'ocean') return true;
-            if (this.getBiome(x, z + r) === 'ocean') return true;
-            if (this.getBiome(x, z - r) === 'ocean') return true;
+            if (this.isOceanBiome(this.getBiome(x + r, z))) return true;
+            if (this.isOceanBiome(this.getBiome(x - r, z))) return true;
+            if (this.isOceanBiome(this.getBiome(x, z + r))) return true;
+            if (this.isOceanBiome(this.getBiome(x, z - r))) return true;
 
             // Check diagonals
-            if (this.getBiome(x + r, z + r) === 'ocean') return true;
-            if (this.getBiome(x - r, z + r) === 'ocean') return true;
-            if (this.getBiome(x + r, z - r) === 'ocean') return true;
-            if (this.getBiome(x - r, z - r) === 'ocean') return true;
+            if (this.isOceanBiome(this.getBiome(x + r, z + r))) return true;
+            if (this.isOceanBiome(this.getBiome(x - r, z + r))) return true;
+            if (this.isOceanBiome(this.getBiome(x + r, z - r))) return true;
+            if (this.isOceanBiome(this.getBiome(x - r, z - r))) return true;
         }
 
         return false;
