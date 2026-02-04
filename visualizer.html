@@ -1,15 +1,9 @@
 <!DOCTYPE html>
-<!--
-    @deprecated This file is deprecated in favor of src/editor/index.html
-    The new Template Editor provides improved functionality.
-    See src/editor/index.html for the new implementation.
-    This file will be removed in a future version.
--->
 <html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>GolemCraft - Terrain Visualizer (Deprecated)</title>
+    <title>GolemCraft - Terrain Visualizer</title>
     <style>
         * {
             margin: 0;
@@ -179,42 +173,6 @@
             color: #aaa;
             margin-top: 5px;
         }
-
-        #zone-info {
-            position: absolute;
-            top: 10px;
-            left: 50%;
-            transform: translateX(-50%);
-            background: rgba(0, 0, 0, 0.9);
-            padding: 15px;
-            border-radius: 8px;
-            z-index: 150;
-            min-width: 200px;
-            font-size: 13px;
-            line-height: 1.6;
-        }
-
-        .zone-info-header {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            margin-bottom: 10px;
-            font-weight: bold;
-            font-size: 16px;
-        }
-
-        #zone-info-close {
-            background: none;
-            border: none;
-            color: #fff;
-            font-size: 20px;
-            cursor: pointer;
-            padding: 0 5px;
-        }
-
-        #zone-info-close:hover {
-            color: #ff6666;
-        }
     </style>
 </head>
 <body>
@@ -231,45 +189,18 @@
                 <input type="number" id="seed-input" value="12345" step="1">
             </div>
             <div class="control-row">
-                <label for="template-select">Template:</label>
-                <select id="template-select">
-                    <option value="default">Default</option>
-                    <option value="verdania">Verdania</option>
-                </select>
-            </div>
-            <div class="control-row">
                 <label for="mode-select">Mode:</label>
                 <select id="mode-select">
                     <option value="continental">Continentalness</option>
                     <option value="temperature">Temperature</option>
                     <option value="humidity">Humidity</option>
-                    <option value="erosion">Erosion</option>
-                    <option value="ridgeness">Ridgeness</option>
                     <option value="biome">Biome</option>
                     <option value="elevation">Elevation</option>
                     <option value="composite">Composite (Map)</option>
                 </select>
             </div>
             <div class="mode-desc" id="mode-description">
-                Land/ocean distribution (black = ocean, white = highlands)
-            </div>
-            <div class="control-row" style="margin-top: 10px;">
-                <label for="rivers-checkbox">
-                    <input type="checkbox" id="rivers-checkbox" checked> Show Rivers
-                </label>
-            </div>
-            <div class="control-row">
-                <label for="zones-checkbox">
-                    <input type="checkbox" id="zones-checkbox"> Show Zones
-                </label>
-            </div>
-            <div class="control-row">
-                <label for="zone-style-select">Zone Style:</label>
-                <select id="zone-style-select">
-                    <option value="circles">Circles</option>
-                    <option value="voronoi" disabled>Voronoi (coming soon)</option>
-                    <option value="grid" disabled>Grid (debug)</option>
-                </select>
+                Land/ocean distribution (blue = ocean, green = plains, brown = hills, white = peaks)
             </div>
             <div class="control-row" style="margin-top: 10px;">
                 <button id="clear-cache-btn">Clear Cache</button>
@@ -281,19 +212,7 @@
     <div id="info">
         <div>Position: <span id="pos-display">0, 0</span></div>
         <div>Zoom: <span id="zoom-display">2.0</span>x</div>
-        <div>Template: <span id="template-display">Default</span></div>
         <div>Value: <span id="value-display">-</span></div>
-    </div>
-
-    <div id="zone-info" style="display: none;">
-        <div class="zone-info-header">
-            <span id="zone-info-name">Zone Name</span>
-            <button id="zone-info-close">&times;</button>
-        </div>
-        <div>Level: <span id="zone-info-levels">1-5</span></div>
-        <div>Type: <span id="zone-info-type">wilderness</span></div>
-        <div>Mood: <span id="zone-info-mood">wild</span></div>
-        <div>Adjacent: <span id="zone-info-adjacent">None</span></div>
     </div>
 
 

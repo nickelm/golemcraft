@@ -5,7 +5,7 @@
  * Uses Transferable ArrayBuffers for zero-copy data transfer.
  */
 
-import { getTerrainParams } from '../world/terrain/worldgen.js';
+import { getTerrainParams } from '../world/terrain/terraincore.js';
 import { getColorForMode } from '../tools/mapvisualizer/colors.js';
 
 const TILE_SIZE = 128;
@@ -26,7 +26,7 @@ const REFINEMENT_CONFIG = [
  * @returns {{buffer: ArrayBuffer, width: number, height: number}}
  */
 function generateProgressiveTile(params) {
-    const { tileX, tileZ, lodLevel, refinementLevel, seed, mode, template } = params;
+    const { tileX, tileZ, lodLevel, refinementLevel, seed, mode } = params;
 
     const config = REFINEMENT_CONFIG[refinementLevel] || REFINEMENT_CONFIG[5];
     const { sampling, gridSize } = config;
@@ -47,15 +47,15 @@ function generateProgressiveTile(params) {
             const wx = tileX + px * totalStep;
             const wz = tileZ + py * totalStep;
 
-            const terrainParams = getTerrainParams(wx, wz, seed, template);
+            const terrainParams = getTerrainParams(wx, wz, seed);
 
             let rgb;
 
             if (needsNeighbors) {
-                const leftParams = getTerrainParams(wx - totalStep, wz, seed, template);
-                const rightParams = getTerrainParams(wx + totalStep, wz, seed, template);
-                const upParams = getTerrainParams(wx, wz - totalStep, seed, template);
-                const downParams = getTerrainParams(wx, wz + totalStep, seed, template);
+                const leftParams = getTerrainParams(wx - totalStep, wz, seed);
+                const rightParams = getTerrainParams(wx + totalStep, wz, seed);
+                const upParams = getTerrainParams(wx, wz - totalStep, seed);
+                const downParams = getTerrainParams(wx, wz + totalStep, seed);
 
                 const neighbors = {
                     left: leftParams.height,
@@ -86,7 +86,7 @@ function generateProgressiveTile(params) {
  * @returns {ArrayBuffer} RGBA pixel data buffer
  */
 function generateTile(params) {
-    const { tileX, tileZ, lodLevel, seed, mode, template } = params;
+    const { tileX, tileZ, lodLevel, seed, mode } = params;
 
     // Create pixel buffer (128 x 128 x 4 bytes RGBA)
     const buffer = new ArrayBuffer(TILE_SIZE * TILE_SIZE * 4);
@@ -103,16 +103,16 @@ function generateTile(params) {
             const wx = tileX + px * step;
             const wz = tileZ + py * step;
 
-            const terrainParams = getTerrainParams(wx, wz, seed, template);
+            const terrainParams = getTerrainParams(wx, wz, seed);
 
             let rgb;
 
             if (needsNeighbors) {
                 // Scale neighbor offsets by LOD step for consistent hillshade appearance
-                const leftParams = getTerrainParams(wx - step, wz, seed, template);
-                const rightParams = getTerrainParams(wx + step, wz, seed, template);
-                const upParams = getTerrainParams(wx, wz - step, seed, template);
-                const downParams = getTerrainParams(wx, wz + step, seed, template);
+                const leftParams = getTerrainParams(wx - step, wz, seed);
+                const rightParams = getTerrainParams(wx + step, wz, seed);
+                const upParams = getTerrainParams(wx, wz - step, seed);
+                const downParams = getTerrainParams(wx, wz + step, seed);
 
                 const neighbors = {
                     left: leftParams.height,
@@ -145,7 +145,7 @@ self.onmessage = function(e) {
 
     switch (type) {
         case 'generate': {
-            const { requestId, tileX, tileZ, lodLevel, seed, mode, template } = data;
+            const { requestId, tileX, tileZ, lodLevel, seed, mode } = data;
 
             try {
                 const buffer = generateTile({
@@ -153,8 +153,7 @@ self.onmessage = function(e) {
                     tileZ,
                     lodLevel,
                     seed,
-                    mode,
-                    template
+                    mode
                 });
 
                 // Send response with transferred buffer (zero-copy)
@@ -184,7 +183,7 @@ self.onmessage = function(e) {
 
         case 'generate_progressive': {
             // Progressive refinement tile generation
-            const { requestId, tileX, tileZ, lodLevel, refinementLevel, seed, mode, template } = data;
+            const { requestId, tileX, tileZ, lodLevel, refinementLevel, seed, mode } = data;
 
             try {
                 const result = generateProgressiveTile({
@@ -193,8 +192,7 @@ self.onmessage = function(e) {
                     lodLevel,
                     refinementLevel,
                     seed,
-                    mode,
-                    template
+                    mode
                 });
 
                 // Send response with refinement metadata

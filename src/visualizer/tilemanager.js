@@ -25,7 +25,6 @@ export class TileManager {
 
         // Configuration
         this.seed = 0;
-        this.template = null;
         this.mode = 'continental';
 
         // Viewport state
@@ -41,7 +40,7 @@ export class TileManager {
         this.pendingRequests = new Map();  // requestId -> { tileX, tileZ, lodLevel, mode, refinementLevel, configVersion }
         this.requestQueue = [];            // Tiles waiting to be sent to worker
 
-        // Config version - incremented on every seed/template/mode change to invalidate stale results
+        // Config version - incremented on every seed/mode change to invalidate stale results
         this.configVersion = 0;
 
         // Visible tiles cache (updated on viewport change)
@@ -54,12 +53,10 @@ export class TileManager {
     /**
      * Initialize the Web Worker
      * @param {number} seed - World seed
-     * @param {Object} template - Terrain template
      * @returns {Promise<boolean>} True if worker initialized successfully
      */
-    async initWorker(seed, template) {
+    async initWorker(seed) {
         this.seed = seed;
-        this.template = template;
 
         return new Promise((resolve) => {
             try {
@@ -99,15 +96,13 @@ export class TileManager {
     }
 
     /**
-     * Update configuration (seed/template/mode change)
+     * Update configuration (seed/mode change)
      * Cancels pending requests and clears queue
      * @param {number} seed - World seed
-     * @param {Object} template - Terrain template
      * @param {string} [mode] - Visualization mode
      */
-    updateConfig(seed, template, mode) {
+    updateConfig(seed, mode) {
         this.seed = seed;
-        this.template = template;
         if (mode !== undefined) {
             this.mode = mode;
         }
@@ -293,7 +288,7 @@ export class TileManager {
                     break;
                 }
 
-                // Check config version - discard if template/seed/mode changed since request was sent
+                // Check config version - discard if seed/mode changed since request was sent
                 if (pendingReq.configVersion !== this.configVersion) {
                     // Stale result from old config - discard
                     this.pendingRequests.delete(requestId);
@@ -336,7 +331,7 @@ export class TileManager {
                     break;
                 }
 
-                // Check config version - discard if template/seed/mode changed since request was sent
+                // Check config version - discard if seed/mode changed since request was sent
                 if (pendingReqProg.configVersion !== this.configVersion) {
                     // Stale result from old config - discard
                     this.pendingRequests.delete(requestId);
@@ -575,8 +570,7 @@ export class TileManager {
                         lodLevel: item.lodLevel,
                         refinementLevel: item.refinementLevel,
                         seed: this.seed,
-                        mode: item.mode,
-                        template: this.template
+                        mode: item.mode
                     }
                 });
             } else {
@@ -590,8 +584,7 @@ export class TileManager {
                         lodLevel: item.lodLevel,
                         tileSize: TILE_SIZE,
                         seed: this.seed,
-                        mode: item.mode,
-                        template: this.template
+                        mode: item.mode
                     }
                 });
             }

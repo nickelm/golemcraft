@@ -173,12 +173,14 @@ Very low frequency continental noise (0.002) creates landmasses.
 - Much deeper than regular ocean (WATER_LEVEL - 8)
 - Requires boats or bridges to cross
 
-### Phase 4: Basin Rivers
-Rivers flow to destinations (lakes, ocean), not random squiggles.
-- Basin detection via low-frequency noise
-- Rivers form in drainage paths toward basins
-- Width increases approaching destination
-- No rivers dead-ending in plains
+### Phase 4: Basin Rivers ✓
+Rivers flow toward water destinations (ocean, lakes) using proximity heuristics.
+- Proximity-based approach: rivers only form within 200 blocks of ocean/lake
+- Elevation cutoff: no rivers above tree line (elevation > 0.55)
+- Biome filtering: no rivers in desert, red_desert, glacier, ocean
+- Wet biome exemption: swamp, jungle, taiga, rainforest allow rivers everywhere
+- Variable width: rivers widen (0.015→0.035) as they approach destinations
+- Chunk-level caching for water destination proximity checks
 
 ### Phase 5: Local Roads
 Connect settlements with terrain-aware pathfinding.
@@ -289,10 +291,8 @@ Changes here affect all new chunks. Existing chunks regenerate when player retur
 
 ## Known Limitations
 
-- Rivers don't flow to destinations (noise isolines only)
 - No roads or settlements yet
-- Biome selection is matrix-based, not Whittaker
-- No deep oceans separating landmasses
+- No deep oceans separating landmasses (Phase 3 pending)
 - Landmarks limited to Mayan temples
 
 ---

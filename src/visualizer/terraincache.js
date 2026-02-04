@@ -2,40 +2,12 @@
  * TerrainCache - IndexedDB-based cache for terrain visualizer
  *
  * Caches computed heightmaps and terrain data to avoid regenerating unchanged chunks.
- * Automatically invalidates when seed, template, or generation algorithm changes.
+ * Automatically invalidates when seed or generation algorithm changes.
  */
 
 // Generator version - bump this when terrain generation algorithm changes
 const GENERATOR_VERSION = 1;
 
-/**
- * Simple string hash function for template config objects
- * Uses djb2 algorithm
- * @param {string} str - String to hash
- * @returns {number} Hash value
- */
-function hashString(str) {
-    let hash = 5381;
-    for (let i = 0; i < str.length; i++) {
-        hash = ((hash << 5) + hash) + str.charCodeAt(i);
-        hash = hash & hash; // Convert to 32-bit integer
-    }
-    return hash >>> 0; // Ensure unsigned
-}
-
-/**
- * Generate hash for a template config object
- * @param {Object} template - Template configuration object
- * @returns {string} Hash string
- */
-function hashTemplate(template) {
-    try {
-        const str = JSON.stringify(template);
-        return hashString(str).toString(16);
-    } catch {
-        return '0';
-    }
-}
 
 export class TerrainCache {
     /**
@@ -49,7 +21,6 @@ export class TerrainCache {
 
         // Cache version components
         this.seed = 0;
-        this.templateHash = '0';
         this.generatorVersion = GENERATOR_VERSION;
     }
 
@@ -118,26 +89,24 @@ export class TerrainCache {
 
     /**
      * Generate cache key for a chunk
-     * Format: "{seed}:{templateHash}:{generatorVersion}:{chunkX},{chunkZ}"
+     * Format: "{seed}:{generatorVersion}:{chunkX},{chunkZ}"
      * @private
      * @param {number} chunkX - Chunk X coordinate
      * @param {number} chunkZ - Chunk Z coordinate
      * @returns {string} Cache key
      */
     _makeKey(chunkX, chunkZ) {
-        return `${this.seed}:${this.templateHash}:${this.generatorVersion}:${chunkX},${chunkZ}`;
+        return `${this.seed}:${this.generatorVersion}:${chunkX},${chunkZ}`;
     }
 
     /**
      * Set cache version parameters
-     * Call this when seed or template changes to invalidate old entries
+     * Call this when seed changes to invalidate old entries
      * @param {number} seed - World seed
-     * @param {Object|string} template - Template config object or pre-computed hash
      * @param {number} [generatorVersion] - Generator version (defaults to GENERATOR_VERSION)
      */
-    setCacheVersion(seed, template, generatorVersion = GENERATOR_VERSION) {
+    setCacheVersion(seed, generatorVersion = GENERATOR_VERSION) {
         this.seed = seed;
-        this.templateHash = typeof template === 'string' ? template : hashTemplate(template);
         this.generatorVersion = generatorVersion;
     }
 
@@ -342,6 +311,6 @@ export class TerrainCache {
 }
 
 /**
- * Export hash utilities for external use
+ * Export constants for external use
  */
-export { hashString, hashTemplate, GENERATOR_VERSION };
+export { GENERATOR_VERSION };

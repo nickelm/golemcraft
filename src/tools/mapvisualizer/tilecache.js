@@ -4,7 +4,7 @@
  * Integrates with TerrainCache for persistent IndexedDB storage
  */
 
-import { getTerrainParams } from '../../world/terrain/worldgen.js';
+import { getTerrainParams } from '../../world/terrain/terraincore.js';
 import { getColorForMode } from './colors.js';
 
 export class TileCache {
@@ -102,11 +102,10 @@ export class TileCache {
    * @param {number} worldZ - Tile world Z coordinate (should be aligned to tileSize grid)
    * @param {string} mode - Visualization mode
    * @param {number} seed - World seed
-   * @param {Object} template - Terrain template
    * @param {number} lodLevel - LOD level (0 = 1:1, 1 = 1:2, 2 = 1:4, etc.)
    * @returns {ImageData} The tile's image data
    */
-  getTile(worldX, worldZ, mode, seed, template, lodLevel = 0) {
+  getTile(worldX, worldZ, mode, seed, lodLevel = 0) {
     const key = this._makeKey(worldX, worldZ, mode, seed, lodLevel);
 
     // Check cache
@@ -122,7 +121,7 @@ export class TileCache {
     }
 
     // Render the tile
-    const imageData = this._renderTile(worldX, worldZ, mode, seed, template, lodLevel);
+    const imageData = this._renderTile(worldX, worldZ, mode, seed, lodLevel);
 
     // Evict oldest if over capacity
     while (this.cache.size >= this.maxTiles && this.accessOrder.length > 0) {
@@ -144,11 +143,10 @@ export class TileCache {
    * @param {number} worldZ - Tile world Z coordinate (should be aligned to tileSize grid)
    * @param {string} mode - Visualization mode
    * @param {number} seed - World seed
-   * @param {Object} template - Terrain template
    * @param {number} lodLevel - LOD level (0 = 1:1, 1 = 1:2, 2 = 1:4, etc.)
    * @returns {Promise<{imageData: ImageData, fromTerrainCache: boolean}>}
    */
-  async getTileAsync(worldX, worldZ, mode, seed, template, lodLevel = 0) {
+  async getTileAsync(worldX, worldZ, mode, seed, lodLevel = 0) {
     const key = this._makeKey(worldX, worldZ, mode, seed, lodLevel);
 
     // Check in-memory cache first
@@ -176,7 +174,7 @@ export class TileCache {
 
     // Render the tile (using cached terrain data if available)
     const { imageData, heightmap, biomeData } = this._renderTileWithData(
-      worldX, worldZ, mode, seed, template, lodLevel, terrainData
+      worldX, worldZ, mode, seed, lodLevel, terrainData
     );
 
     // Store terrain data in TerrainCache if it was newly generated
@@ -205,10 +203,9 @@ export class TileCache {
    * @param {number} worldZ - Tile world Z coordinate
    * @param {string} mode - Visualization mode
    * @param {number} seed - World seed
-   * @param {Object} template - Terrain template
    * @param {number} lodLevel - LOD level (0 = 1:1, 1 = 1:2, 2 = 1:4, etc.)
    */
-  _renderTile(worldX, worldZ, mode, seed, template, lodLevel = 0) {
+  _renderTile(worldX, worldZ, mode, seed, lodLevel = 0) {
     // Create an offscreen canvas for rendering
     const canvas = new OffscreenCanvas(this.tileSize, this.tileSize);
     const ctx = canvas.getContext('2d');
@@ -226,16 +223,16 @@ export class TileCache {
         const wx = worldX + px * step;
         const wz = worldZ + py * step;
 
-        const params = getTerrainParams(wx, wz, seed, template);
+        const params = getTerrainParams(wx, wz, seed);
 
         let rgb;
 
         if (needsNeighbors) {
           // Scale neighbor offsets by LOD step for consistent hillshade appearance
-          const leftParams = getTerrainParams(wx - step, wz, seed, template);
-          const rightParams = getTerrainParams(wx + step, wz, seed, template);
-          const upParams = getTerrainParams(wx, wz - step, seed, template);
-          const downParams = getTerrainParams(wx, wz + step, seed, template);
+          const leftParams = getTerrainParams(wx - step, wz, seed);
+          const rightParams = getTerrainParams(wx + step, wz, seed);
+          const upParams = getTerrainParams(wx, wz - step, seed);
+          const downParams = getTerrainParams(wx, wz + step, seed);
 
           const neighbors = {
             left: leftParams.height,
@@ -268,12 +265,11 @@ export class TileCache {
    * @param {number} worldZ - Tile world Z coordinate
    * @param {string} mode - Visualization mode
    * @param {number} seed - World seed
-   * @param {Object} template - Terrain template
    * @param {number} lodLevel - LOD level
    * @param {Object|null} cachedTerrainData - Cached terrain data or null
    * @returns {{imageData: ImageData, heightmap: Float32Array, biomeData: Uint8Array}}
    */
-  _renderTileWithData(worldX, worldZ, mode, seed, template, lodLevel, cachedTerrainData) {
+  _renderTileWithData(worldX, worldZ, mode, seed, lodLevel, cachedTerrainData) {
     const canvas = new OffscreenCanvas(this.tileSize, this.tileSize);
     const ctx = canvas.getContext('2d');
     const imageData = ctx.createImageData(this.tileSize, this.tileSize);
@@ -303,14 +299,14 @@ export class TileCache {
         const idx = py * this.tileSize + px;
 
         if (generateTerrain) {
-          const params = getTerrainParams(wx, wz, seed, template);
+          const params = getTerrainParams(wx, wz, seed);
           paramsGrid[idx] = params;
           heightmap[idx] = params.heightNormalized;
           // Simple biome encoding (first char code for now)
           biomeData[idx] = params.biome ? params.biome.charCodeAt(0) : 0;
         } else {
           // Reconstruct minimal params from cached data
-          const params = getTerrainParams(wx, wz, seed, template);
+          const params = getTerrainParams(wx, wz, seed);
           paramsGrid[idx] = params;
         }
       }
@@ -328,10 +324,10 @@ export class TileCache {
           const wx = worldX + px * step;
           const wz = worldZ + py * step;
 
-          const leftParams = getTerrainParams(wx - step, wz, seed, template);
-          const rightParams = getTerrainParams(wx + step, wz, seed, template);
-          const upParams = getTerrainParams(wx, wz - step, seed, template);
-          const downParams = getTerrainParams(wx, wz + step, seed, template);
+          const leftParams = getTerrainParams(wx - step, wz, seed);
+          const rightParams = getTerrainParams(wx + step, wz, seed);
+          const upParams = getTerrainParams(wx, wz - step, seed);
+          const downParams = getTerrainParams(wx, wz + step, seed);
 
           const neighbors = {
             left: leftParams.height,

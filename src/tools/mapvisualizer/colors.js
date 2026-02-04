@@ -31,21 +31,6 @@ const HUMIDITY_GRADIENT = [
   { value: 1.0, color: [40, 100, 150] }     // Wet (cyan-blue)
 ];
 
-const EROSION_GRADIENT = [
-  { value: 0.0, color: [40, 40, 40] },      // Deep valleys (dark gray)
-  { value: 0.3, color: [100, 100, 100] },   // Eroded (medium gray)
-  { value: 0.7, color: [180, 180, 180] },   // Smooth (light gray)
-  { value: 1.0, color: [240, 240, 240] }    // Peaks (near white)
-];
-
-const RIDGENESS_GRADIENT = [
-  { value: 0.0, color: [0, 0, 0] },         // Valleys (black)
-  { value: 0.2, color: [60, 40, 20] },      // Slopes (dark brown)
-  { value: 0.5, color: [140, 100, 60] },    // Hills (brown)
-  { value: 0.8, color: [200, 180, 160] },   // Ridges (tan)
-  { value: 1.0, color: [255, 255, 255] }    // Sharp ridges (white)
-];
-
 const ELEVATION_GRADIENT = [
   { value: 0.00, color: [15, 30, 80] },       // Deep ocean floor
   { value: 0.02, color: [20, 50, 120] },      // Deep ocean
@@ -108,6 +93,7 @@ const COMPOSITE_COLORS = {
     beach: [238, 214, 175],         // Sandy tan
     snowPeak: [250, 250, 255],      // White with slight blue
     mountains: [140, 140, 140],     // Gray
+    river: [64, 128, 192],          // River blue (basin rivers from Phase 4)
 };
 
 // Map mode names to gradients
@@ -116,8 +102,6 @@ const MODE_GRADIENTS = {
   effectiveContinental: CONTINENTAL_GRADIENT,  // Island-perturbed continentalness
   temperature: TEMPERATURE_GRADIENT,
   humidity: HUMIDITY_GRADIENT,
-  erosion: EROSION_GRADIENT,
-  ridgeness: RIDGENESS_GRADIENT,
   elevation: ELEVATION_GRADIENT
 };
 
@@ -127,8 +111,6 @@ const MODE_PARAMS = {
   effectiveContinental: 'effectiveContinental',  // Shows island perturbation effect
   temperature: 'temperature',
   humidity: 'humidity',
-  erosion: 'erosion',
-  ridgeness: 'ridgeness',
   elevation: 'heightNormalized'  // Use normalized [0, 1] for gradient sampling
 };
 
@@ -237,34 +219,6 @@ function lerpColor(color1, color2, t) {
  * @param {Object} neighbors - Optional neighbor heights for hillshade (left, right, up, down)
  * @returns {Array} RGB color [r, g, b] in range [0, 255]
  */
-/**
- * Get zone color based on level range
- * @param {Array} levels - Level range [min, max]
- * @returns {string} Hex color string
- */
-export function getZoneLevelColor(levels) {
-    const avgLevel = (levels[0] + levels[1]) / 2;
-    if (avgLevel <= 5) return '#44FF44';   // Green - safe
-    if (avgLevel <= 10) return '#AAFF44';  // Yellow-green
-    if (avgLevel <= 15) return '#FFAA44';  // Orange - moderate
-    return '#FF4444';                       // Red - dangerous
-}
-
-/**
- * Zone type colors (alternative visualization)
- */
-export const ZONE_TYPE_COLORS = {
-    haven: '#44FF44',
-    crossroads: '#FFAA44',
-    borderlands: '#FF4444',
-    wilderness: '#88CC88',
-    mountains: '#AAAAAA',
-    coast: '#44AAFF',
-    forest: '#228822',
-    desert: '#DDCC44',
-    ocean: '#4488FF'
-};
-
 export function getColorForMode(params, mode, neighbors = null) {
   // Special case: biome mode uses discrete colors
   if (mode === 'biome') {
@@ -319,7 +273,12 @@ export function getColorForMode(params, mode, neighbors = null) {
       return lerpColor(COMPOSITE_COLORS.shallowOcean, COMPOSITE_COLORS.coastalWater, depthFactor);
     }
 
-    // LAYER 3: Land - determine biome with elevation overrides
+    // LAYER 3: Rivers - check for basin rivers (Phase 4)
+    if (params.isRiver) {
+      return [...COMPOSITE_COLORS.river];
+    }
+
+    // LAYER 4: Land - determine biome with elevation overrides
     let biome = params.biome;
 
     // Beach override: near sea level AND near coast
@@ -337,10 +296,10 @@ export function getColorForMode(params, mode, neighbors = null) {
       biome = 'snow';
     }
 
-    // LAYER 4: Get biome base color
+    // LAYER 5: Get biome base color
     const baseColor = BIOME_COLORS[biome] || [128, 128, 128];
 
-    // LAYER 5: Apply hillshade
+    // LAYER 6: Apply hillshade
     let shade = 1.0;
     if (neighbors) {
       shade = calculateHillshade(
