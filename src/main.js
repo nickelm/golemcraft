@@ -44,6 +44,12 @@ window.addEventListener('DOMContentLoaded', () => {
     // Escape key to return to menu (use keyup to avoid double-trigger)
     window.addEventListener('keyup', (e) => {
         if (e.key === 'Escape') {
+            // Close map overlay first if open
+            if (game.mapOverlay?.isOpen) {
+                game.mapOverlay.close();
+                e.preventDefault();
+                return;
+            }
             e.preventDefault();
             saveAndReturnToMenu(game);
         }

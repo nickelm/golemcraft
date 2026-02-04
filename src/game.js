@@ -17,6 +17,7 @@ import { flashScreen, pulseResourceUI } from './utils/ui/feedback.js';
 import { settingsManager } from './settings.js';
 import { CombatManager } from './combat/combatmanager.js';
 import { TNTManager } from './world/tntmanager.js';
+import { MapOverlay } from './ui/mapoverlay.js';
 
 export class Game {
     constructor(worldData = null) {
@@ -147,6 +148,10 @@ export class Game {
                 e.preventDefault();  // Prevent browser's default F3 behavior (search)
                 this.toggleLandmarkDebug();
             }
+            // Prevent default Tab behavior (focus switching)
+            if (e.key === 'Tab') {
+                e.preventDefault();
+            }
         });
 
         // Landmark debug renderer (lazy-loaded on first F3 press)
@@ -194,6 +199,10 @@ export class Game {
             this.camera.aspect = window.innerWidth / window.innerHeight;
             this.camera.updateProjectionMatrix();
             this.renderer.setSize(window.innerWidth, window.innerHeight);
+            if (this.mapOverlay?.isOpen) {
+                this.mapOverlay.resizeCanvas();
+                this.mapOverlay.render();
+            }
         });
     }
 
@@ -242,6 +251,9 @@ export class Game {
 
         // Hide loading overlay
         this.loadingOverlay.hide();
+
+        // Map overlay (Tab key to toggle)
+        this.mapOverlay = new MapOverlay(this.seed);
 
         // Initialize adaptive fog system
         this.atmosphere.initFogAdaptation(
@@ -739,12 +751,17 @@ export class Game {
                 this.hero.jump(12);
             }
         }
+        // Toggle map overlay with Tab key
+        if (this.input.isKeyJustPressed('tab')) {
+            this.mapOverlay.toggle(this.hero.position.x, this.hero.position.z);
+            return;
+        }
         // Mount/dismount toggle with M key
         if (this.input.isKeyJustPressed('m')) {
             this.hero.toggleMount();
         }
-        // Weapon switch with Q or Tab key
-        if (this.input.isKeyJustPressed('q') || this.input.isKeyJustPressed('Tab')) {
+        // Weapon switch with Q key
+        if (this.input.isKeyJustPressed('q')) {
             this.hero.switchWeapon();
         }
         // Debug: Press 'b' to dump block column at player position
@@ -772,6 +789,14 @@ export class Game {
         
         // Skip rest of update if loading
         if (needsLoading) return;
+
+        // If map overlay is open, route input to it and skip game input
+        if (this.mapOverlay?.isOpen) {
+            this.handleInput(deltaTime); // Still process Tab key to close map
+            this.mapOverlay.handleInput(this.input, deltaTime);
+            this.mapOverlay.render();
+            return;
+        }
 
         this.touchControls.update(deltaTime);
         this.handleInput(deltaTime);
