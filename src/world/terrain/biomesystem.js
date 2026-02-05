@@ -69,9 +69,12 @@ export const BIOMES = {
         name: 'Beach',
         baseHeightFraction: 0.10,
         heightScaleFraction: 0.02,
-        terrain: { primary: 'sand', tint: [1.8, 1.7, 1.4] },  // Very bright sandy beach
-        subsurface: { primary: 'sand', tint: [1.0, 1.0, 1.0] },
-        underwater: { primary: 'sand', tint: [1.0, 0.98, 0.92] },
+        // terrain: { primary: 'sand', tint: [1.7, 1.6, 1.2] },  // Bright golden desert sand
+        // subsurface: { primary: 'sand', tint: [1.0, 0.9, 0.7] },
+        // underwater: { primary: 'sand', tint: [1.0, 0.92, 0.7] },
+        terrain: { primary: 'grass', tint: [2.0, 2.0, 0.9] },  // Bright golden savanna grass
+        subsurface: { primary: 'dirt', tint: [1.0, 0.9, 0.8] },
+        underwater: { primary: 'sand', tint: [1.0, 1.0, 1.0] },
         objects: ['rock'],
         objectDensities: { rock: 0.005 },
         mobs: [],

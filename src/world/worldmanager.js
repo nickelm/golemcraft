@@ -42,6 +42,7 @@ export class WorldManager {
      * @param {Object} options - Graphics options
      * @param {string} options.textureBlending - 'high' | 'medium' | 'low'
      * @param {string} options.drawDistance - 'far' | 'medium' | 'near'
+     * @param {Object} options.continent - Continental mode config { enabled: boolean, baseRadius: number }
      */
     constructor(scene, terrainTexture, seed, worldId, options = {}) {
         this.scene = scene;
@@ -51,6 +52,9 @@ export class WorldManager {
         // Graphics settings (resolved from settingsManager)
         this.textureBlending = options.textureBlending || 'high';
         this.drawDistance = options.drawDistance || 'far';
+
+        // Continental mode config
+        this.continentConfig = options.continent || null;
 
         // Texture arrays (for desktop shader)
         this.diffuseArray = options.diffuseArray || null;
@@ -114,8 +118,8 @@ export class WorldManager {
         console.log('Initializing world...');
         const startTime = performance.now();
 
-        // Initialize worker with textureBlending setting
-        await this.chunkLoader.initWorker(this.seed, this.textureBlending);
+        // Initialize worker with textureBlending setting and continental config
+        await this.chunkLoader.initWorker(this.seed, this.textureBlending, this.continentConfig);
 
         // Create terrain data provider that routes to worker's block cache
         this.terrainDataProvider = new TerrainDataProvider(this.chunkLoader.workerManager);
@@ -127,12 +131,21 @@ export class WorldManager {
         // Wire up worker manager to chunked terrain for mesh rebuilding
         this.chunkedTerrain.setWorkerManager(this.chunkLoader.workerManager);
 
+        // In continental mode, use worker's start position for initial chunk loading
+        // (unless a saved position was provided)
+        let loadAroundPosition = playerPosition;
+        const workerStart = this.chunkLoader.workerManager.startPosition;
+        if (workerStart && (!playerPosition || (playerPosition.x === 0 && playerPosition.z === 0))) {
+            loadAroundPosition = { x: workerStart.x, y: 10, z: workerStart.z };
+            console.log(`Continental mode: loading chunks around start position (${workerStart.x.toFixed(0)}, ${workerStart.z.toFixed(0)})`);
+        }
+
         // Request chunks around player position
-        const chunksNeeded = this.chunkLoader.requestChunksAround(playerPosition);
+        const chunksNeeded = this.chunkLoader.requestChunksAround(loadAroundPosition);
         console.log(`Queued ${chunksNeeded} chunks for initial load`);
 
-        // Wait for minimum safe terrain
-        await this.waitForSafeTerrain(playerPosition, onProgress);
+        // Wait for minimum safe terrain around the load position
+        await this.waitForSafeTerrain(loadAroundPosition, onProgress);
 
         const initTime = performance.now() - startTime;
         console.log(`World initialized in ${initTime.toFixed(0)}ms`);

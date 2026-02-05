@@ -62,10 +62,16 @@ export class Game {
         const seed = worldData?.seed ?? Math.floor(Math.random() * 100000);
         const worldId = worldData?.id ?? 'default';
         console.log('Using terrain seed:', seed, 'worldId:', worldId);
-        
+
         this.world = null; // Will be initialized after texture loads
         this.seed = seed;
         this.worldId = worldId;
+
+        // Continental mode: bounded island instead of infinite terrain
+        this.continentConfig = {
+            enabled: true,
+            baseRadius: 2000  // ~4km diameter island
+        };
         
         this.entities = [];
         this.playerEntities = [];
@@ -239,7 +245,9 @@ export class Game {
                 // Pass texture arrays for desktop shader
                 diffuseArray: this.diffuseArray,
                 normalArray: this.normalArray,
-                useTextureArrays: this.textureArraysReady
+                useTextureArrays: this.textureArraysReady,
+                // Continental mode config
+                continent: this.continentConfig
             }
         );
 
@@ -253,7 +261,7 @@ export class Game {
         this.loadingOverlay.hide();
 
         // Map overlay (Tab key to toggle)
-        this.mapOverlay = new MapOverlay(this.seed);
+        this.mapOverlay = new MapOverlay(this.seed, this.continentConfig);
 
         // Initialize adaptive fog system
         this.atmosphere.initFogAdaptation(
@@ -292,15 +300,29 @@ export class Game {
         // Determine spawn position
         let spawnPos;
         let spawnRotation = 0;
-        
+
         if (this.worldData?.heroPosition) {
+            // Restore saved position
             const saved = this.worldData.heroPosition;
             spawnPos = new THREE.Vector3(saved.x, saved.y, saved.z);
             spawnRotation = this.worldData.heroRotation || 0;
             console.log('Restoring hero position:', spawnPos);
         } else {
-            spawnPos = this.findSpawnPoint();
-            console.log('New spawn position:', spawnPos);
+            // Check for continental start position from worker
+            const workerStart = this.world.chunkLoader.workerManager?.startPosition;
+            if (workerStart) {
+                // Use continental spawn position (on the coast)
+                const height = this.world.getHeight(workerStart.x, workerStart.z);
+                const safeHeight = Math.max(height + 2, WATER_LEVEL + 2);
+                spawnPos = new THREE.Vector3(workerStart.x, safeHeight, workerStart.z);
+                // Face inland (opposite of start angle)
+                spawnRotation = workerStart.angle + Math.PI;
+                console.log('Continental spawn position:', spawnPos, 'facing inland');
+            } else {
+                // Fallback to default spawn search
+                spawnPos = this.findSpawnPoint();
+                console.log('New spawn position:', spawnPos);
+            }
         }
         
         // Create hero

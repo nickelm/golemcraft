@@ -8,6 +8,8 @@
 
 import { TileCache } from '../tools/mapvisualizer/tilecache.js';
 import { TileManager } from '../visualizer/tilemanager.js';
+import { getNominalRadius, CONTINENT_SHAPE_CONFIG } from '../world/terrain/continentshape.js';
+import { hash } from '../world/terrain/terraincore.js';
 
 const TILE_SIZE = 128;
 const MAX_TILES = 256;
@@ -18,9 +20,17 @@ const PAN_SPEED = 300;       // World blocks per second at zoom 1.0
 const ZOOM_FACTOR = 1.15;
 
 export class MapOverlay {
-    constructor(seed) {
+    constructor(seed, continentConfig = null) {
         this.seed = seed;
         this.isOpen = false;
+
+        // Continental mode config
+        this.continentConfig = continentConfig;
+        if (continentConfig?.enabled) {
+            // Derive continental seeds (same as in ContinentState)
+            this.shapeSeed = Math.floor(hash(0, 0, seed + 111111) * 0x7FFFFFFF);
+            this.baseRadius = continentConfig.baseRadius || 2000;
+        }
 
         // View state
         this.viewX = 0;
@@ -228,8 +238,99 @@ export class MapOverlay {
             this._renderTiles(width, height);
         }
 
+        // Draw continental coastline overlay
+        if (this.continentConfig?.enabled) {
+            this._drawCoastline(width, height);
+        }
+
         this._drawPlayerMarker(width, height);
         this._updateHUD();
+    }
+
+    // --- Coastline Overlay ---
+
+    _drawCoastline(width, height) {
+        const halfWidth = width / 2;
+        const halfHeight = height / 2;
+        const numPoints = 180;  // Sample every 2 degrees
+
+        // First, draw ocean fill OUTSIDE the island using evenodd fill rule
+        // Create a path: outer rectangle (clockwise) + island (counter-clockwise)
+        this.ctx.beginPath();
+
+        // Outer rectangle (clockwise) - covers entire canvas
+        this.ctx.moveTo(0, 0);
+        this.ctx.lineTo(width, 0);
+        this.ctx.lineTo(width, height);
+        this.ctx.lineTo(0, height);
+        this.ctx.closePath();
+
+        // Island coastline (counter-clockwise for evenodd fill)
+        // Draw in REVERSE order to make it counter-clockwise
+        let firstPoint = true;
+        for (let i = numPoints; i >= 0; i--) {
+            const angle = (i / numPoints) * Math.PI * 2;
+            const radius = getNominalRadius(angle, this.shapeSeed, this.baseRadius);
+
+            const worldX = Math.cos(angle) * radius;
+            const worldZ = Math.sin(angle) * radius;
+
+            const screenX = halfWidth + (worldX - this.viewX) * this.zoom;
+            const screenY = halfHeight + (worldZ - this.viewZ) * this.zoom;
+
+            if (firstPoint) {
+                this.ctx.moveTo(screenX, screenY);
+                firstPoint = false;
+            } else {
+                this.ctx.lineTo(screenX, screenY);
+            }
+        }
+        this.ctx.closePath();
+
+        // Fill ocean outside the island
+        this.ctx.fillStyle = 'rgba(30, 60, 100, 0.95)';  // Deep blue ocean
+        this.ctx.fill('evenodd');
+
+        // Now draw the coastline stroke
+        this.ctx.beginPath();
+        firstPoint = true;
+        for (let i = 0; i <= numPoints; i++) {
+            const angle = (i / numPoints) * Math.PI * 2;
+            const radius = getNominalRadius(angle, this.shapeSeed, this.baseRadius);
+
+            const worldX = Math.cos(angle) * radius;
+            const worldZ = Math.sin(angle) * radius;
+
+            const screenX = halfWidth + (worldX - this.viewX) * this.zoom;
+            const screenY = halfHeight + (worldZ - this.viewZ) * this.zoom;
+
+            if (firstPoint) {
+                this.ctx.moveTo(screenX, screenY);
+                firstPoint = false;
+            } else {
+                this.ctx.lineTo(screenX, screenY);
+            }
+        }
+        this.ctx.closePath();
+        this.ctx.strokeStyle = 'rgba(255, 255, 100, 0.8)';  // Yellow coastline
+        this.ctx.lineWidth = 2;
+        this.ctx.stroke();
+
+        // Draw island center marker (origin)
+        const centerScreenX = halfWidth + (0 - this.viewX) * this.zoom;
+        const centerScreenY = halfHeight + (0 - this.viewZ) * this.zoom;
+
+        // Only draw if on screen
+        if (centerScreenX >= -20 && centerScreenX <= width + 20 &&
+            centerScreenY >= -20 && centerScreenY <= height + 20) {
+            this.ctx.beginPath();
+            this.ctx.arc(centerScreenX, centerScreenY, 5, 0, Math.PI * 2);
+            this.ctx.fillStyle = 'rgba(255, 255, 100, 0.6)';
+            this.ctx.fill();
+            this.ctx.strokeStyle = 'rgba(255, 255, 100, 0.9)';
+            this.ctx.lineWidth = 1;
+            this.ctx.stroke();
+        }
     }
 
     destroy() {

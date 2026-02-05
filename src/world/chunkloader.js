@@ -73,9 +73,10 @@ export class ChunkLoader {
      * Initialize the terrain worker
      * @param {number} seed - World seed
      * @param {string} textureBlending - 'high' | 'medium' | 'low' (controls dithering mode in worker)
+     * @param {Object} continentConfig - Continental mode config { enabled: boolean, baseRadius: number }
      * @returns {Promise} Resolves when worker is ready
      */
-    async initWorker(seed, textureBlending = 'high') {
+    async initWorker(seed, textureBlending = 'high', continentConfig = null) {
         this.workerManager = new TerrainWorkerManager(
             this.chunkedTerrain.scene,
             this.chunkedTerrain.opaqueMaterial,
@@ -85,9 +86,9 @@ export class ChunkLoader {
             this.chunkedTerrain.useTextureArrays  // Whether to convert tile indices
         );
 
-        await this.workerManager.init(seed, textureBlending);
+        await this.workerManager.init(seed, textureBlending, continentConfig);
         this.workerReady = true;
-        console.log(`ChunkLoader: Worker ready (textureBlending=${textureBlending})`);
+        console.log(`ChunkLoader: Worker ready (textureBlending=${textureBlending}, continent=${continentConfig?.enabled ? 'enabled' : 'disabled'})`);
     }
 
     /**

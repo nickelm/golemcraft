@@ -56,6 +56,9 @@ export class TerrainWorkerManager {
         // Spawn point manager (set externally via setSpawnPointManager)
         this.spawnPointManager = null;
 
+        // Continental mode start position (received from worker)
+        this.startPosition = null;
+
         // Stats
         this.stats = {
             totalGenerated: 0,
@@ -83,7 +86,13 @@ export class TerrainWorkerManager {
         switch (data.type) {
             case 'ready':
                 this.isReady = true;
-                console.log('Terrain worker ready');
+                // Store continental start position if provided
+                if (data.startPosition) {
+                    this.startPosition = data.startPosition;
+                    console.log(`Terrain worker ready (continental mode, start: ${this.startPosition.x.toFixed(0)}, ${this.startPosition.z.toFixed(0)})`);
+                } else {
+                    console.log('Terrain worker ready');
+                }
                 if (this.readyResolve) {
                     this.readyResolve();
                     this.readyResolve = null;
@@ -307,8 +316,9 @@ export class TerrainWorkerManager {
      * Initialize the worker with world seed and settings
      * @param {number} seed - World seed
      * @param {string} textureBlending - 'high' | 'medium' | 'low'
+     * @param {Object} continentConfig - Continental mode config { enabled: boolean, baseRadius: number }
      */
-    init(seed, textureBlending = 'high') {
+    init(seed, textureBlending = 'high', continentConfig = null) {
         // Store dithering mode for main thread mesh rebuilds
         this.useDithering = textureBlending === 'low';
 
@@ -316,7 +326,7 @@ export class TerrainWorkerManager {
             this.readyResolve = resolve;
             this.worker.postMessage({
                 type: 'init',
-                data: { seed, textureBlending }
+                data: { seed, textureBlending, continent: continentConfig }
             });
         });
     }

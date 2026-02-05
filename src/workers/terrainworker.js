@@ -62,6 +62,8 @@ import {
     selectBiomeFromWhittaker,
     applySubBiomeVariation
 } from '../world/terrain/terraincore.js';
+import { ContinentState, COAST_ZONES } from '../world/terrain/continentstate.js';
+import { smoothstep, lerp } from '../world/terrain/continentshape.js';
 import { WorkerLandmarkSystem } from '../world/landmarks/workerlandmarksystem.js';
 import { generateSpawnPoints } from './spawnpointgenerator.js';
 import { generateObjectInstances } from './objectspawner.js';
@@ -122,7 +124,7 @@ function getBiomeHeightScale(biomeData) {
 // ============================================================================
 
 class WorkerTerrainProvider {
-    constructor(seed) {
+    constructor(seed, continentConfig = null) {
         this.seed = seed;
         this.heightCache = new Map();
         this.continuousHeightCache = new Map();
@@ -134,6 +136,15 @@ class WorkerTerrainProvider {
         // Ephemeral heightfield holes from explosions
         // Map of "chunkX,chunkZ" -> Set of "lx,lz" strings
         this.heightfieldHoles = new Map();
+
+        // Continental state (null = infinite terrain mode)
+        this.continentState = null;
+        if (continentConfig?.enabled) {
+            this.continentState = new ContinentState(
+                seed,
+                continentConfig.baseRadius || 2000
+            );
+        }
     }
 
     setDestroyedBlocks(blocks) {
@@ -151,25 +162,138 @@ class WorkerTerrainProvider {
         }
     }
 
+    /**
+     * Check if position has raw river channel (without biome filtering).
+     * Used for integrating rivers with continental coastline.
+     * @param {number} x - World X coordinate
+     * @param {number} z - World Z coordinate
+     * @returns {boolean} True if river channel exists here
+     */
+    hasRawRiverChannel(x, z) {
+        // River channel noise (meandering isoline at 0.5)
+        const riverNoiseRaw = octaveNoise2D(x, z, 3, 0.008, (nx, nz) => hash(nx, nz, this.seed + 55555));
+        const riverNoise = normalizeNoise(riverNoiseRaw);
+        const distFromCenter = Math.abs(riverNoise - 0.5);
+
+        // Downstream width variation
+        const downstreamNoise = normalizeNoise(octaveNoise2D(x, z, 2, 0.002, (nx, nz) => hash(nx, nz, this.seed + 33333)));
+        const baseWidth = 0.015 + downstreamNoise * 0.025;
+
+        return distFromCenter < baseWidth;
+    }
+
+    /**
+     * Check if position has raw lake (without biome filtering).
+     * Used for integrating lakes with continental coastline.
+     * @param {number} x - World X coordinate
+     * @param {number} z - World Z coordinate
+     * @returns {boolean} True if lake exists here
+     */
+    hasRawLake(x, z) {
+        const elevationNoise = octaveNoise2D(x, z, 4, 0.015, (nx, nz) => hash(nx, nz, this.seed));
+        const elevation = normalizeNoise(elevationNoise);
+        if (elevation > 0.55) return false;
+
+        const lakeNoiseRaw = octaveNoise2D(x, z, 2, 0.02, (nx, nz) => hash(nx, nz, this.seed + 66666));
+        const lakeNoise = normalizeNoise(lakeNoiseRaw);
+
+        return lakeNoise > 0.75;
+    }
+
+    /**
+     * Check if position has raw ocean from low-frequency continental noise.
+     * Used for integrating inland bays with continental coastline.
+     * @param {number} x - World X coordinate
+     * @param {number} z - World Z coordinate
+     * @returns {boolean} True if continental noise indicates ocean here
+     */
+    hasRawOcean(x, z) {
+        const continentalness = getContinentalNoise(x, z, this.seed);
+        return continentalness < CONTINENTAL_CONFIG.threshold_land;
+    }
+
     getBiome(x, z) {
         const key = `${x},${z}`;
         if (this.biomeCache.has(key)) {
             return this.biomeCache.get(key);
         }
 
-        // Continental noise determines ocean vs land at large scale
-        const continentalness = getContinentalNoise(x, z, this.seed);
+        // CONTINENTAL MODE: Check bounded island coastline first
+        if (this.continentState) {
+            const coastInfo = this.continentState.getCoastInfo(x, z);
 
-        // Deep ocean: bottomless abyss separating continents
-        if (continentalness < CONTINENTAL_CONFIG.threshold_deep) {
-            this.biomeCache.set(key, 'deep_ocean');
-            return 'deep_ocean';
+            if (coastInfo.zone === COAST_ZONES.DEEP_OCEAN) {
+                this.biomeCache.set(key, 'deep_ocean');
+                return 'deep_ocean';
+            }
+
+            // For SHALLOW and BEACH zones, integrate existing water features
+            // This creates natural bays, river mouths, and lake connections
+            if (coastInfo.zone === COAST_ZONES.SHALLOW || coastInfo.zone === COAST_ZONES.BEACH) {
+                // Check if low-frequency ocean noise says this should be water
+                if (this.hasRawOcean(x, z)) {
+                    this.biomeCache.set(key, 'ocean');
+                    return 'ocean';
+                }
+
+                // Check if a river flows through here (river mouth)
+                if (this.hasRawRiverChannel(x, z)) {
+                    this.biomeCache.set(key, 'ocean');
+                    return 'ocean';
+                }
+
+                // Check if a lake exists here (lake connecting to sea)
+                if (this.hasRawLake(x, z)) {
+                    this.biomeCache.set(key, 'ocean');
+                    return 'ocean';
+                }
+            }
+
+            if (coastInfo.zone === COAST_ZONES.SHALLOW) {
+                this.biomeCache.set(key, 'ocean');
+                return 'ocean';
+            }
+            if (coastInfo.zone === COAST_ZONES.BEACH) {
+                // Check if this should be a cliff coast (rock) instead of sandy beach
+                // Use elevation noise to detect high terrain without causing recursion
+                const elevationNoise = octaveNoise2D(x, z, 4, 0.015, (nx, nz) => hash(nx, nz, this.seed));
+                const elevation = normalizeNoise(elevationNoise);
+                // High elevation (>0.5) indicates mountainous terrain = cliff coast
+                if (elevation > 0.5) {
+                    // Cliff coast: use rock texture, not sand
+                    this.biomeCache.set(key, 'mountains');  // Mountains biome uses rock texture
+                    return 'mountains';
+                }
+                this.biomeCache.set(key, 'beach');
+                return 'beach';
+            }
+
+            // COASTAL_TAPER zone: also integrate existing water features inland
+            if (coastInfo.zone === COAST_ZONES.COASTAL_TAPER) {
+                // Check if low-frequency ocean noise says this should be water (inland bay)
+                if (this.hasRawOcean(x, z)) {
+                    this.biomeCache.set(key, 'ocean');
+                    return 'ocean';
+                }
+            }
+            // COASTAL_TAPER and DEEP_INLAND continue to normal biome selection below
         }
 
-        // Coastal ocean: transition zone with sandy floor
-        if (continentalness < CONTINENTAL_CONFIG.threshold_land) {
-            this.biomeCache.set(key, 'ocean');
-            return 'ocean';
+        // INFINITE MODE: Continental noise determines ocean vs land at large scale
+        if (!this.continentState) {
+            const continentalness = getContinentalNoise(x, z, this.seed);
+
+            // Deep ocean: bottomless abyss separating continents
+            if (continentalness < CONTINENTAL_CONFIG.threshold_deep) {
+                this.biomeCache.set(key, 'deep_ocean');
+                return 'deep_ocean';
+            }
+
+            // Coastal ocean: transition zone with sandy floor
+            if (continentalness < CONTINENTAL_CONFIG.threshold_land) {
+                this.biomeCache.set(key, 'ocean');
+                return 'ocean';
+            }
         }
 
         // Land biomes: use Whittaker climate-based selection
@@ -203,6 +327,131 @@ class WorkerTerrainProvider {
         if (this.continuousHeightCache.has(key)) {
             return this.continuousHeightCache.get(key);
         }
+
+        // CONTINENTAL MODE: Apply coastal height transitions
+        if (this.continentState) {
+            const coastInfo = this.continentState.getCoastInfo(x, z);
+
+            // Deep ocean: bottomless abyss
+            if (coastInfo.zone === COAST_ZONES.DEEP_OCEAN) {
+                const deepOceanFloor = 0.5;
+                this.continuousHeightCache.set(key, deepOceanFloor);
+                return deepOceanFloor;
+            }
+
+            // Check for integrated water features (raw ocean, river, lake)
+            // These should use water-level heights regardless of coastal zone
+            const hasIntegratedWater = this.hasRawOcean(x, z) ||
+                                       this.hasRawRiverChannel(x, z) ||
+                                       this.hasRawLake(x, z);
+
+            // Get inland height to check for cliffs
+            const inlandHeight = this.computeInlandHeight(x, z);
+
+            // Check if this is a cliff coast (mountains/highlands meeting ocean)
+            // Cliffs occur when inland terrain is significantly above sea level
+            const isCliffCoast = inlandHeight > WATER_LEVEL + 12;
+
+            // Shallow water: visible floor, wading depth (2-4 blocks below water)
+            if (coastInfo.zone === COAST_ZONES.SHALLOW) {
+                // If integrated water feature, use standard shallow water depth
+                if (hasIntegratedWater) {
+                    const shallowFloor = WATER_LEVEL - 3;
+                    this.continuousHeightCache.set(key, shallowFloor);
+                    return shallowFloor;
+                }
+
+                if (isCliffCoast) {
+                    // Cliff coast: steep underwater drop-off
+                    const shallowProgress = (coastInfo.signedDist + 30) / 30;  // 0 at -30, 1 at 0
+                    // Steeper underwater cliff - blend from deep to cliff base
+                    const cliffBase = Math.min(inlandHeight - 8, WATER_LEVEL - 1);
+                    const shallowFloor = lerp(WATER_LEVEL - 6, cliffBase, shallowProgress);
+                    this.continuousHeightCache.set(key, shallowFloor);
+                    return shallowFloor;
+                }
+                // Normal beach: gentle shallow water
+                // signedDist is -30 to 0 in this zone
+                // At -30: floor at WATER_LEVEL - 4
+                // At 0: floor at WATER_LEVEL - 2
+                const shallowProgress = (coastInfo.signedDist + 30) / 30;  // 0 at -30, 1 at 0
+                const shallowFloor = WATER_LEVEL - 4 + shallowProgress * 2;
+                this.continuousHeightCache.set(key, shallowFloor);
+                return shallowFloor;
+            }
+
+            // Beach zone: gentle slope from water to inland, blending with normal terrain
+            if (coastInfo.zone === COAST_ZONES.BEACH) {
+                // If integrated water feature, use water-level height (river/lake connecting to ocean)
+                if (hasIntegratedWater) {
+                    const waterFloor = WATER_LEVEL - 2;
+                    this.continuousHeightCache.set(key, waterFloor);
+                    return waterFloor;
+                }
+
+                if (isCliffCoast) {
+                    // Cliff coast: steep rise from water to inland terrain
+                    // Use a much faster blend to create the cliff effect
+                    const cliffProgress = coastInfo.signedDist / 50;  // 0 at water, 1 at 50 blocks inland
+                    // Quick transition: cliff starts at water level, reaches inland height fast
+                    const cliffBlend = smoothstep(0, 1, cliffProgress * 2);  // 2x faster blend
+                    const cliffHeight = lerp(WATER_LEVEL + 1, inlandHeight, Math.min(1, cliffBlend));
+                    this.continuousHeightCache.set(key, Math.max(1.0, Math.min(63.0, cliffHeight)));
+                    return this.continuousHeightCache.get(key);
+                }
+
+                // Normal beach: gentle slope with local variation
+                // signedDist is 0 to 50 in this zone
+                const beachProgress = coastInfo.signedDist / 50;  // 0 at water, 1 at 50 blocks inland
+
+                // Add micro-detail for undulating beach surface
+                const beachNoise = octaveNoise2D(x, z, 2, 0.08, (nx, nz) => hash(nx, nz, this.seed + 77777));
+                const beachVariation = (beachNoise - 0.5) * 1.5;  // -0.75 to +0.75 blocks variation
+
+                // Beach height: WATER_LEVEL at edge, rising gently, with variation
+                const beachHeight = WATER_LEVEL + beachProgress * 4 + beachVariation * beachProgress;
+
+                // Blend: at signedDist=0, 100% beach; at signedDist=50, 100% inland
+                const blend = smoothstep(0, 1, beachProgress);
+                const finalHeight = lerp(beachHeight, inlandHeight, blend);
+
+                this.continuousHeightCache.set(key, Math.max(1.0, Math.min(63.0, finalHeight)));
+                return this.continuousHeightCache.get(key);
+            }
+
+            // Coastal taper: blend normal terrain toward sea level
+            if (coastInfo.zone === COAST_ZONES.COASTAL_TAPER) {
+                // If integrated water feature (inland bay from low-freq ocean), use water height
+                if (this.hasRawOcean(x, z)) {
+                    const waterFloor = WATER_LEVEL - 2;
+                    this.continuousHeightCache.set(key, waterFloor);
+                    return waterFloor;
+                }
+
+                // signedDist is 50 to 100 in this zone
+                const taperProgress = (100 - coastInfo.signedDist) / 50;  // 0 at 100, 1 at 50
+
+                // Pull 20% toward sea level at the coast edge
+                const seaLevelTarget = WATER_LEVEL + 4;
+                const taperStrength = taperProgress * 0.2;
+                const finalHeight = lerp(inlandHeight, seaLevelTarget, taperStrength);
+
+                this.continuousHeightCache.set(key, Math.max(1.0, Math.min(63.0, finalHeight)));
+                return this.continuousHeightCache.get(key);
+            }
+
+            // DEEP_INLAND: fall through to normal computation
+        }
+
+        // Normal inland terrain computation
+        return this.computeInlandHeight(x, z);
+    }
+
+    /**
+     * Compute inland terrain height (extracted from original getContinuousHeight)
+     */
+    computeInlandHeight(x, z) {
+        const key = `${x},${z}`;
 
         const biome = this.getBiome(x, z);
         const biomeData = BIOMES[biome];
@@ -795,13 +1044,16 @@ self.onmessage = function(e) {
 
     switch (type) {
         case 'init':
-            terrainProvider = new WorkerTerrainProvider(data.seed);
+            // Extract continental config if provided
+            const continentConfig = data.continent || null;
+            terrainProvider = new WorkerTerrainProvider(data.seed, continentConfig);
+
             // Set dithering mode based on texture blending tier
             useDithering = (data.textureBlending === 'low');
             if (DEBUG_CHUNK_DELAY_MS > 0) {
                 console.warn(`[WORKER] DEBUG MODE: ${DEBUG_CHUNK_DELAY_MS}ms delay per chunk`);
             }
-            console.log(`[WORKER] Initialized with textureBlending=${data.textureBlending}, useDithering=${useDithering}`);
+            console.log(`[WORKER] Initialized with textureBlending=${data.textureBlending}, useDithering=${useDithering}, continent=${continentConfig?.enabled ? 'enabled' : 'disabled'}`);
 
             // DIAGNOSTIC: Sample biome distribution (remove after verification)
             {
@@ -840,7 +1092,13 @@ self.onmessage = function(e) {
                 terrainProvider.biomeCache.clear();
             }
 
-            self.postMessage({ type: 'ready' });
+            // Build ready response with optional startPosition for continental mode
+            const readyResponse = { type: 'ready' };
+            if (terrainProvider.continentState) {
+                readyResponse.startPosition = terrainProvider.continentState.startPosition;
+                console.log(`[WORKER] Continental mode: start position at (${readyResponse.startPosition.x.toFixed(0)}, ${readyResponse.startPosition.z.toFixed(0)})`);
+            }
+            self.postMessage(readyResponse);
             break;
 
         case 'generateChunk':
