@@ -55,6 +55,7 @@ import {
     hash,
     hash2,
     octaveNoise2D,
+    normalizeNoise,
     CONTINENTAL_CONFIG,
     getContinentalNoise,
     PEAK_BIOMES,
@@ -126,7 +127,7 @@ class WorkerTerrainProvider {
         this.heightCache = new Map();
         this.continuousHeightCache = new Map();
         this.biomeCache = new Map();
-        this.waterDestinationCache = new Map();  // Cache for river proximity checks
+        this.riverInfluenceCache = new Map();
         this.destroyedBlocks = new Set();
         this.landmarkSystem = new WorkerLandmarkSystem(this, seed);
 
@@ -176,10 +177,10 @@ class WorkerTerrainProvider {
         const tempNoise = octaveNoise2D(x, z, 4, 0.018, (nx, nz) => hash2(nx, nz, this.seed));
         const humidityNoise = octaveNoise2D(x, z, 3, 0.012, (nx, nz) => hash(nx, nz, this.seed + 77777));
 
-        // Normalize to [0, 1]
-        const elevation = Math.max(0, Math.min(1, (elevationNoise - 0.08) / 0.37));
-        const temp = Math.max(0, Math.min(1, (tempNoise - 0.08) / 0.37));
-        const humidity = Math.max(0, Math.min(1, (humidityNoise - 0.08) / 0.37));
+        // Normalize to [0, 1] with smoothstep redistribution
+        const elevation = normalizeNoise(elevationNoise);
+        const temp = normalizeNoise(tempNoise);
+        const humidity = normalizeNoise(humidityNoise);
 
         // Whittaker-based selection using continuous values
         let biome = selectBiomeFromWhittaker(temp, humidity, elevation);
@@ -257,11 +258,23 @@ class WorkerTerrainProvider {
             height += jungleHillNoise * 4;
         }
 
-        if (biome !== 'ocean' && biome !== 'deep_ocean' && biome !== 'desert' && this.isRiver(x, z)) {
-            height = Math.min(height, WATER_LEVEL - 1);
+        // River valley carving (graduated with sloped banks, proportional depth)
+        if (biome !== 'ocean' && biome !== 'deep_ocean') {
+            const riverInfo = this.getRiverInfluence(x, z);
+            if (riverInfo && riverInfo.influence > 0) {
+                // Carve depth proportional to height: 20% of height, min 3, max 8 blocks
+                const carveDepth = Math.min(Math.max(3, height * 0.2), 8);
+                const riverBed = Math.max(WATER_LEVEL - 1, height - carveDepth);
+                if (height > riverBed) {
+                    const t = riverInfo.influence;
+                    const smooth = t * t * (3 - 2 * t);  // smoothstep for natural bank profile
+                    height = height - (height - riverBed) * smooth;
+                }
+            }
         }
 
-        if ((biome === 'plains' || biome === 'snow') && this.isLake(x, z)) {
+        // Lake carving (isLake handles its own biome/elevation filtering)
+        if (this.isLake(x, z)) {
             height = Math.min(height, WATER_LEVEL - 2);
         }
 
@@ -349,81 +362,6 @@ class WorkerTerrainProvider {
     }
 
     /**
-     * Check if position is within river-forming distance of a water destination
-     * Returns proximity info for river width calculation
-     * Uses chunk-level caching for performance
-     * @param {number} x - World X coordinate
-     * @param {number} z - World Z coordinate
-     * @returns {{type: string, distance: number}|null} Destination info or null
-     */
-    isNearWaterDestination(x, z) {
-        // Cache at chunk granularity for performance
-        const cacheKey = `${Math.floor(x / 16) * 16},${Math.floor(z / 16) * 16}`;
-        if (this.waterDestinationCache.has(cacheKey)) {
-            return this.waterDestinationCache.get(cacheKey);
-        }
-
-        const MAX_RIVER_DISTANCE = 200;  // Rivers form within 200 blocks of water
-        const SAMPLE_STEP = 25;  // Coarse sampling for performance
-
-        // Sample in expanding rings
-        for (let r = SAMPLE_STEP; r <= MAX_RIVER_DISTANCE; r += SAMPLE_STEP) {
-            for (let angle = 0; angle < 6.28; angle += 0.785) {  // 8 directions
-                const sx = Math.floor(x + Math.cos(angle) * r);
-                const sz = Math.floor(z + Math.sin(angle) * r);
-
-                const biome = this.getBiome(sx, sz);
-                if (biome === 'ocean' || biome === 'deep_ocean') {
-                    const result = { type: 'ocean', distance: r };
-                    this.waterDestinationCache.set(cacheKey, result);
-                    return result;
-                }
-                if (this.isLake(sx, sz)) {
-                    const result = { type: 'lake', distance: r };
-                    this.waterDestinationCache.set(cacheKey, result);
-                    return result;
-                }
-            }
-        }
-
-        this.waterDestinationCache.set(cacheKey, null);
-        return null;
-    }
-
-    /**
-     * Check if position is within specified radius of a lake
-     * @param {number} x - World X coordinate
-     * @param {number} z - World Z coordinate
-     * @param {number} radius - Search radius (default 80)
-     * @returns {boolean} True if lake found nearby
-     */
-    isNearLake(x, z, radius = 80) {
-        const step = 20;
-        for (let dx = -radius; dx <= radius; dx += step) {
-            for (let dz = -radius; dz <= radius; dz += step) {
-                if (this.isLake(x + dx, z + dz)) return true;
-            }
-        }
-        return false;
-    }
-
-    /**
-     * Get river channel width based on proximity to destination
-     * Rivers widen as they approach ocean/lake
-     * @param {number} x - World X coordinate
-     * @param {number} z - World Z coordinate
-     * @returns {number} River width threshold (0.015 to 0.035)
-     */
-    getRiverWidth(x, z) {
-        const destination = this.isNearWaterDestination(x, z);
-        if (!destination) return 0.015;  // Narrow streams far from water
-
-        // Wider when closer to destination
-        const proximity = 1 - (destination.distance / 200);
-        return 0.015 + proximity * 0.02;  // 0.015 (far) to 0.035 (near)
-    }
-
-    /**
      * Determine if snow cap should render at this height/biome
      * Uses biome-dependent thresholds for realistic snow distribution
      * @param {string} biome - Biome name
@@ -503,52 +441,136 @@ class WorkerTerrainProvider {
     }
     
     /**
-     * Determine if a cell is part of a river
-     * Rivers must flow toward water destinations (ocean or lake)
-     * Phase 4: Basin-oriented rivers that don't dead-end in plains
+     * Get river influence at a position for graduated valley carving.
+     * Returns null if no river influence, otherwise { isRiver, influence }.
+     * influence = 1.0 at river center, smoothly falls to 0.0 at bank edge.
+     *
+     * Multi-factor filtering:
+     * - Biome blocking (no rivers in desert, badlands, glacier, ocean)
+     * - Elevation filtering (no rivers above tree line)
+     * - River density noise (creates regions with/without rivers)
+     * - Variable width via downstream noise
+     * - Bank zone at 2.5x river width for graduated valley carving
+     *
+     * @param {number} x - World X coordinate
+     * @param {number} z - World Z coordinate
+     * @returns {{ isRiver: boolean, influence: number } | null}
+     */
+    getRiverInfluence(x, z) {
+        const key = `${x},${z}`;
+        if (this.riverInfluenceCache.has(key)) return this.riverInfluenceCache.get(key);
+
+        const biome = this.getBiome(x, z);
+
+        // Blocked biomes: no rivers at all
+        if (biome === 'ocean' || biome === 'deep_ocean' ||
+            biome === 'desert' || biome === 'red_desert' ||
+            biome === 'badlands' || biome === 'glacier') {
+            this.riverInfluenceCache.set(key, null);
+            return null;
+        }
+
+        // Elevation filter: allow mountain streams up to 0.70, block above
+        const elevationNoise = octaveNoise2D(x, z, 4, 0.015, (nx, nz) => hash(nx, nz, this.seed));
+        const elevation = normalizeNoise(elevationNoise);
+        if (elevation > 0.70) {
+            this.riverInfluenceCache.set(key, null);
+            return null;
+        }
+
+        // River density noise: creates regions with vs without rivers
+        // MUST normalize — raw octaveNoise2D clusters around [0.1-0.45]
+        const wetBiomes = ['swamp', 'jungle', 'taiga', 'rainforest'];
+        const isWet = wetBiomes.includes(biome);
+
+        if (!isWet) {
+            const riverDensityNoise = normalizeNoise(octaveNoise2D(x, z, 2, 0.003, (nx, nz) => hash(nx, nz, this.seed + 44444)));
+            const reducedDensityBiomes = ['tundra', 'savanna', 'mountains', 'alpine', 'highlands'];
+            const densityThreshold = reducedDensityBiomes.includes(biome) ? 0.55 : 0.45;
+            if (riverDensityNoise < densityThreshold) {
+                this.riverInfluenceCache.set(key, null);
+                return null;
+            }
+        }
+
+        // River channel noise (meandering isoline at 0.5)
+        // MUST normalize — raw octaveNoise2D clusters around [0.1-0.45], rarely reaching 0.5
+        const riverNoiseRaw = octaveNoise2D(x, z, 3, 0.008, (nx, nz) => hash(nx, nz, this.seed + 55555));
+        const riverNoise = normalizeNoise(riverNoiseRaw);
+        const distFromCenter = Math.abs(riverNoise - 0.5);
+
+        // Downstream width variation (normalized for proper 0-1 distribution)
+        const downstreamNoise = normalizeNoise(octaveNoise2D(x, z, 2, 0.002, (nx, nz) => hash(nx, nz, this.seed + 33333)));
+        const baseWidth = 0.015 + downstreamNoise * 0.025;  // Range: 0.015 to 0.040
+
+        // Mountain streams get narrower above tree line
+        let elevationWidthFactor = 1.0;
+        if (elevation > 0.55) {
+            elevationWidthFactor = 1.0 - (elevation - 0.55) / 0.15;  // 1.0 at 0.55, 0.0 at 0.70
+        }
+        const riverWidth = baseWidth * (0.5 + 0.5 * elevationWidthFactor);  // 50-100% of base width
+
+        // Bank zone extends to 3x river width for valley carving
+        const bankWidth = riverWidth * 3.0;
+        if (distFromCenter > bankWidth) {
+            this.riverInfluenceCache.set(key, null);
+            return null;
+        }
+
+        const isRiverChannel = distFromCenter < riverWidth;
+
+        // Compute influence: 1.0 at center/channel, smoothstep falloff in bank zone
+        let influence;
+        if (isRiverChannel) {
+            influence = 1.0;
+        } else {
+            const bankDist = (distFromCenter - riverWidth) / (bankWidth - riverWidth);
+            const t = 1.0 - bankDist;  // 1.0 at river edge, 0.0 at bank edge
+            influence = t * t * (3 - 2 * t);  // smoothstep
+        }
+
+        const result = { isRiver: isRiverChannel, influence };
+        this.riverInfluenceCache.set(key, result);
+        return result;
+    }
+
+    /**
+     * Check if position is part of a river (boolean wrapper)
      * @param {number} x - World X coordinate
      * @param {number} z - World Z coordinate
      * @returns {boolean} True if this cell is river
      */
     isRiver(x, z) {
+        const info = this.getRiverInfluence(x, z);
+        return info !== null && info.isRiver;
+    }
+
+    /**
+     * Check if position is a lake
+     * Filtered by biome and elevation - no lakes on mountains or in oceans
+     * @param {number} x - World X coordinate
+     * @param {number} z - World Z coordinate
+     * @returns {boolean}
+     */
+    isLake(x, z) {
         const biome = this.getBiome(x, z);
 
-        // No rivers in these biomes
-        if (biome === 'ocean' || biome === 'deep_ocean' ||
-            biome === 'desert' || biome === 'red_desert' ||
-            biome === 'glacier') {
-            return false;
-        }
+        // No lakes in ocean or on high mountains
+        if (biome === 'ocean' || biome === 'deep_ocean') return false;
 
-        // No rivers on mountaintops - check elevation
         const elevationNoise = octaveNoise2D(x, z, 4, 0.015, (nx, nz) => hash(nx, nz, this.seed));
-        const elevation = Math.max(0, Math.min(1, (elevationNoise - 0.08) / 0.37));
-        if (elevation > 0.55) return false;  // Above tree line = no rivers
+        const elevation = normalizeNoise(elevationNoise);
+        if (elevation > 0.55) return false;
 
-        // River channel from noise (creates meandering pattern)
-        const riverNoise = octaveNoise2D(x, z, 3, 0.008, (nx, nz) => hash(nx, nz, this.seed + 55555));
-        const width = this.getRiverWidth(x, z);
-        const isChannel = Math.abs(riverNoise - 0.5) < width;
+        // MUST normalize — raw octaveNoise2D clusters around [0.1-0.45], never reaching 0.50+
+        const lakeNoiseRaw = octaveNoise2D(x, z, 2, 0.02, (nx, nz) => hash(nx, nz, this.seed + 66666));
+        const lakeNoise = normalizeNoise(lakeNoiseRaw);
 
-        if (!isChannel) return false;
+        // Swamp: more frequent lakes (~35% of swamp area)
+        if (biome === 'swamp') return lakeNoise > 0.65;
 
-        // Must be near a water destination OR in a naturally wet biome
-        const wetBiomes = ['swamp', 'jungle', 'taiga', 'rainforest'];
-        if (wetBiomes.includes(biome)) return true;
-
-        // Check proximity to ocean or lake
-        const destination = this.isNearWaterDestination(x, z);
-        if (destination) return true;
-
-        // Additional check: near any lake?
-        if (this.isNearLake(x, z)) return true;
-
-        return false;
-    }
-    
-    isLake(x, z) {
-        const lakeNoise = octaveNoise2D(x, z, 2, 0.02, (nx, nz) => hash(nx, nz, this.seed + 66666));
-        return lakeNoise > 0.65;
+        // Default: ~25% of qualifying areas
+        return lakeNoise > 0.75;
     }
 
     /**
@@ -586,7 +608,13 @@ class WorkerTerrainProvider {
         const biome = this.getBiome(x, z);
         const biomeData = BIOMES[biome];
 
-        if (y > height && y > WATER_LEVEL) return null;
+        if (y > height && y > WATER_LEVEL) {
+            // Elevated river water: rivers above sea level have local water surface
+            if (height > WATER_LEVEL && this.isRiver(x, z) && y <= height + 2) {
+                return y === height + 2 ? 'water' : 'water_full';
+            }
+            return null;
+        }
 
         if (y > height && y <= WATER_LEVEL) {
             if (biome === 'snow' && y === WATER_LEVEL) return 'ice';
@@ -774,6 +802,44 @@ self.onmessage = function(e) {
                 console.warn(`[WORKER] DEBUG MODE: ${DEBUG_CHUNK_DELAY_MS}ms delay per chunk`);
             }
             console.log(`[WORKER] Initialized with textureBlending=${data.textureBlending}, useDithering=${useDithering}`);
+
+            // DIAGNOSTIC: Sample biome distribution (remove after verification)
+            {
+                const SAMPLE_SIZE = 2000;
+                const SAMPLE_RANGE = 5000;
+                const counts = {};
+                const categories = { frozen: 0, cold: 0, temperate: 0, hot: 0, mountain: 0, ocean: 0 };
+                const categoryMap = {
+                    tundra: 'cold', glacier: 'frozen', snow: 'cold', taiga: 'cold',
+                    plains: 'temperate', meadow: 'temperate', deciduous_forest: 'temperate',
+                    autumn_forest: 'temperate', swamp: 'temperate',
+                    desert: 'hot', red_desert: 'hot', savanna: 'hot',
+                    jungle: 'hot', rainforest: 'hot', badlands: 'hot',
+                    mountains: 'mountain', alpine: 'mountain', highlands: 'mountain',
+                    volcanic: 'mountain',
+                    ocean: 'ocean', deep_ocean: 'ocean', shallow_ocean: 'ocean', beach: 'ocean'
+                };
+                let tempMin = 1, tempMax = 0, tempSum = 0;
+                for (let i = 0; i < SAMPLE_SIZE; i++) {
+                    const sx = Math.floor((hash(i, 0, data.seed + 111) - 0.5) * 2 * SAMPLE_RANGE);
+                    const sz = Math.floor((hash(0, i, data.seed + 222) - 0.5) * 2 * SAMPLE_RANGE);
+                    const biome = terrainProvider.getBiome(sx, sz);
+                    counts[biome] = (counts[biome] || 0) + 1;
+                    categories[categoryMap[biome] || 'ocean'] += 1;
+                    // Sample temperature for distribution check
+                    const tNoise = octaveNoise2D(sx, sz, 4, 0.018, (nx, nz) => hash2(nx, nz, data.seed));
+                    const tNorm = normalizeNoise(tNoise);
+                    if (tNorm < tempMin) tempMin = tNorm;
+                    if (tNorm > tempMax) tempMax = tNorm;
+                    tempSum += tNorm;
+                }
+                console.log(`[BIOME DISTRIBUTION] ${SAMPLE_SIZE} samples across ${SAMPLE_RANGE * 2} blocks:`);
+                console.log(`[BIOME DISTRIBUTION] Temperature: min=${tempMin.toFixed(3)}, max=${tempMax.toFixed(3)}, avg=${(tempSum / SAMPLE_SIZE).toFixed(3)}`);
+                console.log(`[BIOME DISTRIBUTION] Categories: ${Object.entries(categories).map(([k, v]) => `${k}: ${(v / SAMPLE_SIZE * 100).toFixed(1)}%`).join(', ')}`);
+                console.log(`[BIOME DISTRIBUTION] Biomes: ${Object.entries(counts).sort((a, b) => b[1] - a[1]).map(([k, v]) => `${k}: ${(v / SAMPLE_SIZE * 100).toFixed(1)}%`).join(', ')}`);
+                terrainProvider.biomeCache.clear();
+            }
+
             self.postMessage({ type: 'ready' });
             break;
 

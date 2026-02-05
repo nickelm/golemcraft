@@ -28,6 +28,34 @@ This constraint enables:
 - Deterministic reproduction from seed alone
 - Simple architecture (worker is stateless except caches)
 
+**Future direction:** Continental generation will introduce a two-phase model—one-time global generation per continent with spatial indices, followed by local chunk streaming. The game world becomes a sequence of finite continents (each spanning 10 player levels) rather than a single infinite plane. See `docs/continental-progression.md` for the progression and continent sequence design, `World_Generation_Architecture.md` and `kosmos_gen_architecture.md` for generation pipeline details.
+
+---
+
+## Design Documents
+
+| Document | Location | Contents |
+|----------|----------|----------|
+| Continental Progression | `docs/continental-progression.md` | Continent sequence, starting continent choice (Verdania/Grausland/Petermark), radial objectives, progression banding, sailing transitions, climate templates, convergence at continent 1 |
+| Verdania | `docs/verdania.md` | Starting continent template: zones, golden path, settlements, road network, naming palette |
+| World Generation Architecture | `docs/world-generation-architecture.md` | Two-phase generation model (continental genesis → chunk streaming), SDF infrastructure, storage strategy |
+| kosmos-engine Architecture | `docs/kosmos-gen-architecture.md` | Reusable engine extraction, editor design, spine-based terrain |
+
+### Continental Progression — Key Decisions
+
+These are settled design decisions from the continental progression document. Claude Code should treat these as constraints:
+
+- **One continent loaded at a time.** Sailing unloads current, generates next from seed. Return trips regenerate identically.
+- **10 levels per continent.** Continent 0 = levels 1–10, continent 1 = 11–20, etc.
+- **Starting continent is player choice.** Verdania (temperate), Grausland (cold/Nordic), Petermark (arid/Mediterranean). All are continent index 0 with different templates.
+- **Convergence at continent 1.** All players with the same WorldSeed share continent 1 regardless of starting choice. Template is neutral/mixed.
+- **Two-stage coastline.** Coarse SDF for O(1) proximity detection only. Detailed fbm noise (4–5 octaves) for actual coastline shape. SDF never defines geometry.
+- **Climate templates adjust inputs, not the biome system.** Templates apply temperature/humidity offsets and clamping before Whittaker lookup. Biome selection logic is unchanged.
+- **Progression scales with distance from starting point**, not from island center. Smooth lerp, no hard band boundaries.
+- **Terrain system unchanged inland.** Continental overlay only modulates near the coastline (beach/shallow/deep ocean transition). Existing biomes, heightmaps, and objects untouched.
+- **Player state persists; world state does not.** Level, inventory, objective completion stored in save file. Terrain regenerated from seed.
+- **Seed hierarchy:** `ContinentSeed(N) = hash(WorldSeed, N)` for N≥1. Continent 0 includes starting template in hash.
+
 ---
 
 ## Architecture
@@ -111,10 +139,11 @@ src/
 ### Current System (February 2025)
 
 **Whittaker diagram biome selection:**
-- Temperature noise (freq 0.018)
-- Humidity/precipitation noise (freq 0.012)
-- Elevation noise (freq 0.015)
-- 2D Whittaker lookup (temp × precip) with elevation modifiers
+- Temperature noise (freq 0.018) with smoothstep redistribution (`normalizeNoise()`)
+- Humidity/precipitation noise (freq 0.012) with smoothstep redistribution
+- Elevation noise (freq 0.015) with smoothstep redistribution
+- 2D Whittaker lookup (temp × precip) with elevation cooling above tree line (0.55)
+- Frozen <0.15, Cold 0.15-0.40, Temperate 0.40-0.72, Hot ≥0.72
 - Sub-biome variation noise for natural patches
 
 **Height generation:**
@@ -122,7 +151,8 @@ src/
 - Octave noise (5 octaves, freq 0.03)
 - Biome-specific base height + scale
 - Peak bonus for mountain biomes
-- River/lake carving via noise isolines
+- Multi-factor river system: density noise filtering, biome/elevation blocking, variable-width channels, graduated valley carving with sloped banks
+- Lake system with biome/elevation filtering and biome-specific thresholds
 
 **16 Biomes:**
 
@@ -134,6 +164,8 @@ src/
 | Cold | taiga, tundra, glacier |
 | Mountain | mountains, alpine, highlands |
 | Water | ocean |
+
+**Future: Continental climate templates** will apply temperature/humidity offsets before biome selection to produce continent-specific biome distributions (e.g., Grausland shifts toward cold biomes). The biome selection logic itself does not change. See `docs/continental-progression.md` § Starting Continents and Climate.
 
 ### Texture System
 
@@ -154,45 +186,167 @@ Biomes differentiate via RGB tint multiplied in shader.
 
 ---
 
-## Terrain Improvement Roadmap
+## Roadmap
 
-### Phase 1: Documentation ✓
-New CLAUDE.md (this file).
+### Tier 1: Terrain Polish (Current Priority)
 
-### Phase 2: Whittaker Biomes ✓
-Replaced 3×3×3 matrix with Whittaker diagram (temperature × precipitation).
-- 4-tier temperature bands (frozen/cold/temperate/hot)
-- 5-tier precipitation bands for finer gradation
-- Elevation cooling above tree line (0.55)
-- High elevation overrides for mountains/alpine/glacier
-- Sub-biome variation noise for meadow/autumn_forest patches
+These fix visible issues in the current infinite terrain system.
 
-### Phase 3: Deep Oceans
-Very low frequency continental noise (0.002) creates landmasses.
-- `deep_ocean` biome where continental noise < 0.25
-- Much deeper than regular ocean (WATER_LEVEL - 8)
-- Requires boats or bridges to cross
+**1.1 — Cold Biome Overrepresentation** ✓ Fixed
+Fixed by adding smoothstep noise normalization (`normalizeNoise()` in terraincore.js) that counteracts the central-limit-theorem clustering of `octaveNoise2D` output. Also rebalanced Whittaker thresholds: cold/temperate boundary moved from 0.50→0.40, frozen zone narrowed to <0.15, and elevation cooling rate reduced from 0.45→0.30. Target distribution: ~40% temperate, ~25% hot, ~15% cold, ~15% mountain.
 
-### Phase 4: Basin Rivers ✓
-Rivers flow toward water destinations (ocean, lakes) using proximity heuristics.
-- Proximity-based approach: rivers only form within 200 blocks of ocean/lake
-- Elevation cutoff: no rivers above tree line (elevation > 0.55)
-- Biome filtering: no rivers in desert, red_desert, glacier, ocean
-- Wet biome exemption: swamp, jungle, taiga, rainforest allow rivers everywhere
-- Variable width: rivers widen (0.015→0.035) as they approach destinations
-- Chunk-level caching for water destination proximity checks
+**1.2 — River System** ✓ Improved
+Replaced binary noise-isoline rivers with multi-factor system using `getRiverInfluence()`:
+- River density noise (freq 0.003, seed+44444) creates regions with/without rivers
+- Biome filtering: blocked in desert, red_desert, badlands, glacier, ocean; reduced density in tundra, savanna; always allowed in swamp, jungle, taiga, rainforest
+- Elevation filtering: no rivers above tree line (normalizedElevation > 0.55)
+- Variable width via downstream noise (freq 0.002, seed+33333): 0.012–0.030 threshold range
+- Graduated valley carving: bank zone at 2.5x river width with smoothstep falloff
+- Lake improvements: threshold 0.60 (was 0.65), swamp 0.50, with elevation/biome filtering
+- **Remaining:** Rivers still don't flow coherently downhill (requires continental generation for proper gradient descent rivers, see `World_Generation_Architecture.md`)
 
-### Phase 5: Local Roads
-Connect settlements with terrain-aware pathfinding.
-- Settlement placement via density noise + flatness check
-- A* pathfinding with slope cost
-- Switchbacks emerge naturally on steep terrain
-- Visual: flattened dirt/gravel texture
+**1.3 — Heightfield–Voxel Stitching**
+Visible seams where voxel landmarks (temples) meet the heightfield terrain. Need blending or transition geometry at the boundary.
 
-### Phase 6: Visual Polish
-- Stratified erosion for badlands/canyons
-- Ground patches (wildflowers, dirt spots)
-- Sub-biome variants
+**1.4 — Skybox Rendering**
+Current sky is basic. Need a proper skybox or procedural sky dome that integrates with the day/night cycle.
+
+### Tier 2: World Content
+
+Features that populate the world with things to find and do.
+
+**2.1 — Landmark System Expansion**
+Currently only Mayan temples. Restore and expand:
+- Mission caves (interior voxel spaces with objectives)
+- Rocky outcroppings / rock formations
+- Ruins, standing stones, ancient wells
+- Each landmark type needs placement rules (biome affinity, spacing, elevation)
+
+**2.2 — Settlements**
+Clusters of structures: villages, camps, outposts. Need:
+- Placement heuristics (flat ground, near water, road access)
+- Building templates (houses, market stalls, watchtowers)
+- NPC population (vendors, quest givers)
+- See Verdania design doc for zone-based settlement design
+- See `docs/continental-progression.md` § Settlements, Roads, and Infrastructure for how settlements integrate with the continental progression system (starting settlement, sector settlements, center settlement)
+
+**2.3 — Roads with Textures**
+Connect settlements with visible paths/roads:
+- Road hierarchy: highway (5-6 blocks), road (3-4), trail (2), path (1)
+- Terrain flattening along road path
+- Textured surface (gravel/dirt texture, possibly a new cobblestone texture)
+- Signposts at intersections
+- Short term: local noise-based paths between nearby landmarks
+- Long term: A* pathfinding from continental metadata
+- See `docs/continental-progression.md` § Settlements, Roads, and Infrastructure for road hierarchy within the continental system (primary road: start → center → sail point; secondary: to sector objectives)
+
+**2.4 — Monster Camps**
+Structured enemy encounters beyond random mob spawning:
+- Camp templates (bandit camp, undead graveyard, spider nest)
+- Difficulty scaling with distance from spawn
+- Loot chests, camp boss mobs
+- Visual identity (tents, totems, campfires)
+- Future: monster camps become objective locations in the continental system (Boss, Clear objective types)
+
+### Tier 3: Game Systems
+
+Core RPG mechanics that give the exploration purpose.
+
+**3.1 — Character Progression and Leveling**
+- XP from combat, exploration, quests
+- Level-up with stat increases
+- Skill tree or ability unlocks
+- Equipment slots and gear progression
+- Persist to local storage
+- Future: 10 levels per continent, mob scaling via distance-from-start progression banding (see `docs/continental-progression.md` § Progression Banding)
+
+**3.2 — Quest System**
+- Quest types: kill, collect, explore, deliver, escort
+- Quest givers in settlements
+- Quest log UI
+- Reward structure (XP, gold, gear)
+- Zone-appropriate quest templates (see Verdania doc)
+- Future: radial objectives per continent gate sailing to next continent (see `docs/continental-progression.md` § Radial Objectives)
+
+**3.3 — Game UI and Minimap**
+- Health/mana/XP bars (polish existing)
+- Minimap showing terrain, landmarks, quest markers
+- Inventory screen
+- Character stats panel
+- Settings dialog (render distance, controls)
+- Mobile-friendly touch controls
+- Future: wayfinding UI for continental objectives (compass markers, beacon pillars, sector exploration tracking)
+
+**3.4 — Sound**
+- Ambient biome sounds (wind, birds, water, insects)
+- Combat sounds (bow, hit, mob death)
+- UI sounds (menu, pickup, level up)
+- Music (exploration, combat, settlement)
+- Web Audio API with spatial positioning
+
+### Tier 4: Continental Progression
+
+Implementation of the continental system. See `docs/continental-progression.md` for full design.
+
+**4.1 — Continental Shape**
+- Coarse SDF for coastal proximity detection (O(1) lookup)
+- Detailed fbm coastline function (4–5 octaves, evaluated only near coast)
+- Beach → shallow → deep ocean terrain transition in terrain worker
+- Impassable deep ocean boundary
+- Deterministic starting point on coast
+
+**4.2 — Climate Templates**
+- Template data structure (climate offsets, excluded/favored biomes, elevation profile)
+- Verdania template (extract from existing design)
+- Grausland and Petermark template stubs (playable but minimal)
+- Template selection at world creation UI
+- Climate offset application in terrain worker before biome selection
+
+**4.3 — Progression Banding**
+- Distance-from-start calculation available to mob spawner
+- Mob stat scaling by local progression level (health, damage, density, variety)
+- Resource rarity scaling with distance
+
+**4.4 — Radial Objectives**
+- Objective placement at seeded angles around island
+- Objective types: Boss, Activate (initial); Collect, Clear, Escort (later)
+- Completion tracking in save file
+- Wayfinding UI (compass markers toward uncompleted objectives)
+
+**4.5 — Sailing Transition**
+- Sailing point at coast opposite starting point
+- Objective completion gate check
+- Continent unload/load sequence with player state save/restore
+- Sailing animation (10–20 sec) with background generation of next continent
+- Convergence: all starting continents → shared continent 1
+
+**4.6 — Settlements and Roads (Continental)**
+- Settlement placement constrained to progression bands
+- Road network: primary (start → center → sail), secondary (to objectives), trails
+- Signpost system with direction, distance, and danger level
+
+**4.7 — Full Continental Identity**
+- Grausland and Petermark design documents (parallel to Verdania)
+- Additional templates for continent 2+ (volcanic, tropical, archipelago)
+- Climate drift across continent sequence (sinusoidal temperature/humidity variation)
+- Named continents via naming palette system
+
+### Tier 5: Future Architecture
+
+Longer-term structural work.
+
+**5.1 — Continental Generation Pipeline**
+Full two-phase model from World Generation Architecture doc:
+- Phase A: Continental genesis (erosion, hydrology, zone placement)
+- Phase B: Chunk streaming from spatial indices
+- Enables proper gradient-descent rivers, road pathfinding, zone boundaries
+- Loading screen with progress (budget: 1–2 minutes per continent)
+
+**5.2 — kosmos-engine Extraction**
+Separate core simulation from GolemCraft-specific content:
+- Reusable terrain generation library
+- Template editor for continent design
+- See `kosmos_gen_architecture.md` for architecture
 
 ---
 
@@ -273,9 +427,12 @@ All terrain logic lives in `terrainworker.js`:
 - `getBiome(x, z)` — biome selection
 - `getContinuousHeight(x, z)` — height calculation
 - `getBlockType(x, y, z)` — block at position
-- `isRiver(x, z)`, `isLake(x, z)` — water features
+- `getRiverInfluence(x, z)` — river detection with graduated influence for valley carving
+- `isRiver(x, z)`, `isLake(x, z)` — boolean water feature checks
 
 Changes here affect all new chunks. Existing chunks regenerate when player returns.
+
+**Future continental changes to the worker will be minimal:** coarse SDF lookup for coastal proximity, detailed fbm evaluation near coast, and climate template offsets applied before biome selection. See `docs/continental-progression.md` § Interaction with Existing Systems.
 
 ---
 
@@ -289,11 +446,29 @@ Changes here affect all new chunks. Existing chunks regenerate when player retur
 
 ---
 
-## Known Limitations
+## Known Issues
 
-- No roads or settlements yet
-- No deep oceans separating landmasses (Phase 3 pending)
+- Rivers don't flow coherently downhill (requires continental generation for gradient descent)
+- ~~Cold biomes overrepresented~~ (fixed with smoothstep normalization)
+- Visible seams at heightfield–voxel boundaries near landmarks
 - Landmarks limited to Mayan temples
+
+---
+
+## Completed Milestones
+
+- ✅ Infinite terrain loading/unloading with chunk priority queue
+- ✅ Hybrid heightfield + voxel rendering (5-6x perf gain)
+- ✅ WebGL2 texture arrays replacing atlas system
+- ✅ Whittaker biome selection (16 biomes from temperature × humidity)
+- ✅ Web worker terrain generation (single source of truth)
+- ✅ Mob and item spawning relative to player position
+- ✅ Day/night cycle with lighting
+- ✅ Archery combat with arrow physics
+- ✅ XP and basic progression
+- ✅ Map visualizer tool for terrain debugging
+- ✅ Multi-factor river system with density filtering, variable width, and graduated valley carving
+- ✅ Continental progression design document (docs/continental-progression.md)
 
 ---
 

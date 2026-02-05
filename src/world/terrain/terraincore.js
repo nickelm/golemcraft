@@ -87,6 +87,21 @@ export function octaveNoise2D(x, z, octaves = 4, baseFreq = 0.05, hashFn = hash)
     return total / maxValue;
 }
 
+/**
+ * Normalize raw octave noise to near-uniform [0, 1] distribution.
+ * octaveNoise2D output clusters around [0.1-0.45] due to bilinear interpolation
+ * and multi-octave averaging (central limit theorem). Two steps:
+ * 1. Linear remap from practical range [0.06, 0.45] to [0, 1]
+ *    (offset 0.06 centers the distribution peak at ~0.50)
+ * 2. Smoothstep redistribution to push values toward extremes
+ */
+export function normalizeNoise(rawNoise) {
+    let t = (rawNoise - 0.06) / 0.39;
+    t = Math.max(0, Math.min(1, t));
+    // Smoothstep: 3t^2 - 2t^3 pushes values away from center, spreading distribution
+    return t * t * (3 - 2 * t);
+}
+
 // ============================================================================
 // CONTINENTAL NOISE (Phase 3: Deep Oceans)
 // ============================================================================
@@ -149,7 +164,7 @@ export const PEAK_BIOMES = ['mountains', 'glacier', 'alpine', 'badlands', 'highl
 export function selectBiomeFromWhittaker(temp, precip, elevation) {
     // Apply elevation cooling (one-directional, above tree line only)
     const TREE_LINE = 0.55;
-    const COOLING_RATE = 0.45;
+    const COOLING_RATE = 0.30;  // Reduced from 0.45 to avoid pushing too many areas cold
 
     let effectiveTemp = temp;
     if (elevation > TREE_LINE) {
@@ -160,41 +175,41 @@ export function selectBiomeFromWhittaker(temp, precip, elevation) {
     // High elevation overrides (above 0.75)
     if (elevation > 0.75) {
         if (effectiveTemp < 0.20) return 'glacier';
-        if (effectiveTemp < 0.50) return 'alpine';
+        if (effectiveTemp < 0.45) return 'alpine';
         return 'mountains';
     }
 
     // Mid-high elevation (0.60-0.75)
     if (elevation > 0.60) {
         if (effectiveTemp < 0.25) return 'glacier';
-        if (effectiveTemp < 0.55) return 'alpine';
+        if (effectiveTemp < 0.50) return 'alpine';
         if (precip < 0.35) return 'highlands';
         return 'mountains';
     }
 
-    // FROZEN ZONE (effectiveTemp < 0.20)
-    if (effectiveTemp < 0.20) {
+    // FROZEN ZONE (effectiveTemp < 0.12)
+    if (effectiveTemp < 0.12) {
         if (precip < 0.35) return 'tundra';
         return 'glacier';
     }
 
-    // COLD ZONE (0.20-0.50)
-    if (effectiveTemp < 0.50) {
+    // COLD ZONE (0.12-0.35)
+    if (effectiveTemp < 0.35) {
         if (precip < 0.30) return 'tundra';
         if (precip < 0.65) return 'snow';
         return 'taiga';
     }
 
-    // TEMPERATE ZONE (0.50-0.72)
-    if (effectiveTemp < 0.72) {
-        if (precip < 0.28) return 'meadow';
-        if (precip < 0.50) return 'plains';
-        if (precip < 0.68) return 'deciduous_forest';
-        if (precip < 0.82) return 'autumn_forest';
+    // TEMPERATE ZONE (0.35-0.65)
+    if (effectiveTemp < 0.65) {
+        if (precip < 0.25) return 'meadow';
+        if (precip < 0.48) return 'plains';
+        if (precip < 0.65) return 'deciduous_forest';
+        if (precip < 0.80) return 'autumn_forest';
         return 'swamp';
     }
 
-    // HOT ZONE (>= 0.72)
+    // HOT ZONE (>= 0.65)
     if (precip < 0.20) return 'desert';
     if (precip < 0.35) return 'red_desert';
     if (precip < 0.50) return 'savanna';
@@ -256,10 +271,10 @@ export function getBiome(x, z, seed = 12345) {
     const tempNoise = octaveNoise2D(x, z, 4, 0.018, (nx, nz) => hash2(nx, nz, seed));
     const humidityNoise = octaveNoise2D(x, z, 3, 0.012, (nx, nz) => hash(nx, nz, seed + 77777));
 
-    // Normalize to [0, 1]
-    const elevation = Math.max(0, Math.min(1, (elevationNoise - 0.08) / 0.37));
-    const temp = Math.max(0, Math.min(1, (tempNoise - 0.08) / 0.37));
-    const humidity = Math.max(0, Math.min(1, (humidityNoise - 0.08) / 0.37));
+    // Normalize to [0, 1] with smoothstep redistribution
+    const elevation = normalizeNoise(elevationNoise);
+    const temp = normalizeNoise(tempNoise);
+    const humidity = normalizeNoise(humidityNoise);
 
     // Whittaker-based selection
     let biome = selectBiomeFromWhittaker(temp, humidity, elevation);
@@ -342,13 +357,23 @@ export function getContinuousHeight(x, z, seed = 12345, maxHeight = 63) {
 
     const WATER_LEVEL = 6;
 
-    // River carving
-    if (biome !== 'ocean' && biome !== 'deep_ocean' && biome !== 'desert' && isRiver(x, z, seed)) {
-        height = Math.min(height, WATER_LEVEL - 1);
+    // River valley carving (graduated with sloped banks, proportional depth)
+    if (biome !== 'ocean' && biome !== 'deep_ocean') {
+        const riverInfo = getRiverInfluence(x, z, seed);
+        if (riverInfo && riverInfo.influence > 0) {
+            // Carve depth proportional to height: 20% of height, min 3, max 8 blocks
+            const carveDepth = Math.min(Math.max(3, height * 0.2), 8);
+            const riverBed = Math.max(WATER_LEVEL - 1, height - carveDepth);
+            if (height > riverBed) {
+                const t = riverInfo.influence;
+                const smooth = t * t * (3 - 2 * t);  // smoothstep for natural bank profile
+                height = height - (height - riverBed) * smooth;
+            }
+        }
     }
 
-    // Lake carving
-    if ((biome === 'plains' || biome === 'snow') && isLake(x, z, seed)) {
+    // Lake carving (isLake handles its own biome/elevation filtering)
+    if (isLake(x, z, seed)) {
         height = Math.min(height, WATER_LEVEL - 2);
     }
 
@@ -362,60 +387,128 @@ export function getContinuousHeight(x, z, seed = 12345, maxHeight = 63) {
 }
 
 // ============================================================================
-// RIVER DETECTION (Phase 4: Basin Rivers)
+// RIVER DETECTION (Multi-factor river system)
 // ============================================================================
 
 /**
- * Check if position is part of a river (simplified for visualizer)
- * Uses only local noise - no expensive proximity searches
- * The game's terrainworker.js has a more sophisticated cached version
+ * Get river influence at a position for graduated valley carving.
+ * Returns null if no river influence, otherwise { isRiver, influence }.
+ * influence = 1.0 at river center, smoothly falls to 0.0 at bank edge.
  *
+ * Multi-factor filtering:
+ * - Biome blocking (no rivers in desert, badlands, glacier, ocean)
+ * - Elevation filtering (no rivers above tree line)
+ * - River density noise (creates regions with/without rivers)
+ * - Variable width via downstream noise (narrow upstream, wide downstream)
+ * - Bank zone at 2.5x river width for graduated valley carving
+ *
+ * @param {number} x - World X coordinate
+ * @param {number} z - World Z coordinate
+ * @param {number} seed - World seed
+ * @returns {{ isRiver: boolean, influence: number } | null}
+ */
+export function getRiverInfluence(x, z, seed = 12345) {
+    const biome = getBiome(x, z, seed);
+
+    // Blocked biomes: no rivers at all
+    if (biome === 'ocean' || biome === 'deep_ocean' ||
+        biome === 'desert' || biome === 'red_desert' ||
+        biome === 'badlands' || biome === 'glacier') {
+        return null;
+    }
+
+    // Elevation filter: allow mountain streams up to 0.70, block above
+    const elevationNoise = octaveNoise2D(x, z, 4, 0.015, (nx, nz) => hash(nx, nz, seed));
+    const elevation = normalizeNoise(elevationNoise);
+    if (elevation > 0.70) return null;
+
+    // River density noise: creates regions with vs without rivers
+    // MUST normalize — raw octaveNoise2D clusters around [0.1-0.45]
+    const wetBiomes = ['swamp', 'jungle', 'taiga', 'rainforest'];
+    const isWet = wetBiomes.includes(biome);
+
+    if (!isWet) {
+        const riverDensityNoise = normalizeNoise(octaveNoise2D(x, z, 2, 0.003, (nx, nz) => hash(nx, nz, seed + 44444)));
+        const reducedDensityBiomes = ['tundra', 'savanna', 'mountains', 'alpine', 'highlands'];
+        const densityThreshold = reducedDensityBiomes.includes(biome) ? 0.55 : 0.45;
+        if (riverDensityNoise < densityThreshold) return null;
+    }
+
+    // River channel noise (meandering isoline at 0.5)
+    // MUST normalize — raw octaveNoise2D clusters around [0.1-0.45], rarely reaching 0.5
+    const riverNoiseRaw = octaveNoise2D(x, z, 3, 0.008, (nx, nz) => hash(nx, nz, seed + 55555));
+    const riverNoise = normalizeNoise(riverNoiseRaw);
+    const distFromCenter = Math.abs(riverNoise - 0.5);
+
+    // Downstream width variation (normalized for proper 0-1 distribution)
+    const downstreamNoise = normalizeNoise(octaveNoise2D(x, z, 2, 0.002, (nx, nz) => hash(nx, nz, seed + 33333)));
+    const baseWidth = 0.015 + downstreamNoise * 0.025;  // Range: 0.015 to 0.040
+
+    // Mountain streams get narrower above tree line
+    let elevationWidthFactor = 1.0;
+    if (elevation > 0.55) {
+        elevationWidthFactor = 1.0 - (elevation - 0.55) / 0.15;  // 1.0 at 0.55, 0.0 at 0.70
+    }
+    const riverWidth = baseWidth * (0.5 + 0.5 * elevationWidthFactor);  // 50-100% of base width
+
+    // Bank zone extends to 3x river width for valley carving
+    const bankWidth = riverWidth * 3.0;
+    if (distFromCenter > bankWidth) return null;
+
+    const isRiverChannel = distFromCenter < riverWidth;
+
+    // Compute influence: 1.0 at center/channel, smoothstep falloff in bank zone
+    let influence;
+    if (isRiverChannel) {
+        influence = 1.0;
+    } else {
+        const bankDist = (distFromCenter - riverWidth) / (bankWidth - riverWidth);
+        const t = 1.0 - bankDist;  // 1.0 at river edge, 0.0 at bank edge
+        influence = t * t * (3 - 2 * t);  // smoothstep
+    }
+
+    return { isRiver: isRiverChannel, influence };
+}
+
+/**
+ * Check if position is part of a river (boolean wrapper around getRiverInfluence)
  * @param {number} x - World X coordinate
  * @param {number} z - World Z coordinate
  * @param {number} seed - World seed
  * @returns {boolean}
  */
 export function isRiver(x, z, seed = 12345) {
-    const biome = getBiome(x, z, seed);
-
-    // No rivers in these biomes
-    if (biome === 'ocean' || biome === 'deep_ocean' ||
-        biome === 'desert' || biome === 'red_desert' ||
-        biome === 'glacier') {
-        return false;
-    }
-
-    // No rivers on mountaintops
-    const elevationNoise = octaveNoise2D(x, z, 4, 0.015, (nx, nz) => hash(nx, nz, seed));
-    const elevation = Math.max(0, Math.min(1, (elevationNoise - 0.08) / 0.37));
-    if (elevation > 0.55) return false;
-
-    // River channel from noise (simplified - constant width)
-    const riverNoise = octaveNoise2D(x, z, 3, 0.008, (nx, nz) => hash(nx, nz, seed + 55555));
-    const isChannel = Math.abs(riverNoise - 0.5) < 0.02;  // Fixed width for visualizer
-
-    if (!isChannel) return false;
-
-    // Wet biomes always show rivers
-    const wetBiomes = ['swamp', 'jungle', 'taiga', 'rainforest'];
-    if (wetBiomes.includes(biome)) return true;
-
-    // For other biomes, use continental noise as a proxy for "near ocean"
-    // Low continentalness = closer to ocean = more likely to have rivers
-    const continental = getContinentalNoise(x, z, seed);
-    return continental < 0.55;  // Rivers form in coastal/mid-continental areas
+    const info = getRiverInfluence(x, z, seed);
+    return info !== null && info.isRiver;
 }
 
 /**
  * Check if position is a lake
+ * Filtered by biome and elevation - no lakes on mountains or in oceans
  * @param {number} x - World X coordinate
  * @param {number} z - World Z coordinate
  * @param {number} seed - World seed
  * @returns {boolean}
  */
 export function isLake(x, z, seed = 12345) {
-    const lakeNoise = octaveNoise2D(x, z, 2, 0.02, (nx, nz) => hash(nx, nz, seed + 66666));
-    return lakeNoise > 0.65;
+    const biome = getBiome(x, z, seed);
+
+    // No lakes in ocean or on high mountains
+    if (biome === 'ocean' || biome === 'deep_ocean') return false;
+
+    const elevationNoise = octaveNoise2D(x, z, 4, 0.015, (nx, nz) => hash(nx, nz, seed));
+    const elevation = normalizeNoise(elevationNoise);
+    if (elevation > 0.55) return false;
+
+    // MUST normalize — raw octaveNoise2D clusters around [0.1-0.45], never reaching 0.50+
+    const lakeNoiseRaw = octaveNoise2D(x, z, 2, 0.02, (nx, nz) => hash(nx, nz, seed + 66666));
+    const lakeNoise = normalizeNoise(lakeNoiseRaw);
+
+    // Swamp: more frequent lakes (~35% of swamp area)
+    if (biome === 'swamp') return lakeNoise > 0.65;
+
+    // Default: ~25% of qualifying areas
+    return lakeNoise > 0.75;
 }
 
 // ============================================================================
@@ -439,9 +532,9 @@ export function getTerrainParams(x, z, seed = 12345) {
     const tempNoise = octaveNoise2D(x, z, 4, 0.018, (nx, nz) => hash2(nx, nz, seed));
     const humidityNoise = octaveNoise2D(x, z, 3, 0.012, (nx, nz) => hash(nx, nz, seed + 77777));
 
-    // Normalize
-    const temperature = Math.max(0, Math.min(1, (tempNoise - 0.08) / 0.37));
-    const humidity = Math.max(0, Math.min(1, (humidityNoise - 0.08) / 0.37));
+    // Normalize with smoothstep redistribution
+    const temperature = normalizeNoise(tempNoise);
+    const humidity = normalizeNoise(humidityNoise);
 
     // Get biome and height
     const biome = getBiome(x, z, seed);
