@@ -33,8 +33,8 @@ export const PRESETS = {
     day: {
         ambient: { color: 0xffffff, intensity: 0.5 },
         directional: { color: 0xffffff, intensity: 0.5 },
-        sky: 0x87ceeb,
-        fog: 0x87ceeb,
+        sky: 0x4a90c2,   // Deep sky blue (zenith)
+        fog: 0xc8ddf0,   // Pale hazy blue (horizon, also fog fade target)
         torch: 1.5  // Keep torch active for dark interiors (caves, temples)
     },
     sunset: {
@@ -162,7 +162,7 @@ export function applyPreset(preset, ambientLight, directionalLight, torchLight, 
     // Update torch (respects toggle state)
     torchLight.intensity = torchEnabled ? preset.torch : 0;
     
-    // Update scene background and fog
-    scene.background.setHex(preset.sky);
+    // Update fog color (sky dome handles background gradient)
+    if (scene.background) scene.background.setHex(preset.sky);
     scene.fog.color.setHex(preset.fog);
 }

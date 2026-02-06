@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { TimeOfDay } from './timeofday.js';
 import { calculatePreset, applyPreset } from './lightingpresets.js';
 import { Weather } from './weather.js';
+import { SkyDome } from './skydome.js';
 
 /**
  * AtmosphereController - Orchestrates all atmospheric systems
@@ -46,6 +47,10 @@ export class AtmosphereController {
         // Systems
         this.timeOfDay = new TimeOfDay(scene);
         this.weather = new Weather(scene);
+        this.skyDome = new SkyDome(scene);
+
+        // Sky dome replaces scene.background — no flat color underneath
+        this.scene.background = null;
 
         // Adaptive fog for chunk loading
         this.baseFogNear = null;   // Set during init
@@ -80,6 +85,10 @@ export class AtmosphereController {
             this.torchEnabled
         );
         
+        // Update sky dome gradient colors and position
+        this.skyDome.update(preset);
+        this.skyDome.followCamera(heroPosition);
+
         // Update weather (stub for now)
         this.weather.update(deltaTime, biomeData);
 
@@ -241,6 +250,7 @@ export class AtmosphereController {
         
         this.timeOfDay.dispose();
         this.weather.dispose();
+        this.skyDome.dispose();
         
         if (this.torchButton) {
             this.torchButton.remove();

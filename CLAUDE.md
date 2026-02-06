@@ -38,8 +38,6 @@ This constraint enables:
 |----------|----------|----------|
 | Continental Progression | `docs/continental-progression.md` | Continent sequence, starting continent choice (Verdania/Grausland/Petermark), radial objectives, progression banding, sailing transitions, climate templates, convergence at continent 1 |
 | Verdania | `docs/verdania.md` | Starting continent template: zones, golden path, settlements, road network, naming palette |
-| World Generation Architecture | `docs/world-generation-architecture.md` | Two-phase generation model (continental genesis → chunk streaming), SDF infrastructure, storage strategy |
-| kosmos-engine Architecture | `docs/kosmos-gen-architecture.md` | Reusable engine extraction, editor design, spine-based terrain |
 
 ### Continental Progression — Key Decisions
 
@@ -136,7 +134,7 @@ src/
 
 ## Terrain Generation
 
-### Current System (February 2025)
+### Current System (February 2026)
 
 **Whittaker diagram biome selection:**
 - Temperature noise (freq 0.018) with smoothstep redistribution (`normalizeNoise()`)
@@ -205,11 +203,11 @@ Replaced binary noise-isoline rivers with multi-factor system using `getRiverInf
 - Lake improvements: threshold 0.60 (was 0.65), swamp 0.50, with elevation/biome filtering
 - **Remaining:** Rivers still don't flow coherently downhill (requires continental generation for proper gradient descent rivers, see `World_Generation_Architecture.md`)
 
-**1.3 — Heightfield–Voxel Stitching**
+**1.3 — Heightfield–Voxel Stitching** ✓ Improved
 Visible seams where voxel landmarks (temples) meet the heightfield terrain. Need blending or transition geometry at the boundary.
 
-**1.4 — Skybox Rendering**
-Current sky is basic. Need a proper skybox or procedural sky dome that integrates with the day/night cycle.
+**1.4 — Skybox Rendering** ✓ Fixed
+Replaced flat `scene.background` color with a gradient sky dome (`src/atmosphere/skydome.js`). Inverted sphere with custom shader draws horizon-to-zenith gradient using preset fog/sky colors. Depth-clamped to far plane to avoid clipping at any draw distance. Integrates with existing day/night cycle transitions. Sun/moon sprites retained as focal points.
 
 ### Tier 2: World Content
 
@@ -495,6 +493,7 @@ Changes here affect all new chunks. Existing chunks regenerate when player retur
 - ✅ Per-pixel coastline clipping in tile generator worker (ocean outside island boundary)
 - ✅ Progressive tile cache fix (evict lower refinement levels when higher arrives)
 - ✅ Tile priority sort (coarse tiles before fine, then by distance from center)
+- ✅ Gradient sky dome with horizon-to-zenith shader, depth-clamped, integrated with day/night cycle
 - ✅ Map fog of war (visited cell tracking, dark overlay on unexplored areas, persisted to save file, Shift+M debug toggle)
 
 ---
