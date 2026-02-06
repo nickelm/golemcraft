@@ -417,6 +417,32 @@ function generateMayanTemple(config, centerX, baseY, centerZ, hashFn, gridX, gri
     const brightnessOverrides = volume.blendIntoWorld(blocks, 0, 0, 0, null);
 
     // =========================================================================
+    // Compute tight voxelBounds from actual block positions
+    // This controls voxelMask — only cells with real blocks get voxel rendering.
+    // The wider 'bounds' is still used for spatial indexing / chunk queries.
+    // =========================================================================
+    let vMinX = Infinity, vMaxX = -Infinity;
+    let vMinZ = Infinity, vMaxZ = -Infinity;
+    for (const key of blocks.keys()) {
+        const [x, , z] = key.split(',').map(Number);
+        if (x < vMinX) vMinX = x;
+        if (x > vMaxX) vMaxX = x;
+        if (z < vMinZ) vMinZ = z;
+        if (z > vMaxZ) vMaxZ = z;
+    }
+    for (const key of brightnessOverrides.keys()) {
+        const [x, , z] = key.split(',').map(Number);
+        if (x < vMinX) vMinX = x;
+        if (x > vMaxX) vMaxX = x;
+        if (z < vMinZ) vMinZ = z;
+        if (z > vMaxZ) vMaxZ = z;
+    }
+    const voxelBounds = {
+        minX: vMinX, maxX: vMaxX,
+        minZ: vMinZ, maxZ: vMaxZ
+    };
+
+    // =========================================================================
     // Calculate bounds for spatial indexing (chunk queries only)
     // =========================================================================
     const stairExtension = numSteps + 4;
@@ -452,6 +478,32 @@ function generateMayanTemple(config, centerX, baseY, centerZ, hashFn, gridX, gri
         }
     ];
 
+    // =========================================================================
+    // Heightfield modifications for terrain flattening around temple
+    // =========================================================================
+    // Flatten heightfield slightly below structure base to prevent Z-fighting
+    // between the smooth heightfield surface and voxel block faces at the same Y.
+    // The 0.5 offset ensures the heightfield is always behind the voxel floor.
+    const flattenY = baseY - 0.5;
+    const heightfieldModifications = [
+        {
+            type: 'flatten',
+            centerX,
+            centerZ,
+            width: baseSize + stairExtension * 2,
+            depth: baseSize + stairExtension * 2,
+            targetY: flattenY
+        },
+        {
+            type: 'blend',
+            centerX,
+            centerZ,
+            innerRadius: halfBase + stairExtension,
+            outerRadius: halfBase + stairExtension + 4,
+            targetY: flattenY
+        }
+    ];
+
     return {
         type: 'mayanTemple',
         centerX,
@@ -460,7 +512,9 @@ function generateMayanTemple(config, centerX, baseY, centerZ, hashFn, gridX, gri
         blocks,
         brightnessOverrides,
         bounds,
+        voxelBounds,
         clearings,
+        heightfieldModifications,
         metadata: {
             shrinePosition: { x: centerX, y: chamberY + 2, z: centerZ },
             mobSpawnPoints,

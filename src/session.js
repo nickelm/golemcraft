@@ -127,7 +127,8 @@ export class SessionManager {
             heroPosition: null,
             heroRotation: 0,
             golems: [],
-            gameTime: 0
+            gameTime: 0,
+            visitedMapCells: []
         };
         
         this.saveWorldData(worldId, worldData);
@@ -181,6 +182,10 @@ export class SessionManager {
         
         if (gameState.gameTime !== undefined) {
             world.gameTime = gameState.gameTime;
+        }
+
+        if (gameState.visitedMapCells !== undefined) {
+            world.visitedMapCells = gameState.visitedMapCells;
         }
         
         this.saveWorldData(this.currentWorldId, world);

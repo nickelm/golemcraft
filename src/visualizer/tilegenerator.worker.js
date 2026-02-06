@@ -7,8 +7,12 @@
 
 import { getTerrainParams } from '../world/terrain/terraincore.js';
 import { getColorForMode } from '../tools/mapvisualizer/colors.js';
+import { getNominalRadius } from '../world/terrain/continentshape.js';
 
 const TILE_SIZE = 128;
+
+// Ocean color for positions outside the coastline
+const OCEAN_COLOR = [15, 30, 80];
 
 // Progressive refinement levels: sampling step and output grid size
 const REFINEMENT_CONFIG = [
@@ -21,12 +25,28 @@ const REFINEMENT_CONFIG = [
 ];
 
 /**
+ * Check if a world position is outside the coastline (in the ocean).
+ * @param {number} wx - World X
+ * @param {number} wz - World Z
+ * @param {number} shapeSeed - Seed for silhouette shape
+ * @param {number} baseRadius - Base island radius
+ * @returns {boolean} True if outside coastline
+ */
+function isOutsideCoastline(wx, wz, shapeSeed, baseRadius) {
+    const dist = Math.sqrt(wx * wx + wz * wz);
+    const angle = Math.atan2(wz, wx);
+    const radius = getNominalRadius(angle, shapeSeed, baseRadius);
+    return dist > radius;
+}
+
+/**
  * Generate a tile at a specific refinement level (progressive rendering)
  * @param {Object} params - Tile generation parameters
  * @returns {{buffer: ArrayBuffer, width: number, height: number}}
  */
 function generateProgressiveTile(params) {
-    const { tileX, tileZ, lodLevel, refinementLevel, seed, mode } = params;
+    const { tileX, tileZ, lodLevel, refinementLevel, seed, mode, shapeSeed, baseRadius } = params;
+    const hasCoastline = shapeSeed !== undefined && baseRadius !== undefined;
 
     const config = REFINEMENT_CONFIG[refinementLevel] || REFINEMENT_CONFIG[5];
     const { sampling, gridSize } = config;
@@ -46,6 +66,17 @@ function generateProgressiveTile(params) {
             // World coordinates: tile origin + pixel * sampling * LOD
             const wx = tileX + px * totalStep;
             const wz = tileZ + py * totalStep;
+
+            const index = (py * gridSize + px) * 4;
+
+            // Check coastline - skip terrain generation for ocean positions
+            if (hasCoastline && isOutsideCoastline(wx, wz, shapeSeed, baseRadius)) {
+                data[index] = OCEAN_COLOR[0];
+                data[index + 1] = OCEAN_COLOR[1];
+                data[index + 2] = OCEAN_COLOR[2];
+                data[index + 3] = 255;
+                continue;
+            }
 
             const terrainParams = getTerrainParams(wx, wz, seed);
 
@@ -69,7 +100,6 @@ function generateProgressiveTile(params) {
                 rgb = getColorForMode(terrainParams, mode);
             }
 
-            const index = (py * gridSize + px) * 4;
             data[index] = rgb[0];
             data[index + 1] = rgb[1];
             data[index + 2] = rgb[2];
@@ -86,7 +116,8 @@ function generateProgressiveTile(params) {
  * @returns {ArrayBuffer} RGBA pixel data buffer
  */
 function generateTile(params) {
-    const { tileX, tileZ, lodLevel, seed, mode } = params;
+    const { tileX, tileZ, lodLevel, seed, mode, shapeSeed, baseRadius } = params;
+    const hasCoastline = shapeSeed !== undefined && baseRadius !== undefined;
 
     // Create pixel buffer (128 x 128 x 4 bytes RGBA)
     const buffer = new ArrayBuffer(TILE_SIZE * TILE_SIZE * 4);
@@ -102,6 +133,17 @@ function generateTile(params) {
             // Scale pixel position by LOD step to sample world coordinates
             const wx = tileX + px * step;
             const wz = tileZ + py * step;
+
+            const index = (py * TILE_SIZE + px) * 4;
+
+            // Check coastline - skip terrain generation for ocean positions
+            if (hasCoastline && isOutsideCoastline(wx, wz, shapeSeed, baseRadius)) {
+                data[index] = OCEAN_COLOR[0];
+                data[index + 1] = OCEAN_COLOR[1];
+                data[index + 2] = OCEAN_COLOR[2];
+                data[index + 3] = 255;
+                continue;
+            }
 
             const terrainParams = getTerrainParams(wx, wz, seed);
 
@@ -126,7 +168,6 @@ function generateTile(params) {
                 rgb = getColorForMode(terrainParams, mode);
             }
 
-            const index = (py * TILE_SIZE + px) * 4;
             data[index] = rgb[0];
             data[index + 1] = rgb[1];
             data[index + 2] = rgb[2];
@@ -145,7 +186,7 @@ self.onmessage = function(e) {
 
     switch (type) {
         case 'generate': {
-            const { requestId, tileX, tileZ, lodLevel, seed, mode } = data;
+            const { requestId, tileX, tileZ, lodLevel, seed, mode, shapeSeed, baseRadius } = data;
 
             try {
                 const buffer = generateTile({
@@ -153,7 +194,9 @@ self.onmessage = function(e) {
                     tileZ,
                     lodLevel,
                     seed,
-                    mode
+                    mode,
+                    shapeSeed,
+                    baseRadius
                 });
 
                 // Send response with transferred buffer (zero-copy)
@@ -183,7 +226,7 @@ self.onmessage = function(e) {
 
         case 'generate_progressive': {
             // Progressive refinement tile generation
-            const { requestId, tileX, tileZ, lodLevel, refinementLevel, seed, mode } = data;
+            const { requestId, tileX, tileZ, lodLevel, refinementLevel, seed, mode, shapeSeed, baseRadius } = data;
 
             try {
                 const result = generateProgressiveTile({
@@ -192,7 +235,9 @@ self.onmessage = function(e) {
                     lodLevel,
                     refinementLevel,
                     seed,
-                    mode
+                    mode,
+                    shapeSeed,
+                    baseRadius
                 });
 
                 // Send response with refinement metadata

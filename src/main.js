@@ -42,14 +42,9 @@ window.addEventListener('DOMContentLoaded', () => {
     });
     
     // Escape key to return to menu (use keyup to avoid double-trigger)
+    // Map is toggled with Tab, not Escape
     window.addEventListener('keyup', (e) => {
         if (e.key === 'Escape') {
-            // Close map overlay first if open
-            if (game.mapOverlay?.isOpen) {
-                game.mapOverlay.close();
-                e.preventDefault();
-                return;
-            }
             e.preventDefault();
             saveAndReturnToMenu(game);
         }
@@ -78,7 +73,8 @@ function saveGame(game) {
         heroPosition: game.hero.position,
         heroRotation: game.hero.rotation,
         golems: game.hero.commandedGolems.filter(g => g.health > 0),
-        gameTime: game.gameTime || 0
+        gameTime: game.gameTime || 0,
+        visitedMapCells: game.mapOverlay?.getVisitedCellsArray() || []
     };
     
     const saved = sessionManager.saveCurrentWorld(gameState);

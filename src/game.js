@@ -262,6 +262,9 @@ export class Game {
 
         // Map overlay (Tab key to toggle)
         this.mapOverlay = new MapOverlay(this.seed, this.continentConfig);
+        if (this.worldData?.visitedMapCells) {
+            this.mapOverlay.loadVisitedCells(this.worldData.visitedMapCells);
+        }
 
         // Initialize adaptive fog system
         this.atmosphere.initFogAdaptation(
@@ -778,9 +781,15 @@ export class Game {
             this.mapOverlay.toggle(this.hero.position.x, this.hero.position.z);
             return;
         }
-        // Mount/dismount toggle with M key
+        // Shift+M: toggle fog of war debug; M alone: mount/dismount
         if (this.input.isKeyJustPressed('m')) {
-            this.hero.toggleMount();
+            if (this.input.isKeyPressed('shift')) {
+                if (this.mapOverlay) {
+                    this.mapOverlay.toggleFogOfWar();
+                }
+            } else {
+                this.hero.toggleMount();
+            }
         }
         // Weapon switch with Q key
         if (this.input.isKeyJustPressed('q')) {
@@ -812,11 +821,17 @@ export class Game {
         // Skip rest of update if loading
         if (needsLoading) return;
 
+        // Mark visited map cells for fog of war (always, even when map is closed)
+        if (this.mapOverlay) {
+            this.mapOverlay.markVisited(this.hero.position.x, this.hero.position.z);
+        }
+
         // If map overlay is open, route input to it and skip game input
         if (this.mapOverlay?.isOpen) {
             this.handleInput(deltaTime); // Still process Tab key to close map
             this.mapOverlay.handleInput(this.input, deltaTime);
             this.mapOverlay.render();
+            this.input.clearJustPressed();
             return;
         }
 

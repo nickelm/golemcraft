@@ -5,7 +5,9 @@
  * Matches what the game generates in terrainworker.js.
  */
 
-import { getTerrainParams } from './world/terrain/terraincore.js';
+import { getTerrainParams, hash } from './world/terrain/terraincore.js';
+import { getNominalRadius, computeStartPosition } from './world/terrain/continentshape.js';
+import { deriveContinentSeed } from './worldgen/seeds.js';
 import { TileCache } from './tools/mapvisualizer/tilecache.js';
 import { TerrainCache } from './visualizer/terraincache.js';
 import { TileManager } from './visualizer/tilemanager.js';
@@ -16,7 +18,6 @@ const MAX_ZOOM = 4.0;
 
 // Mode descriptions for UI
 const MODE_DESCRIPTIONS = {
-    continental: 'Land/ocean distribution (blue = ocean, green = plains, brown = hills, white = peaks)',
     temperature: 'Climate zones (blue = cold, white = temperate, red = hot)',
     humidity: 'Precipitation (yellow = arid, green = moderate, cyan = humid)',
     biome: 'Biome distribution (colored regions show biome types)',
@@ -26,7 +27,6 @@ const MODE_DESCRIPTIONS = {
 
 // Map mode names to getTerrainParams property names
 const MODE_PARAM_MAP = {
-    continental: 'continental',
     temperature: 'temperature',
     humidity: 'humidity',
     biome: 'biome',
@@ -41,15 +41,22 @@ class TerrainVisualizer {
 
         // View state
         this.seed = seed;
+        this.continentIndex = 0;
+        this.baseRadius = 2000;  // Same as game.js continent config
         this.viewX = 0;
         this.viewZ = 0;
         this.zoom = 2.0;  // Pixels per world block
-        this.mode = 'continental';
+        this.mode = 'composite';
+
+        // Derive continental seeds and center on start position
+        this._updateDerivedSeeds();
+        this._centerOnStartPosition();
 
         // Tile cache for improved pan/zoom performance
         // At zoom=0.3 on 1920x1080, we can have ~400+ visible tiles
         // Use larger cache to avoid thrashing
         this.tileCache = new TileCache(128, 512);
+        this.tileCache.setCoastlineParams(this.shapeSeed, this.baseRadius);
 
         // Persistent terrain cache (IndexedDB)
         this.terrainCache = new TerrainCache();
@@ -112,9 +119,11 @@ class TerrainVisualizer {
                 () => this.onTileReady()  // Callback when tile arrives
             );
 
-            const success = await this.tileManager.initWorker(this.seed);
+            const success = await this.tileManager.initWorker(this._getEffectiveSeed());
             if (success) {
                 this.tileManager.setMode(this.mode);
+                this.tileManager.setCoastlineParams(this.shapeSeed, this.baseRadius);
+                this._updateTileFilter();
                 this.tileManagerReady = true;
                 this.useAsyncRendering = true;
                 console.log('TileManager initialized with Web Worker');
@@ -163,7 +172,7 @@ class TerrainVisualizer {
         try {
             const success = await this.terrainCache.init();
             if (success) {
-                this.terrainCache.setCacheVersion(this.seed);
+                this.terrainCache.setCacheVersion(this._getEffectiveSeed());
                 this.tileCache.setTerrainCache(this.terrainCache);
                 this.terrainCacheReady = true;
                 console.log('TerrainCache initialized and connected to TileCache');
@@ -238,21 +247,18 @@ class TerrainVisualizer {
                     e.preventDefault();
                     break;
                 case '1':
-                    this.setMode('continental');
-                    break;
-                case '2':
                     this.setMode('temperature');
                     break;
-                case '3':
+                case '2':
                     this.setMode('humidity');
                     break;
-                case '4':
+                case '3':
                     this.setMode('biome');
                     break;
-                case '5':
+                case '4':
                     this.setMode('elevation');
                     break;
-                case '6':
+                case '5':
                     this.setMode('composite');
                     break;
             }
@@ -327,7 +333,7 @@ class TerrainVisualizer {
             }
 
             // Sample the value at mouse position
-            const params = getTerrainParams(this.mouseWorldX, this.mouseWorldZ, this.seed);
+            const params = getTerrainParams(this.mouseWorldX, this.mouseWorldZ, this._getEffectiveSeed());
             const paramName = MODE_PARAM_MAP[this.mode];
             this.mouseValue = params[paramName];
 
@@ -504,7 +510,7 @@ class TerrainVisualizer {
         this.mouseWorldZ = this.viewZ + (canvasY - halfHeight) / this.zoom;
 
         // Sample the value at touch position
-        const params = getTerrainParams(this.mouseWorldX, this.mouseWorldZ, this.seed);
+        const params = getTerrainParams(this.mouseWorldX, this.mouseWorldZ, this._getEffectiveSeed());
         const paramName = MODE_PARAM_MAP[this.mode];
         this.mouseValue = params[paramName];
 
@@ -555,18 +561,104 @@ class TerrainVisualizer {
 
     setSeed(newSeed) {
         this.seed = newSeed;
+        this._updateDerivedSeeds();
+        this._centerOnStartPosition();
+
+        const effectiveSeed = this._getEffectiveSeed();
+
         // Update terrain cache version so old entries become orphaned
         if (this.terrainCacheReady) {
-            this.terrainCache.setCacheVersion(this.seed);
+            this.terrainCache.setCacheVersion(effectiveSeed);
         }
 
         // Update tile manager configuration
         if (this.tileManager) {
-            this.tileManager.updateConfig(this.seed, this.mode);
+            this.tileManager.updateConfig(effectiveSeed, this.mode);
         }
 
+        this._updateTileFilter();
         this.tileCache.invalidate();
         this.render();
+    }
+
+    setContinentIndex(index) {
+        this.continentIndex = Math.max(0, index);
+        this._updateDerivedSeeds();
+        this._centerOnStartPosition();
+
+        const effectiveSeed = this._getEffectiveSeed();
+
+        if (this.terrainCacheReady) {
+            this.terrainCache.setCacheVersion(effectiveSeed);
+        }
+
+        if (this.tileManager) {
+            this.tileManager.updateConfig(effectiveSeed, this.mode);
+        }
+
+        this._updateTileFilter();
+        this.tileCache.invalidate();
+        this.render();
+    }
+
+    _getEffectiveSeed() {
+        return this.continentIndex === 0
+            ? this.seed
+            : deriveContinentSeed(this.seed, this.continentIndex);
+    }
+
+    _updateDerivedSeeds() {
+        const effectiveSeed = this._getEffectiveSeed();
+        this.shapeSeed = Math.floor(hash(0, 0, effectiveSeed + 111111) * 0x7FFFFFFF);
+        this.startSeed = Math.floor(hash(0, 0, effectiveSeed + 333333) * 0x7FFFFFFF);
+        this.startPosition = computeStartPosition(this.startSeed, this.shapeSeed, this.baseRadius);
+    }
+
+    _centerOnStartPosition() {
+        this.viewX = this.startPosition.x;
+        this.viewZ = this.startPosition.z;
+    }
+
+    /**
+     * Check if a tile overlaps the island coastline (should be rendered).
+     * Uses the tile's closest corner to island center vs nominal radius.
+     * @param {number} tileX - Tile world X origin
+     * @param {number} tileZ - Tile world Z origin
+     * @param {number} worldTileSize - Tile size in world blocks
+     * @returns {boolean} True if tile is inside or near coastline
+     */
+    _isTileInsideCoastline(tileX, tileZ, worldTileSize) {
+        // Find the closest point on the tile to the island center (0, 0)
+        const closestX = Math.max(tileX, Math.min(0, tileX + worldTileSize));
+        const closestZ = Math.max(tileZ, Math.min(0, tileZ + worldTileSize));
+        const distToCenter = Math.sqrt(closestX * closestX + closestZ * closestZ);
+
+        // Use angle from tile center for radius lookup
+        const tileCenterX = tileX + worldTileSize / 2;
+        const tileCenterZ = tileZ + worldTileSize / 2;
+        const angle = Math.atan2(tileCenterZ, tileCenterX);
+        const nominalRadius = getNominalRadius(angle, this.shapeSeed, this.baseRadius);
+
+        // Include a margin equal to tile diagonal so we don't clip corners
+        const margin = worldTileSize * 1.5;
+        return distToCenter < nominalRadius + margin;
+    }
+
+    /**
+     * Update the tile filter on the TileManager based on current coastline
+     */
+    _updateTileFilter() {
+        // Update coastline params on TileCache (for sync rendering)
+        this.tileCache.setCoastlineParams(this.shapeSeed, this.baseRadius);
+
+        if (this.tileManager) {
+            // Update tile filter (skip entire tiles far outside coastline)
+            this.tileManager.setTileFilter((tileX, tileZ, worldTileSize) => {
+                return this._isTileInsideCoastline(tileX, tileZ, worldTileSize);
+            });
+            // Update coastline params (for per-pixel ocean check in worker)
+            this.tileManager.setCoastlineParams(this.shapeSeed, this.baseRadius);
+        }
     }
 
     updateInfoDisplay() {
@@ -669,6 +761,10 @@ class TerrainVisualizer {
         const endTime = performance.now();
         const renderTime = endTime - startTime;
 
+        // Draw coastline overlay and spawn marker on top of tiles
+        this._drawCoastline(width, height);
+        this._drawSpawnMarker(width, height);
+
         // Log render performance only occasionally when tiles are still loading
         const pendingCount = this.tileManager.getPendingCount();
         if (pendingCount > 0 && Math.random() < 0.1) {  // Log ~10% of the time
@@ -705,19 +801,25 @@ class TerrainVisualizer {
         let tilesRendered = 0;
         let tilesCached = 0;
 
+        const effectiveSeed = this._getEffectiveSeed();
+
         // Render each visible tile
         for (let tileWorldZ = tileStartZ; tileWorldZ < tileEndZ; tileWorldZ += worldTileSize) {
             for (let tileWorldX = tileStartX; tileWorldX < tileEndX; tileWorldX += worldTileSize) {
+                // Skip tiles outside the coastline
+                if (!this._isTileInsideCoastline(tileWorldX, tileWorldZ, worldTileSize)) {
+                    continue;
+                }
+
                 // Check if tile was already cached
-                const key = `${tileWorldX},${tileWorldZ},${this.mode},${this.seed},${lodLevel}`;
-                const wasCached = this.tileCache.cache.has(key);
+                const wasCached = this.tileCache.hasTile(tileWorldX, tileWorldZ, this.mode, effectiveSeed, lodLevel);
 
                 // Get tile (from cache or render it)
                 const tileImageData = this.tileCache.getTile(
                     tileWorldX,
                     tileWorldZ,
                     this.mode,
-                    this.seed,
+                    effectiveSeed,
                     lodLevel
                 );
 
@@ -743,12 +845,126 @@ class TerrainVisualizer {
             }
         }
 
+        // Draw coastline overlay and spawn marker on top of tiles
+        this._drawCoastline(width, height);
+        this._drawSpawnMarker(width, height);
+
         const endTime = performance.now();
         const renderTime = endTime - startTime;
 
         // Log render performance
         const stats = this.tileCache.getStats();
         console.log(`Sync render: ${renderTime.toFixed(1)}ms (${tilesRendered} new, ${tilesCached} cached, ${stats.size}/${stats.maxTiles} in cache, LOD ${lodLevel})`);
+    }
+
+    /**
+     * Draw coastline overlay (ocean fill + yellow coastline stroke + island center marker)
+     * Same rendering as MapOverlay._drawCoastline()
+     * @private
+     */
+    _drawCoastline(width, height) {
+        const halfWidth = width / 2;
+        const halfHeight = height / 2;
+        const numPoints = 180;
+
+        // Ocean fill outside the island using evenodd fill rule
+        this.ctx.beginPath();
+
+        // Outer rectangle (clockwise) - covers entire canvas
+        this.ctx.moveTo(0, 0);
+        this.ctx.lineTo(width, 0);
+        this.ctx.lineTo(width, height);
+        this.ctx.lineTo(0, height);
+        this.ctx.closePath();
+
+        // Island coastline (counter-clockwise for evenodd fill)
+        let firstPoint = true;
+        for (let i = numPoints; i >= 0; i--) {
+            const angle = (i / numPoints) * Math.PI * 2;
+            const radius = getNominalRadius(angle, this.shapeSeed, this.baseRadius);
+
+            const worldX = Math.cos(angle) * radius;
+            const worldZ = Math.sin(angle) * radius;
+
+            const screenX = halfWidth + (worldX - this.viewX) * this.zoom;
+            const screenY = halfHeight + (worldZ - this.viewZ) * this.zoom;
+
+            if (firstPoint) {
+                this.ctx.moveTo(screenX, screenY);
+                firstPoint = false;
+            } else {
+                this.ctx.lineTo(screenX, screenY);
+            }
+        }
+        this.ctx.closePath();
+
+        this.ctx.fillStyle = 'rgba(30, 60, 100, 0.95)';
+        this.ctx.fill('evenodd');
+
+        // Coastline stroke
+        this.ctx.beginPath();
+        firstPoint = true;
+        for (let i = 0; i <= numPoints; i++) {
+            const angle = (i / numPoints) * Math.PI * 2;
+            const radius = getNominalRadius(angle, this.shapeSeed, this.baseRadius);
+
+            const worldX = Math.cos(angle) * radius;
+            const worldZ = Math.sin(angle) * radius;
+
+            const screenX = halfWidth + (worldX - this.viewX) * this.zoom;
+            const screenY = halfHeight + (worldZ - this.viewZ) * this.zoom;
+
+            if (firstPoint) {
+                this.ctx.moveTo(screenX, screenY);
+                firstPoint = false;
+            } else {
+                this.ctx.lineTo(screenX, screenY);
+            }
+        }
+        this.ctx.closePath();
+        this.ctx.strokeStyle = 'rgba(0, 0, 0, 0.8)';
+        this.ctx.lineWidth = 2;
+        this.ctx.stroke();
+
+        // Island center marker (origin)
+        const centerScreenX = halfWidth + (0 - this.viewX) * this.zoom;
+        const centerScreenY = halfHeight + (0 - this.viewZ) * this.zoom;
+
+        if (centerScreenX >= -20 && centerScreenX <= width + 20 &&
+            centerScreenY >= -20 && centerScreenY <= height + 20) {
+            this.ctx.beginPath();
+            this.ctx.arc(centerScreenX, centerScreenY, 5, 0, Math.PI * 2);
+            this.ctx.fillStyle = 'rgba(0, 0, 0, 0.4)';
+            this.ctx.fill();
+            this.ctx.strokeStyle = 'rgba(0, 0, 0, 0.8)';
+            this.ctx.lineWidth = 1;
+            this.ctx.stroke();
+        }
+    }
+
+    /**
+     * Draw spawn point marker at the computed start position
+     * @private
+     */
+    _drawSpawnMarker(width, height) {
+        const halfWidth = width / 2;
+        const halfHeight = height / 2;
+
+        const screenX = halfWidth + (this.startPosition.x - this.viewX) * this.zoom;
+        const screenY = halfHeight + (this.startPosition.z - this.viewZ) * this.zoom;
+
+        if (screenX < -20 || screenX > width + 20 || screenY < -20 || screenY > height + 20) {
+            return;
+        }
+
+        // Red dot with white border (same as player marker in mapoverlay)
+        this.ctx.beginPath();
+        this.ctx.arc(screenX, screenY, 8, 0, Math.PI * 2);
+        this.ctx.fillStyle = '#FF4444';
+        this.ctx.fill();
+        this.ctx.strokeStyle = '#FFFFFF';
+        this.ctx.lineWidth = 2;
+        this.ctx.stroke();
     }
 }
 
@@ -757,6 +973,7 @@ window.addEventListener('DOMContentLoaded', () => {
     const canvas = document.getElementById('terrain-canvas');
     const seedInput = document.getElementById('seed-input');
     const modeSelect = document.getElementById('mode-select');
+    const continentInput = document.getElementById('continent-input');
 
     // Create visualizer with default seed
     const visualizer = new TerrainVisualizer(canvas, parseInt(seedInput.value));
@@ -769,6 +986,11 @@ window.addEventListener('DOMContentLoaded', () => {
     seedInput.addEventListener('change', (e) => {
         const newSeed = parseInt(e.target.value) || 12345;
         visualizer.setSeed(newSeed);
+    });
+
+    continentInput.addEventListener('change', (e) => {
+        const index = parseInt(e.target.value) || 0;
+        visualizer.setContinentIndex(Math.max(0, index));
     });
 
     modeSelect.addEventListener('change', (e) => {

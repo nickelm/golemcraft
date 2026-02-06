@@ -453,6 +453,25 @@ Changes here affect all new chunks. Existing chunks regenerate when player retur
 - Visible seams at heightfield–voxel boundaries near landmarks
 - Landmarks limited to Mayan temples
 
+## Key Bindings (In-Game)
+
+| Key | Action |
+|-----|--------|
+| WASD | Move |
+| Space | Jump |
+| Tab | Toggle world map |
+| Escape | Save and return to menu |
+| M | Mount/dismount |
+| Shift+M | Toggle fog of war debug |
+| Q | Switch weapon |
+| G | Drop torch |
+| T | Place TNT |
+| P | Performance monitor |
+| C | Collision debug |
+| N | Normal debug |
+| F3 | Landmark debug |
+| B | Debug block column |
+
 ---
 
 ## Completed Milestones
@@ -469,6 +488,14 @@ Changes here affect all new chunks. Existing chunks regenerate when player retur
 - ✅ Map visualizer tool for terrain debugging
 - ✅ Multi-factor river system with density filtering, variable width, and graduated valley carving
 - ✅ Continental progression design document (docs/continental-progression.md)
+- ✅ Continental shape system: coastline silhouette, coarse SDF, detailed fbm coast (`continentshape.js`)
+- ✅ Standalone terrain visualizer with continent index selector, coastline overlay, start position centering
+- ✅ Tile-based map system: TileCache + TileManager with Web Worker, progressive refinement (coarse-to-fine)
+- ✅ In-game map overlay (Tab to toggle) with biome colors, hillshading, rivers, coastline
+- ✅ Per-pixel coastline clipping in tile generator worker (ocean outside island boundary)
+- ✅ Progressive tile cache fix (evict lower refinement levels when higher arrives)
+- ✅ Tile priority sort (coarse tiles before fine, then by distance from center)
+- ✅ Map fog of war (visited cell tracking, dark overlay on unexplored areas, persisted to save file, Shift+M debug toggle)
 
 ---
 

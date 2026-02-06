@@ -6,6 +6,7 @@
 
 import { getTerrainParams } from '../../world/terrain/terraincore.js';
 import { getColorForMode } from './colors.js';
+import { getNominalRadius } from '../../world/terrain/continentshape.js';
 
 export class TileCache {
   /**
@@ -18,6 +19,11 @@ export class TileCache {
     this.cache = new Map(); // Key: "worldX,worldZ,mode,seed,configVersion" -> { imageData, lastUsed }
     this.accessOrder = []; // Track access order for LRU eviction
     this.terrainCache = null; // Optional TerrainCache for IndexedDB persistence
+
+    // Coastline parameters for per-pixel ocean override
+    this.coastlineEnabled = false;
+    this.shapeSeed = 0;
+    this.baseRadius = 0;
 
     // Config version - incremented when template changes to invalidate stale tiles
     this.configVersion = 0;
@@ -37,6 +43,18 @@ export class TileCache {
    */
   setTerrainCache(terrainCache) {
     this.terrainCache = terrainCache;
+  }
+
+  /**
+   * Set coastline parameters for per-pixel ocean override.
+   * When set, pixels outside the coastline will render as ocean.
+   * @param {number} shapeSeed - Seed for silhouette shape
+   * @param {number} baseRadius - Base island radius in world blocks
+   */
+  setCoastlineParams(shapeSeed, baseRadius) {
+    this.coastlineEnabled = true;
+    this.shapeSeed = shapeSeed;
+    this.baseRadius = baseRadius;
   }
 
   /**
@@ -213,6 +231,7 @@ export class TileCache {
     const data = imageData.data;
 
     const needsNeighbors = mode === 'elevation' || mode === 'composite';
+    const checkCoast = this.coastlineEnabled;
 
     // LOD step: sample every 2^lodLevel blocks
     const step = 1 << lodLevel;
@@ -222,6 +241,22 @@ export class TileCache {
         // Scale pixel position by LOD step to sample world coordinates
         const wx = worldX + px * step;
         const wz = worldZ + py * step;
+
+        const index = (py * this.tileSize + px) * 4;
+
+        // Check coastline - return ocean color for positions outside
+        if (checkCoast) {
+          const dist = Math.sqrt(wx * wx + wz * wz);
+          const angle = Math.atan2(wz, wx);
+          const radius = getNominalRadius(angle, this.shapeSeed, this.baseRadius);
+          if (dist > radius) {
+            data[index] = 15;
+            data[index + 1] = 30;
+            data[index + 2] = 80;
+            data[index + 3] = 255;
+            continue;
+          }
+        }
 
         const params = getTerrainParams(wx, wz, seed);
 
@@ -246,7 +281,6 @@ export class TileCache {
           rgb = getColorForMode(params, mode);
         }
 
-        const index = (py * this.tileSize + px) * 4;
         data[index] = rgb[0];
         data[index + 1] = rgb[1];
         data[index + 2] = rgb[2];
@@ -276,8 +310,15 @@ export class TileCache {
     const data = imageData.data;
 
     const needsNeighbors = mode === 'elevation' || mode === 'composite';
+    const checkCoast = this.coastlineEnabled;
     const step = 1 << lodLevel;
     const totalPixels = this.tileSize * this.tileSize;
+
+    // Track which pixels are ocean (outside coastline) to skip terrain generation
+    let oceanMask = null;
+    if (checkCoast) {
+      oceanMask = new Uint8Array(totalPixels);
+    }
 
     // Prepare terrain data arrays
     let heightmap = cachedTerrainData?.heightmap;
@@ -298,6 +339,17 @@ export class TileCache {
         const wz = worldZ + py * step;
         const idx = py * this.tileSize + px;
 
+        // Check coastline
+        if (checkCoast) {
+          const dist = Math.sqrt(wx * wx + wz * wz);
+          const angle = Math.atan2(wz, wx);
+          const radius = getNominalRadius(angle, this.shapeSeed, this.baseRadius);
+          if (dist > radius) {
+            oceanMask[idx] = 1;
+            continue;
+          }
+        }
+
         if (generateTerrain) {
           const params = getTerrainParams(wx, wz, seed);
           paramsGrid[idx] = params;
@@ -316,6 +368,17 @@ export class TileCache {
     for (let py = 0; py < this.tileSize; py++) {
       for (let px = 0; px < this.tileSize; px++) {
         const idx = py * this.tileSize + px;
+        const pixelIdx = idx * 4;
+
+        // Ocean pixel - write ocean color directly
+        if (oceanMask && oceanMask[idx]) {
+          data[pixelIdx] = 15;
+          data[pixelIdx + 1] = 30;
+          data[pixelIdx + 2] = 80;
+          data[pixelIdx + 3] = 255;
+          continue;
+        }
+
         const params = paramsGrid[idx];
 
         let rgb;
@@ -341,7 +404,6 @@ export class TileCache {
           rgb = getColorForMode(params, mode);
         }
 
-        const pixelIdx = idx * 4;
         data[pixelIdx] = rgb[0];
         data[pixelIdx + 1] = rgb[1];
         data[pixelIdx + 2] = rgb[2];
@@ -424,6 +486,20 @@ export class TileCache {
    */
   setTile(worldX, worldZ, mode, seed, lodLevel, imageData, refinementLevel = 5) {
     const key = this._makeKey(worldX, worldZ, mode, seed, lodLevel, refinementLevel);
+
+    // Clean up lower refinement levels for this tile (superseded by this one).
+    // This keeps cache usage to 1 entry per tile instead of up to 5,
+    // preventing eviction thrashing when many tiles are visible.
+    for (let lower = 0; lower < refinementLevel; lower++) {
+      const lowerKey = this._makeKey(worldX, worldZ, mode, seed, lodLevel, lower);
+      if (this.cache.has(lowerKey)) {
+        this.cache.delete(lowerKey);
+        const lowerIdx = this.accessOrder.indexOf(lowerKey);
+        if (lowerIdx !== -1) {
+          this.accessOrder.splice(lowerIdx, 1);
+        }
+      }
+    }
 
     // Evict oldest if over capacity
     while (this.cache.size >= this.maxTiles && this.accessOrder.length > 0) {

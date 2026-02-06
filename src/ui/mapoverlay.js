@@ -12,7 +12,7 @@ import { getNominalRadius, CONTINENT_SHAPE_CONFIG } from '../world/terrain/conti
 import { hash } from '../world/terrain/terraincore.js';
 
 const TILE_SIZE = 128;
-const MAX_TILES = 256;
+const MAX_TILES = 512;
 const MIN_ZOOM = 0.2;
 const MAX_ZOOM = 4.0;
 const DEFAULT_ZOOM = 1.0;
@@ -82,9 +82,16 @@ export class MapOverlay {
 
         // Tile cache and manager
         this.tileCache = new TileCache(TILE_SIZE, MAX_TILES);
+        if (continentConfig?.enabled) {
+            this.tileCache.setCoastlineParams(this.shapeSeed, this.baseRadius);
+        }
         this.tileManager = null;
         this.tileManagerReady = false;
         this.renderPending = false;
+
+        // Fog of war state
+        this.visitedCells = new Set();    // Set<string> of "cellX,cellZ"
+        this.fogOfWarEnabled = true;
 
         // Mouse pan state
         this.isPanning = false;
@@ -127,6 +134,9 @@ export class MapOverlay {
             const success = await this.tileManager.initWorker(this.seed);
             if (success) {
                 this.tileManager.setMode(this.mode);
+                if (this.continentConfig?.enabled) {
+                    this.tileManager.setCoastlineParams(this.shapeSeed, this.baseRadius);
+                }
                 this.tileManagerReady = true;
             }
         } catch (error) {
@@ -312,7 +322,7 @@ export class MapOverlay {
             }
         }
         this.ctx.closePath();
-        this.ctx.strokeStyle = 'rgba(255, 255, 100, 0.8)';  // Yellow coastline
+        this.ctx.strokeStyle = 'rgba(0, 0, 0, 0.8)';  // Dark coastline
         this.ctx.lineWidth = 2;
         this.ctx.stroke();
 
@@ -325,9 +335,9 @@ export class MapOverlay {
             centerScreenY >= -20 && centerScreenY <= height + 20) {
             this.ctx.beginPath();
             this.ctx.arc(centerScreenX, centerScreenY, 5, 0, Math.PI * 2);
-            this.ctx.fillStyle = 'rgba(255, 255, 100, 0.6)';
+            this.ctx.fillStyle = 'rgba(0, 0, 0, 0.4)';
             this.ctx.fill();
-            this.ctx.strokeStyle = 'rgba(255, 255, 100, 0.9)';
+            this.ctx.strokeStyle = 'rgba(0, 0, 0, 0.8)';
             this.ctx.lineWidth = 1;
             this.ctx.stroke();
         }
@@ -342,6 +352,76 @@ export class MapOverlay {
         this.hud.remove();
     }
 
+    // --- Fog of War ---
+
+    /**
+     * Mark cells around the player as visited.
+     * Called every frame from game loop (even when map is closed).
+     */
+    markVisited(playerWorldX, playerWorldZ) {
+        const cellX = Math.floor(playerWorldX / TILE_SIZE);
+        const cellZ = Math.floor(playerWorldZ / TILE_SIZE);
+        const radius = 3;
+
+        for (let dx = -radius; dx <= radius; dx++) {
+            for (let dz = -radius; dz <= radius; dz++) {
+                this.visitedCells.add(`${cellX + dx},${cellZ + dz}`);
+            }
+        }
+    }
+
+    /**
+     * Check if a tile has any visited cells overlapping it.
+     * @param {number} tileX - Tile world X origin
+     * @param {number} tileZ - Tile world Z origin
+     * @param {number} worldTileSize - Size of tile in world blocks
+     * @returns {boolean} True if any overlapping cell is visited
+     */
+    isTileVisible(tileX, tileZ, worldTileSize) {
+        if (!this.fogOfWarEnabled) return true;
+
+        // Compute which 128-block cells this tile overlaps
+        const cellStartX = Math.floor(tileX / TILE_SIZE);
+        const cellStartZ = Math.floor(tileZ / TILE_SIZE);
+        const cellEndX = Math.floor((tileX + worldTileSize - 1) / TILE_SIZE);
+        const cellEndZ = Math.floor((tileZ + worldTileSize - 1) / TILE_SIZE);
+
+        for (let cx = cellStartX; cx <= cellEndX; cx++) {
+            for (let cz = cellStartZ; cz <= cellEndZ; cz++) {
+                if (this.visitedCells.has(`${cx},${cz}`)) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    /**
+     * Get visited cells as array for serialization.
+     * @returns {Array<string>}
+     */
+    getVisitedCellsArray() {
+        return Array.from(this.visitedCells);
+    }
+
+    /**
+     * Load visited cells from saved data.
+     * @param {Array<string>} cellsArray
+     */
+    loadVisitedCells(cellsArray) {
+        this.visitedCells = new Set(cellsArray || []);
+    }
+
+    /**
+     * Toggle fog of war on/off (debug).
+     */
+    toggleFogOfWar() {
+        this.fogOfWarEnabled = !this.fogOfWarEnabled;
+        if (this.isOpen) {
+            this.render();
+        }
+    }
+
     // --- Tile Rendering ---
 
     _renderTiles(width, height) {
@@ -351,6 +431,8 @@ export class MapOverlay {
             width, height
         );
 
+        const lodLevel = this._calculateLOD();
+        const worldTileSize = this.tileCache.getWorldTileSize(lodLevel);
         const visibleTiles = this.tileManager.getVisibleTiles();
 
         for (const tile of visibleTiles) {
@@ -369,18 +451,26 @@ export class MapOverlay {
                 tile.screenX, tile.screenY,
                 tile.scaledSize, tile.scaledSize
             );
+
+            // Fog of war: darken unvisited tiles
+            if (this.fogOfWarEnabled && !this.isTileVisible(tile.tileX, tile.tileZ, worldTileSize)) {
+                this.ctx.fillStyle = 'rgba(20, 20, 40, 0.92)';
+                this.ctx.fillRect(tile.screenX, tile.screenY, tile.scaledSize, tile.scaledSize);
+            }
         }
 
         // Loading placeholders for pending tiles
         const pendingTiles = this.tileManager.getPendingTiles();
         if (pendingTiles.length > 0) {
-            const lodLevel = this._calculateLOD();
-            const worldTileSize = this.tileCache.getWorldTileSize(lodLevel);
             const halfWidth = width / 2;
             const halfHeight = height / 2;
 
             this.ctx.fillStyle = 'rgba(100, 100, 150, 0.3)';
             for (const { tileX, tileZ } of pendingTiles) {
+                // Skip pending placeholders for fog-hidden tiles
+                if (this.fogOfWarEnabled && !this.isTileVisible(tileX, tileZ, worldTileSize)) {
+                    continue;
+                }
                 const screenX = halfWidth + (tileX - this.viewX) * this.zoom;
                 const screenY = halfHeight + (tileZ - this.viewZ) * this.zoom;
                 const scaledSize = worldTileSize * this.zoom;
@@ -429,7 +519,7 @@ export class MapOverlay {
 
     _updateHUD() {
         this.hud.textContent =
-            `Map  |  WASD: Pan  |  Scroll: Zoom  |  C: Center  |  Tab/Esc: Close` +
+            `Map  |  WASD: Pan  |  Scroll: Zoom  |  C: Center  |  Tab: Close` +
             `\nPosition: ${Math.round(this.viewX)}, ${Math.round(this.viewZ)}  |  Zoom: ${this.zoom.toFixed(1)}x`;
     }
 

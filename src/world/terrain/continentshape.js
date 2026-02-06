@@ -38,8 +38,8 @@ export const CONTINENT_SHAPE_CONFIG = {
 
     // Low-frequency silhouette (major bays and peninsulas)
     silhouetteOctaves: 3,         // Noise octaves for silhouette
-    silhouetteLobes: 6,           // Average number of major coastal features
-    silhouetteAmplitude: 0.22,    // Fraction of baseRadius for variation
+    silhouetteLobes: 3,           // Average number of major coastal features (low = more organic)
+    silhouetteAmplitude: 0.35,    // Fraction of baseRadius for variation (higher = more dramatic)
 
     // High-frequency coastline detail
     fbmOctaves: 5,                // Noise octaves for detailed coastline

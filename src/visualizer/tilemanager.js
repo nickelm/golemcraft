@@ -25,7 +25,7 @@ export class TileManager {
 
         // Configuration
         this.seed = 0;
-        this.mode = 'continental';
+        this.mode = 'composite';
 
         // Viewport state
         this.viewX = 0;
@@ -48,6 +48,13 @@ export class TileManager {
 
         // Progressive rendering configuration
         this.progressiveEnabled = true;    // Enable coarse-to-fine rendering
+
+        // Optional tile filter (e.g., skip tiles outside coastline)
+        this.tileFilter = null;  // Function(tileX, tileZ, worldTileSize) => boolean
+
+        // Coastline parameters passed to worker for per-pixel ocean check
+        this.shapeSeed = undefined;
+        this.baseRadius = undefined;
     }
 
     /**
@@ -445,6 +452,11 @@ export class TileManager {
         const tiles = [];
         for (let tileZ = tileStartZ; tileZ < tileEndZ; tileZ += worldTileSize) {
             for (let tileX = tileStartX; tileX < tileEndX; tileX += worldTileSize) {
+                // Skip tiles rejected by filter (e.g., outside coastline)
+                if (this.tileFilter && !this.tileFilter(tileX, tileZ, worldTileSize)) {
+                    continue;
+                }
+
                 // Calculate distance from viewport center (for priority)
                 const tileCenterX = tileX + worldTileSize / 2;
                 const tileCenterZ = tileZ + worldTileSize / 2;
@@ -479,7 +491,7 @@ export class TileManager {
 
         if (this.progressiveEnabled) {
             // Progressive mode: queue next refinement level for each tile
-            for (const { tileX, tileZ } of this.visibleTileCoords) {
+            for (const { tileX, tileZ, distSq } of this.visibleTileCoords) {
                 // Check current refinement level
                 const currentLevel = this.tileCache.getCurrentRefinementLevel(
                     tileX, tileZ, this.mode, this.seed, this.lodLevel
@@ -505,12 +517,13 @@ export class TileManager {
                     lodLevel: this.lodLevel,
                     mode: this.mode,
                     refinementLevel: nextLevel,
-                    progressive: true
+                    progressive: true,
+                    distSq
                 });
             }
         } else {
             // Non-progressive mode: queue full resolution tiles
-            for (const { tileX, tileZ } of this.visibleTileCoords) {
+            for (const { tileX, tileZ, distSq } of this.visibleTileCoords) {
                 const key = `${tileX},${tileZ},${this.lodLevel},${this.mode},${MAX_REFINEMENT_LEVEL}`;
 
                 // Skip if already cached at full resolution
@@ -529,10 +542,19 @@ export class TileManager {
                     lodLevel: this.lodLevel,
                     mode: this.mode,
                     refinementLevel: MAX_REFINEMENT_LEVEL,
-                    progressive: false
+                    progressive: false,
+                    distSq
                 });
             }
         }
+
+        // Sort: coarse refinement levels first, then by distance from center
+        this.requestQueue.sort((a, b) => {
+            if (a.refinementLevel !== b.refinementLevel) {
+                return a.refinementLevel - b.refinementLevel;
+            }
+            return a.distSq - b.distSq;
+        });
     }
 
     /**
@@ -570,7 +592,9 @@ export class TileManager {
                         lodLevel: item.lodLevel,
                         refinementLevel: item.refinementLevel,
                         seed: this.seed,
-                        mode: item.mode
+                        mode: item.mode,
+                        shapeSeed: this.shapeSeed,
+                        baseRadius: this.baseRadius
                     }
                 });
             } else {
@@ -584,7 +608,9 @@ export class TileManager {
                         lodLevel: item.lodLevel,
                         tileSize: TILE_SIZE,
                         seed: this.seed,
-                        mode: item.mode
+                        mode: item.mode,
+                        shapeSeed: this.shapeSeed,
+                        baseRadius: this.baseRadius
                     }
                 });
             }
@@ -597,5 +623,23 @@ export class TileManager {
      */
     setProgressiveEnabled(enabled) {
         this.progressiveEnabled = enabled;
+    }
+
+    /**
+     * Set a filter function to exclude tiles from generation
+     * @param {Function|null} filterFn - (tileX, tileZ, worldTileSize) => true to include, false to skip
+     */
+    setTileFilter(filterFn) {
+        this.tileFilter = filterFn;
+    }
+
+    /**
+     * Set coastline parameters for per-pixel ocean override in the worker.
+     * @param {number} shapeSeed - Seed for silhouette shape
+     * @param {number} baseRadius - Base island radius in world blocks
+     */
+    setCoastlineParams(shapeSeed, baseRadius) {
+        this.shapeSeed = shapeSeed;
+        this.baseRadius = baseRadius;
     }
 }

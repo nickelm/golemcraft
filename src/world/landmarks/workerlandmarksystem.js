@@ -452,6 +452,15 @@ export class WorkerLandmarkSystem {
             if (landmark.brightnessOverrides && landmark.brightnessOverrides.has(key)) {
                 return 'air';  // Special value indicating forced air
             }
+
+            // Within voxelBounds footprint and at/above baseY: suppress terrain blocks.
+            // This prevents the original (un-flattened) terrain from appearing as blocky
+            // voxels inside the landmark's footprint. Terrain below baseY is kept as foundation.
+            if (landmark.voxelBounds && y >= landmark.baseY &&
+                x >= landmark.voxelBounds.minX && x <= landmark.voxelBounds.maxX &&
+                z >= landmark.voxelBounds.minZ && z <= landmark.voxelBounds.maxZ) {
+                return 'air';
+            }
         }
 
         return null;

@@ -259,6 +259,24 @@ function isVoxelSolid(terrain, x, y, z) {
     return true;
 }
 
+/**
+ * Find the voxel ground surface at a given XZ position.
+ * Scans downward from startY to find the highest solid block top.
+ * Used to snap entity Y when transitioning from heightfield to voxel collision.
+ */
+function findVoxelSurface(terrain, worldX, worldZ, startY) {
+    const ix = Math.floor(worldX);
+    const iz = Math.floor(worldZ);
+    const maxScan = 10;
+
+    for (let y = Math.floor(startY); y >= Math.max(0, Math.floor(startY) - maxScan); y--) {
+        if (isVoxelSolid(terrain, ix, y, iz)) {
+            return y + 1;
+        }
+    }
+    return null;
+}
+
 // ============================================================================
 // MAIN COLLISION RESOLUTION
 // ============================================================================
@@ -288,7 +306,17 @@ export function resolveEntityCollision(entity, terrain, deltaTime) {
     
     // =========================================================================
     // VOXEL COLLISION
+    // Snap Y if entity is inside a solid block (can happen at heightfield/voxel
+    // boundary or when spawning/teleporting into a voxel region)
     // =========================================================================
+    const baseBlockY = Math.floor(entity.position.y);
+    if (isVoxelSolid(terrain, Math.floor(entity.position.x), baseBlockY, Math.floor(entity.position.z))) {
+        const voxelGroundY = findVoxelSurface(terrain, entity.position.x, entity.position.z, entity.position.y + 2);
+        if (voxelGroundY !== null && Math.abs(entity.position.y - voxelGroundY) < 3.0) {
+            entity.position.y = voxelGroundY;
+        }
+    }
+
     return resolveVoxelCollision(entity, terrain, deltaTime);
 }
 
@@ -425,10 +453,14 @@ function resolveHeightfieldCollision(entity, terrain, deltaTime) {
     
     // Check if we moved into voxel region (check all AABB corners)
     if (!heightfieldProvider.shouldUseHeightfield(entity.position.x, entity.position.z, aabb)) {
-        // Moved into voxel region - revert horizontal movement
-        entity.position.x -= moveX;
-        entity.position.z -= moveZ;
-        // Use voxel collision directly (no recursion)
+        // Transitioned into voxel region. Keep horizontal movement but Y-snap
+        // to voxel ground surface at the new position (heightfield Y may differ
+        // from voxel ground Y, which would leave the entity inside a solid block).
+        const voxelGroundY = findVoxelSurface(terrain, entity.position.x, entity.position.z, entity.position.y + 2);
+        if (voxelGroundY !== null && Math.abs(entity.position.y - voxelGroundY) < 3.0) {
+            entity.position.y = voxelGroundY;
+        }
+
         return resolveVoxelCollision(entity, terrain, deltaTime);
     }
     
