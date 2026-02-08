@@ -69,12 +69,9 @@ export const BIOMES = {
         name: 'Beach',
         baseHeightFraction: 0.10,
         heightScaleFraction: 0.02,
-        // terrain: { primary: 'sand', tint: [1.7, 1.6, 1.2] },  // Bright golden desert sand
-        // subsurface: { primary: 'sand', tint: [1.0, 0.9, 0.7] },
-        // underwater: { primary: 'sand', tint: [1.0, 0.92, 0.7] },
-        terrain: { primary: 'grass', tint: [2.0, 2.0, 0.9] },  // Bright golden savanna grass
-        subsurface: { primary: 'dirt', tint: [1.0, 0.9, 0.8] },
-        underwater: { primary: 'sand', tint: [1.0, 1.0, 1.0] },
+        terrain: { primary: 'sand', tint: [1.5, 1.4, 1.1] },  // Warm golden beach sand
+        subsurface: { primary: 'sand', tint: [1.0, 0.9, 0.7] },
+        underwater: { primary: 'sand', tint: [0.8, 0.85, 1.1] },
         objects: ['rock'],
         objectDensities: { rock: 0.005 },
         mobs: [],
@@ -88,7 +85,7 @@ export const BIOMES = {
         heightScaleFraction: 0.10,
         terrain: { primary: 'grass', tint: [1.0, 1.6, 0.9] },  // Bright vibrant green grass
         subsurface: { primary: 'dirt', tint: [1.0, 1.0, 1.0] },
-        underwater: { primary: 'sand', tint: [1.0, 1.0, 1.0] },
+        underwater: { primary: 'sand', tint: [0.7, 0.8, 1.2] },  // Blue-tinted underwater
         objects: ['tree', 'rock', 'grass'],
         objectDensities: {
             tree: 0.08,      // Forest clustering applied
@@ -122,7 +119,7 @@ export const BIOMES = {
         name: 'Taiga',
         baseHeightFraction: 0.14,
         heightScaleFraction: 0.08,
-        terrain: { primary: 'grass', tint: [0.9, 1.4, 1.2] },  // Bright cool teal-green grass
+        terrain: { primary: 'grass', tint: [0.7, 1.3, 0.7] },  // Dark forest green boreal
         subsurface: { primary: 'dirt', tint: [0.9, 0.9, 0.85] },
         underwater: { primary: 'sand', tint: [1.0, 1.0, 1.0] },
         objects: ['snowTree', 'rock'],
@@ -263,7 +260,7 @@ export const BIOMES = {
         name: 'Mountains',
         baseHeightFraction: 0.29,
         heightScaleFraction: 0.32,
-        terrain: { primary: 'rock', tint: [1.5, 1.5, 1.6] },  // Bright grey-blue rock
+        terrain: { primary: 'rock', tint: [2.5, 2.5, 2.5] },  // Neutral grey rock
         subsurface: { primary: 'rock', tint: [0.85, 0.85, 0.9] },
         underwater: { primary: 'sand', tint: [1.0, 1.0, 1.0] },
         objects: ['boulder', 'rock'],
@@ -335,7 +332,7 @@ export const BIOMES = {
         name: 'Deciduous Forest',
         baseHeightFraction: 0.22,
         heightScaleFraction: 0.16,
-        terrain: { primary: 'forest_floor', tint: [0.95, 1.6, 0.85] },  // Bright green forest floor
+        terrain: { primary: 'forest_floor', tint: [1.2, 3.9, 1.1] },  // Bright green forest floor
         subsurface: { primary: 'dirt', tint: [0.85, 0.75, 0.6] },
         underwater: { primary: 'sand', tint: [1.0, 1.0, 1.0] },
         objects: ['tree', 'rock'],
@@ -348,7 +345,7 @@ export const BIOMES = {
         name: 'Autumn Forest',
         baseHeightFraction: 0.16,
         heightScaleFraction: 0.11,
-        terrain: { primary: 'forest_floor', tint: [1.7, 1.2, 0.7] },  // Bright orange-red autumn colors
+        terrain: { primary: 'forest_floor', tint: [4.0, 2.5, 0.9] },  // Bright orange-red autumn colors
         subsurface: { primary: 'dirt', tint: [0.8, 0.7, 0.55] },
         underwater: { primary: 'sand', tint: [1.0, 1.0, 1.0] },
         objects: ['tree', 'rock'],
