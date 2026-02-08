@@ -2,14 +2,7 @@ import * as THREE from 'three';
 import { BLOCK_TYPES, WATER_LEVEL } from './chunkdatagenerator.js';
 import {
     terrainSplatVertexShader,
-    terrainSplatFragmentShader,
-    terrainSplatFragmentShaderMobile,
-    terrainSplatFragmentShaderMobileTextureArray,
-    terrainSplatVertexShaderLowPower,
-    terrainSplatFragmentShaderLowPower,
-    terrainSplatVertexShaderLowPowerTextureArray,
-    terrainSplatFragmentShaderLowPowerTextureArray,
-    terrainSplatFragmentShaderTextureArray
+    terrainSplatFragmentShader
 } from '../../shaders/terrainsplat.js';
 import {
     voxelLambertVertexShader,
@@ -30,24 +23,6 @@ import {
  */
 
 export const CHUNK_SIZE = 16;
-
-// Texture atlas configuration
-const ATLAS_SIZE = 720;
-const CELL_SIZE = 72;
-const TILE_SIZE = 64;
-const GUTTER = 4;
-
-// Get UV coordinates for a block type
-function getBlockUVs(blockType) {
-    const [col, row] = BLOCK_TYPES[blockType].tile;
-    
-    const uMin = (col * CELL_SIZE + GUTTER) / ATLAS_SIZE;
-    const uMax = (col * CELL_SIZE + GUTTER + TILE_SIZE) / ATLAS_SIZE;
-    const vMax = 1 - (row * CELL_SIZE + GUTTER) / ATLAS_SIZE;
-    const vMin = 1 - (row * CELL_SIZE + GUTTER + TILE_SIZE) / ATLAS_SIZE;
-    
-    return { uMin, uMax, vMin, vMax };
-}
 
 // Face definitions: normal direction and vertex offsets
 const FACES = {
@@ -109,38 +84,24 @@ export class ChunkedTerrain {
     /**
      * @param {THREE.Scene} scene
      * @param {Object} terrain
-     * @param {THREE.Texture} terrainTexture
-     * @param {string} textureBlending - 'high' | 'medium' | 'low' (texture quality tier)
-     * @param {Object} textureArrayOptions - Options for texture arrays (desktop shader)
+     * @param {THREE.DataArrayTexture} diffuseArray - Diffuse texture array (128x128x9)
+     * @param {THREE.Texture} waterTexture - Water texture (128x128 2D texture)
      */
-    constructor(scene, terrain, terrainTexture, textureBlending = 'high', textureArrayOptions = {}) {
+    constructor(scene, terrain, diffuseArray, waterTexture) {
         this.scene = scene;
         this.terrain = terrain;
-        this.terrainTexture = terrainTexture;
-        this.textureBlending = textureBlending;
+        this.diffuseArray = diffuseArray;
         this.chunks = new Map();
 
-        // Texture array options (for desktop shader)
-        this.diffuseArray = textureArrayOptions.diffuseArray || null;
-        this.normalArray = textureArrayOptions.normalArray || null;
-        this.useTextureArrays = textureArrayOptions.useTextureArrays || false;
-
         // Create splatting material for surface mesh (smooth terrain with biome blending)
-        this.surfaceMaterial = this.createSplatMaterial(
-            terrainTexture,
-            textureBlending,
-            this.diffuseArray,
-            this.normalArray,
-            this.useTextureArrays
-        );
+        this.surfaceMaterial = this.createSplatMaterial(diffuseArray);
 
         // Custom voxel shader material - matches terrain splatting shader lighting exactly
-        // This ensures consistent brightness/saturation between heightfield and voxel terrain
-        this.opaqueMaterial = this.createVoxelMaterial(terrainTexture);
+        this.opaqueMaterial = this.createVoxelMaterial(diffuseArray);
 
-        // Water still uses standard material for transparency/reflections
+        // Water uses standard material for transparency
         this.waterMaterial = new THREE.MeshLambertMaterial({
-            map: terrainTexture,
+            map: waterTexture,
             transparent: true,
             opacity: 0.65,
             side: THREE.DoubleSide,
@@ -148,25 +109,7 @@ export class ChunkedTerrain {
             depthWrite: false
         });
 
-        if (textureBlending === 'low') {
-            if (this.useTextureArrays && this.diffuseArray) {
-                console.log('Using custom Lambert shaders + dithered texture arrays (low)');
-            } else {
-                console.log('Using custom Lambert shaders + dithered atlas tiles (low)');
-            }
-        } else if (textureBlending === 'medium') {
-            if (this.useTextureArrays && this.diffuseArray) {
-                console.log('Using custom Lambert shaders + 2-texture texture arrays (medium)');
-            } else {
-                console.log('Using custom Lambert shaders + 2-texture atlas (medium)');
-            }
-        } else {
-            if (this.useTextureArrays && this.diffuseArray && this.normalArray) {
-                console.log('Using custom Lambert shaders + 4-texture texture arrays with normals (high)');
-            } else {
-                console.log('Using custom Lambert shaders + 4-texture atlas (high)');
-            }
-        }
+        console.log('Using unified Lambert shaders + 4-texture splatting');
 
         // Stats
         this.totalChunks = 0;
@@ -174,150 +117,37 @@ export class ChunkedTerrain {
     }
 
     /**
-     * Create the texture splatting/dithering ShaderMaterial for smooth terrain
-     * @param {THREE.Texture} terrainTexture - The terrain atlas texture
-     * @param {string} textureBlending - 'high' | 'medium' | 'low'
-     * @param {THREE.DataArrayTexture} diffuseArray - Diffuse texture array (desktop)
-     * @param {THREE.DataArrayTexture} normalArray - Normal texture array (desktop)
-     * @param {boolean} useTextureArrays - Whether to use texture arrays
+     * Create the texture splatting ShaderMaterial for smooth terrain
+     * @param {THREE.DataArrayTexture} diffuseArray - Diffuse texture array
      * @returns {THREE.ShaderMaterial}
      */
-    createSplatMaterial(terrainTexture, textureBlending, diffuseArray, normalArray, useTextureArrays) {
-        let vertexShader, fragmentShader;
-
-        switch (textureBlending) {
-            case 'low':
-                // Dithered single-texture mode
-                // Use texture array shader if available, otherwise fall back to atlas
-                if (useTextureArrays && diffuseArray) {
-                    vertexShader = terrainSplatVertexShaderLowPowerTextureArray;
-                    fragmentShader = terrainSplatFragmentShaderLowPowerTextureArray;
-                } else {
-                    vertexShader = terrainSplatVertexShaderLowPower;
-                    fragmentShader = terrainSplatFragmentShaderLowPower;
-                }
-                break;
-            case 'medium':
-                // 2-texture blending
-                vertexShader = terrainSplatVertexShader;
-                // Use texture array shader if available, otherwise fall back to atlas
-                if (useTextureArrays && diffuseArray) {
-                    fragmentShader = terrainSplatFragmentShaderMobileTextureArray;
-                } else {
-                    fragmentShader = terrainSplatFragmentShaderMobile;
-                }
-                break;
-            case 'high':
-            default:
-                // 4-texture blending
-                vertexShader = terrainSplatVertexShader;
-                // Use texture array shader if available, otherwise fall back to atlas
-                if (useTextureArrays && diffuseArray && normalArray) {
-                    fragmentShader = terrainSplatFragmentShaderTextureArray;
-                } else {
-                    fragmentShader = terrainSplatFragmentShader;
-                }
-                break;
-        }
-
-        // Build uniforms based on shader variant
-        let uniforms;
-        if (useTextureArrays && diffuseArray && (textureBlending === 'high' || textureBlending === 'medium' || textureBlending === 'low')) {
-            // Texture array shader (desktop, mobile, OR low-power)
-            // Exclude THREE.UniformsLib.common to avoid 'map' uniform conflict
-            const baseArrayUniforms = {
-                // Minimal common uniforms (diffuse/opacity) without 'map'
+    createSplatMaterial(diffuseArray) {
+        const uniforms = THREE.UniformsUtils.merge([
+            THREE.UniformsLib.lights,
+            THREE.UniformsLib.fog,
+            THREE.UniformsLib.shadowmap,
+            {
                 diffuse: { value: new THREE.Color(0xffffff) },
                 opacity: { value: 1.0 },
-                // Texture array uniforms (shared by desktop, mobile, and low-power)
                 uDiffuseArray: { value: diffuseArray },
-                // Note: uTintColors removed - now using per-vertex tint attributes (aBlendTint0-3, aSelectedTint)
-                uTileScale: { value: 1.0 }  // 1.0 = one texture repeat per world unit (correct for 1m² PolyHaven textures)
-            };
-
-            if (textureBlending === 'low') {
-                // Low-power texture array shader: diffuse + tinting only
-                uniforms = THREE.UniformsUtils.merge([
-                    THREE.UniformsLib.lights,
-                    THREE.UniformsLib.fog,
-                    baseArrayUniforms
-                ]);
-                console.log('✅ Using texture array shader (low-power, single texture + tinting)');
-                console.log('📊 Texture array details:', {
-                    diffuseArray: !!uniforms.uDiffuseArray.value,
-                    diffuseSize: uniforms.uDiffuseArray.value?.image?.width + 'x' + uniforms.uDiffuseArray.value?.image?.height,
-                    layers: uniforms.uDiffuseArray.value?.image?.depth,
-                    tileScale: uniforms.uTileScale.value
-                });
-            } else if (textureBlending === 'high' && normalArray) {
-                // Desktop shader: add normal mapping uniforms
-                uniforms = THREE.UniformsUtils.merge([
-                    THREE.UniformsLib.lights,
-                    THREE.UniformsLib.fog,
-                    THREE.UniformsLib.shadowmap,
-                    {
-                        ...baseArrayUniforms,
-                        uNormalArray: { value: normalArray },
-                        uDebugNormals: { value: false },
-                        uEnableNormalMapping: { value: true }
-                    }
-                ]);
-                console.log('✅ Using texture array shader (desktop, high quality)');
-                console.log('📊 Texture array details:', {
-                    diffuseArray: !!uniforms.uDiffuseArray.value,
-                    normalArray: !!uniforms.uNormalArray.value,
-                    diffuseSize: uniforms.uDiffuseArray.value?.image?.width + 'x' + uniforms.uDiffuseArray.value?.image?.height,
-                    normalSize: uniforms.uNormalArray.value?.image?.width + 'x' + uniforms.uNormalArray.value?.image?.height,
-                    layers: uniforms.uDiffuseArray.value?.image?.depth,
-                    tileScale: uniforms.uTileScale.value,
-                    debugMode: uniforms.uDebugNormals.value
-                });
-            } else {
-                // Mobile shader: no normal mapping uniforms
-                uniforms = THREE.UniformsUtils.merge([
-                    THREE.UniformsLib.lights,
-                    THREE.UniformsLib.fog,
-                    THREE.UniformsLib.shadowmap,
-                    baseArrayUniforms
-                ]);
-                console.log('✅ Using texture array shader (mobile, 2-texture blend)');
-                console.log('📊 Texture array details:', {
-                    diffuseArray: !!uniforms.uDiffuseArray.value,
-                    diffuseSize: uniforms.uDiffuseArray.value?.image?.width + 'x' + uniforms.uDiffuseArray.value?.image?.height,
-                    layers: uniforms.uDiffuseArray.value?.image?.depth,
-                    tileScale: uniforms.uTileScale.value
-                });
+                uTileScale: { value: 1.0 }
             }
-        } else {
-            // Atlas shader: use standard uniforms including 'map'
-            const baseUniforms = THREE.UniformsUtils.merge([
-                THREE.UniformsLib.common,
-                THREE.UniformsLib.lights,
-                THREE.UniformsLib.fog,
-                THREE.UniformsLib.shadowmap
-            ]);
-            uniforms = { ...baseUniforms, uAtlas: { value: terrainTexture } };
-            if (textureBlending === 'high' || textureBlending === 'medium') {
-                console.log('⚠️ Texture arrays not loaded, falling back to atlas shader');
-            }
-        }
+        ]);
 
         const material = new THREE.ShaderMaterial({
             uniforms: uniforms,
-            vertexShader: vertexShader,
-            fragmentShader: fragmentShader,
+            vertexShader: terrainSplatVertexShader,
+            fragmentShader: terrainSplatFragmentShader,
             lights: true,
             fog: true,
             vertexColors: true,
             side: THREE.FrontSide
         });
 
-        // Add polygon offset to prevent z-fighting between surface and voxel meshes
-        if (useTextureArrays && diffuseArray && (textureBlending === 'high' || textureBlending === 'medium' || textureBlending === 'low')) {
-            material.polygonOffset = true;
-            material.polygonOffsetFactor = 1;
-            material.polygonOffsetUnits = 1;
-        }
+        // Polygon offset to prevent z-fighting between surface and voxel meshes
+        material.polygonOffset = true;
+        material.polygonOffsetFactor = 1;
+        material.polygonOffsetUnits = 1;
 
         return material;
     }
@@ -325,18 +155,20 @@ export class ChunkedTerrain {
     /**
      * Create the custom voxel Lambert ShaderMaterial
      * Uses identical lighting calculations as the terrain splatting shader
-     * @param {THREE.Texture} terrainTexture - The terrain atlas texture
+     * @param {THREE.DataArrayTexture} diffuseArray - Diffuse texture array
      * @returns {THREE.ShaderMaterial}
      */
-    createVoxelMaterial(terrainTexture) {
+    createVoxelMaterial(diffuseArray) {
         return new THREE.ShaderMaterial({
             uniforms: THREE.UniformsUtils.merge([
-                THREE.UniformsLib.common,
                 THREE.UniformsLib.lights,
                 THREE.UniformsLib.fog,
                 THREE.UniformsLib.shadowmap,
                 {
-                    map: { value: terrainTexture }
+                    diffuse: { value: new THREE.Color(0xffffff) },
+                    opacity: { value: 1.0 },
+                    uDiffuseArray: { value: diffuseArray },
+                    uTileScale: { value: 1.0 }
                 }
             ]),
             vertexShader: voxelLambertVertexShader,
@@ -455,7 +287,8 @@ export class ChunkedTerrain {
      * Add visible faces for a block to the geometry data
      */
     addBlockFaces(worldX, worldY, worldZ, blockType, data, isTransparent) {
-        const uvs = getBlockUVs(blockType);
+        // Simple 0-1 UVs (legacy path - actual rendering uses worker-generated meshes)
+        const uvs = { uMin: 0, uMax: 1, vMin: 0, vMax: 1 };
         let facesAdded = 0;
         
         for (const [faceName, face] of Object.entries(FACES)) {
@@ -696,23 +529,4 @@ export class ChunkedTerrain {
         }
     }
 
-    /**
-     * Toggle normal map debug visualization
-     * @param {boolean} enabled - True to show raw normal map RGB
-     */
-    setDebugNormals(enabled) {
-        if (this.surfaceMaterial?.uniforms?.uDebugNormals) {
-            this.surfaceMaterial.uniforms.uDebugNormals.value = enabled;
-        }
-    }
-
-    /**
-     * Toggle normal mapping on/off
-     * @param {boolean} enabled - True to enable normal mapping
-     */
-    setNormalMappingEnabled(enabled) {
-        if (this.surfaceMaterial?.uniforms?.uEnableNormalMapping) {
-            this.surfaceMaterial.uniforms.uEnableNormalMapping.value = enabled;
-        }
-    }
 }

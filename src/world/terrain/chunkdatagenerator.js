@@ -33,13 +33,7 @@ export const WATER_LEVEL = 6;
 
 const HEIGHTMAP_SIZE = CHUNK_SIZE + 1;
 
-const ATLAS_SIZE = 720;
-const CELL_SIZE = 72;
-const TILE_SIZE = 64;
-const GUTTER = 4;
-
 // Mapping from surface block types to texture array layer indices
-// This maps texture names to their layer index in the texture array (0-7)
 const SURFACE_TILE_INDICES = {
     grass: getTextureLayer('grass'),              // 0
     stone: getTextureLayer('rock'),               // 4 (note: 'stone' block → 'rock' texture)
@@ -49,6 +43,26 @@ const SURFACE_TILE_INDICES = {
     ice: getTextureLayer('ice'),                  // 6
     rock: getTextureLayer('rock'),                // 4
     forest_floor: getTextureLayer('forest_floor') // 1
+};
+
+// Mapping from all block types to texture array layer indices (for voxel mesh)
+const BLOCK_TEXTURE_LAYER = {
+    grass: getTextureLayer('grass'),              // 0
+    dirt: getTextureLayer('dirt'),                // 2
+    stone: getTextureLayer('rock'),               // 4
+    snow: getTextureLayer('snow'),                // 5
+    sand: getTextureLayer('sand'),                // 3
+    water: getTextureLayer('water'),              // 8
+    water_full: getTextureLayer('water'),          // 8
+    ice: getTextureLayer('ice'),                  // 6
+    mayan_stone: getTextureLayer('rock'),          // 4
+    cave_stone: getTextureLayer('rock'),           // 4
+    cave_floor: getTextureLayer('dirt'),           // 2
+    bedrock: getTextureLayer('rock'),              // 4
+    tnt: getTextureLayer('rock'),                  // 4 (placeholder)
+    rock: getTextureLayer('rock'),                // 4
+    forest_floor: getTextureLayer('forest_floor'), // 1
+    gravel: getTextureLayer('gravel')             // 7
 };
 
 // Texture splatting noise and height bias configuration
@@ -63,23 +77,22 @@ const HEIGHT_BIAS = {
 };
 
 export const BLOCK_TYPES = {
-    grass: { tile: [0, 0] },
-    dirt: { tile: [3, 0] },
-    stone: { tile: [1, 0] },
-    snow: { tile: [2, 0] },
-    sand: { tile: [5, 0] },
-    water: { tile: [4, 0], transparent: true },
-    water_full: { tile: [4, 0], transparent: true },
-    ice: { tile: [6, 0] },
-    mayan_stone: { tile: [7, 0] },
-    cave_stone: { tile: [1, 0] },   // Placeholder: uses stone texture
-    cave_floor: { tile: [3, 0] },   // Placeholder: uses dirt texture
-    bedrock: { tile: [1, 0] },      // Indestructible bottom layer (uses stone texture)
-    tnt: { tile: [8, 0] },          // Explosive block (red texture at [8,0])
-    // Biome terrain textures (mapped to base textures)
-    rock: { tile: [1, 0] },         // Mountains, highlands, volcanic - uses stone texture
-    forest_floor: { tile: [3, 0] }, // Jungle, rainforest, swamp, forests - uses dirt texture
-    gravel: { tile: [1, 0] }        // Riverbeds, paths - uses stone texture
+    grass: {},
+    dirt: {},
+    stone: {},
+    snow: {},
+    sand: {},
+    water: { transparent: true },
+    water_full: { transparent: true },
+    ice: {},
+    mayan_stone: {},
+    cave_stone: {},
+    cave_floor: {},
+    bedrock: {},
+    tnt: {},
+    rock: {},
+    forest_floor: {},
+    gravel: {}
 };
 
 export const BLOCK_TYPE_IDS = {
@@ -218,24 +231,8 @@ export function getBlockIndex(localX, y, localZ) {
     return y * (CHUNK_SIZE * CHUNK_SIZE) + localZ * CHUNK_SIZE + localX;
 }
 
-function getBlockUVs(blockType) {
-    const blockDef = BLOCK_TYPES[blockType];
-    if (!blockDef) {
-        console.warn(`⚠️ Unknown block type '${blockType}', defaulting to stone`);
-        const stoneDef = BLOCK_TYPES['stone'];
-        const [col, row] = stoneDef.tile;
-        const uMin = (col * CELL_SIZE + GUTTER) / ATLAS_SIZE;
-        const uMax = (col * CELL_SIZE + GUTTER + TILE_SIZE) / ATLAS_SIZE;
-        const vMax = 1 - (row * CELL_SIZE + GUTTER) / ATLAS_SIZE;
-        const vMin = 1 - (row * CELL_SIZE + GUTTER + TILE_SIZE) / ATLAS_SIZE;
-        return { uMin, uMax, vMin, vMax };
-    }
-    const [col, row] = blockDef.tile;
-    const uMin = (col * CELL_SIZE + GUTTER) / ATLAS_SIZE;
-    const uMax = (col * CELL_SIZE + GUTTER + TILE_SIZE) / ATLAS_SIZE;
-    const vMax = 1 - (row * CELL_SIZE + GUTTER) / ATLAS_SIZE;
-    const vMin = 1 - (row * CELL_SIZE + GUTTER + TILE_SIZE) / ATLAS_SIZE;
-    return { uMin, uMax, vMin, vMax };
+function getBlockTextureLayer(blockType) {
+    return BLOCK_TEXTURE_LAYER[blockType] ?? BLOCK_TEXTURE_LAYER['stone'];
 }
 
 function isBlockTransparent(blockType) {
@@ -1094,7 +1091,6 @@ function generateWaterMesh(heightmap, biomeData = null) {
     const colors = [];
     const indices = [];
 
-    const waterUvs = getBlockUVs('water');
     const waterY = WATER_LEVEL - 0.15;
 
     for (let lz = 0; lz < CHUNK_SIZE; lz++) {
@@ -1125,22 +1121,22 @@ function generateWaterMesh(heightmap, biomeData = null) {
 
             positions.push(lx, waterY, lz);
             normals.push(0, 1, 0);
-            uvs.push(waterUvs.uMin, waterUvs.vMin);
+            uvs.push(0.0, 0.0);
             colors.push(r, g, b);
 
             positions.push(lx + 1, waterY, lz);
             normals.push(0, 1, 0);
-            uvs.push(waterUvs.uMax, waterUvs.vMin);
+            uvs.push(1.0, 0.0);
             colors.push(r, g, b);
 
             positions.push(lx + 1, waterY, lz + 1);
             normals.push(0, 1, 0);
-            uvs.push(waterUvs.uMax, waterUvs.vMax);
+            uvs.push(1.0, 1.0);
             colors.push(r, g, b);
 
             positions.push(lx, waterY, lz + 1);
             normals.push(0, 1, 0);
-            uvs.push(waterUvs.uMin, waterUvs.vMax);
+            uvs.push(0.0, 1.0);
             colors.push(r, g, b);
 
             indices.push(baseVertex, baseVertex + 2, baseVertex + 1);
@@ -1165,7 +1161,7 @@ function generateWaterMesh(heightmap, biomeData = null) {
 function generateVoxelMesh(terrainProvider, voxelMask, chunkX, chunkZ, heightfieldHoleMask = null) {
     const worldMinX = chunkX * CHUNK_SIZE;
     const worldMinZ = chunkZ * CHUNK_SIZE;
-    const opaqueData = { positions: [], normals: [], uvs: [], colors: [], indices: [] };
+    const opaqueData = { positions: [], normals: [], uvs: [], colors: [], indices: [], tileIndices: [] };
     const LANDMARK_MAX_HEIGHT = 20;
 
     // Helper to check if a cell (by local coords) is a hole cell
@@ -1227,8 +1223,8 @@ function generateVoxelMesh(terrainProvider, voxelMask, chunkX, chunkZ, heightfie
                 if (!blockType) continue;
                 if (blockType === 'water' || blockType === 'water_full') continue;
 
-                const blockUvs = getBlockUVs(blockType);
-                
+                const textureLayer = getBlockTextureLayer(blockType);
+
                 for (const [faceName, face] of Object.entries(FACES)) {
                     const [nx, ny, nz] = face.dir;
                     const neighborX = x + nx;
@@ -1266,9 +1262,11 @@ function generateVoxelMesh(terrainProvider, voxelMask, chunkX, chunkZ, heightfie
                         opaqueData.positions.push(lx + vx, y + vy, lz + vz);
                         opaqueData.normals.push(nx, ny, nz);
 
-                        const u = (i === 0 || i === 3) ? blockUvs.uMin : blockUvs.uMax;
-                        const v = (i === 0 || i === 1) ? blockUvs.vMin : blockUvs.vMax;
+                        // Simple 0-1 face UVs for texture array sampling
+                        const u = (i === 0 || i === 3) ? 0.0 : 1.0;
+                        const v = (i === 0 || i === 1) ? 0.0 : 1.0;
                         opaqueData.uvs.push(u, v);
+                        opaqueData.tileIndices.push(textureLayer);
 
                         // AO: Check 3 neighbors (side1, corner, side2)
                         const [side1Offset, cornerOffset, side2Offset] = aoNeighbors[i];
@@ -1298,6 +1296,7 @@ function generateVoxelMesh(terrainProvider, voxelMask, chunkX, chunkZ, heightfie
             uvs: new Float32Array(opaqueData.uvs),
             colors: new Float32Array(opaqueData.colors),
             indices: new Uint32Array(opaqueData.indices),
+            tileIndices: new Float32Array(opaqueData.tileIndices),
             isEmpty: opaqueData.positions.length === 0
         }
     };
@@ -1363,6 +1362,7 @@ export function getTransferables(chunkData) {
         chunkData.opaque.uvs.buffer,
         chunkData.opaque.colors.buffer,
         chunkData.opaque.indices.buffer,
+        chunkData.opaque.tileIndices.buffer,
         chunkData.water.positions.buffer,
         chunkData.water.normals.buffer,
         chunkData.water.uvs.buffer,

@@ -5,7 +5,9 @@
  * shader's lighting calculations. This ensures consistent brightness and
  * saturation between heightfield terrain and voxel structures.
  *
- * Uses the same lighting model as terrainsplat.js:
+ * Uses a sampler2DArray with per-vertex tile index for texture selection.
+ *
+ * Lighting model (same as terrainsplat.js):
  * - Ambient light
  * - Directional lights with shadows
  * - Hemisphere lights
@@ -18,12 +20,17 @@ export const voxelLambertVertexShader = /* glsl */ `
 #include <fog_pars_vertex>
 #include <shadowmap_pars_vertex>
 
+attribute float aSelectedTile;
+
+varying float vSelectedTile;
 varying vec3 vVertexColor;
 varying vec2 vUv;
 varying vec3 vNormal;
 varying vec3 vViewPosition;
 
 void main() {
+    vSelectedTile = aSelectedTile;
+
     #include <color_vertex>
     vVertexColor = vColor;  // AO from vertex colors
 
@@ -59,16 +66,18 @@ export const voxelLambertFragmentShader = /* glsl */ `
 #include <shadowmap_pars_fragment>
 #include <shadowmask_pars_fragment>
 
-uniform sampler2D map;
+uniform sampler2DArray uDiffuseArray;
+uniform float uTileScale;
 
+varying float vSelectedTile;
 varying vec3 vVertexColor;
 varying vec2 vUv;
 varying vec3 vNormal;
 varying vec3 vViewPosition;
 
 void main() {
-    // Sample texture
-    vec4 texColor = texture2D(map, vUv);
+    // Sample texture from array using per-vertex tile index
+    vec4 texColor = texture(uDiffuseArray, vec3(vUv * uTileScale, vSelectedTile));
 
     // Lambert lighting
     vec3 normal = normalize(vNormal);

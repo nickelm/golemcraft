@@ -125,10 +125,6 @@ export class Game {
         this.showPerformanceMonitor = this.showPerformanceSetting;
         this.performanceMonitor.element.style.display = this.showPerformanceMonitor ? 'block' : 'none';
 
-        // Debug flags
-        this.debugNormals = false;
-        this.normalMappingEnabled = true;
-
         // Toggle performance monitor with P key
         window.addEventListener('keydown', (e) => {
             if (e.key === 'p' || e.key === 'P') {
@@ -137,18 +133,6 @@ export class Game {
                     this.showPerformanceMonitor ? 'block' : 'none';
                 // Update setting
                 settingsManager.set('showPerformance', this.showPerformanceMonitor);
-            }
-            // Toggle normal map debug with N key
-            if (e.key === 'n' || e.key === 'N') {
-                this.debugNormals = !this.debugNormals;
-                this.world?.chunkedTerrain?.setDebugNormals(this.debugNormals);
-                console.log('🔍 Normal map debug:', this.debugNormals ? 'ON' : 'OFF');
-            }
-            // Toggle normal mapping with M key
-            if (e.key === 'm' || e.key === 'M') {
-                this.normalMappingEnabled = !this.normalMappingEnabled;
-                this.world?.chunkedTerrain?.setNormalMappingEnabled(this.normalMappingEnabled);
-                console.log('🗺️ Normal mapping:', this.normalMappingEnabled ? 'ON' : 'OFF');
             }
             // Toggle landmark debug with F3 key
             if (e.key === 'F3') {
@@ -184,19 +168,11 @@ export class Game {
         this.accumulator = 0;
         this.maxAccumulator = 0.2; // Cap at 200ms (prevents spiral of death at <5 FPS)
 
-        // Load terrain atlas (legacy, for mobile/low-power shaders)
-        const textureLoader = new THREE.TextureLoader();
-        this.terrainTexture = textureLoader.load('./terrain-atlas.png');
-        this.terrainTexture.magFilter = THREE.NearestFilter;
-        this.terrainTexture.minFilter = THREE.NearestFilter;
-        this.terrainTexture.generateMipmaps = false;
-
-        // Load texture arrays for desktop shader
+        // Load texture arrays
         this.diffuseArray = null;
-        this.normalArray = null;
-        this.textureArraysReady = false;
+        this.waterTexture = null;
 
-        this._loadTextureArrays().then(async () => {
+        this._loadTextures().then(async () => {
             await this.init();
             this.animate();
         });
@@ -237,16 +213,13 @@ export class Game {
         // Create world manager with graphics settings
         this.world = new WorldManager(
             this.scene,
-            this.terrainTexture,
             this.seed,
             this.worldId,
             {
                 textureBlending: this.textureBlending,
                 drawDistance: this.drawDistance,
-                // Pass texture arrays for desktop shader
                 diffuseArray: this.diffuseArray,
-                normalArray: this.normalArray,
-                useTextureArrays: this.textureArraysReady,
+                waterTexture: this.waterTexture,
                 // Continental mode config
                 continent: this.continentConfig
             }
@@ -1085,34 +1058,34 @@ export class Game {
     }
 
     /**
-     * Load texture arrays for desktop shader (diffuse + normal maps)
+     * Load texture arrays and water texture
      * @private
      */
-    async _loadTextureArrays() {
+    async _loadTextures() {
         try {
             const { TextureArrayLoader } = await import('./loaders/texturearrayloader.js');
-            const { DIFFUSE_PATHS, NORMAL_PATHS } = await import('./world/terrain/textureregistry.js');
+            const { DIFFUSE_PATHS } = await import('./world/terrain/textureregistry.js');
 
-            console.log('Loading texture arrays for desktop shader...');
+            console.log('Loading textures...');
 
             const arrayLoader = new TextureArrayLoader();
+            this.diffuseArray = await arrayLoader.loadDiffuseArray(DIFFUSE_PATHS, (progress) => {
+                console.log(`Textures: ${progress.loaded}/${progress.total}`);
+            });
 
-            // Load both arrays in parallel
-            [this.diffuseArray, this.normalArray] = await Promise.all([
-                arrayLoader.loadDiffuseArray(DIFFUSE_PATHS, (progress) => {
-                    console.log(`Diffuse textures: ${progress.loaded}/${progress.total}`);
-                }),
-                arrayLoader.loadNormalArray(NORMAL_PATHS, (progress) => {
-                    console.log(`Normal maps: ${progress.loaded}/${progress.total}`);
-                })
-            ]);
+            // Load water texture (separate 2D texture for water material)
+            const textureLoader = new THREE.TextureLoader();
+            this.waterTexture = await new Promise((resolve, reject) => {
+                textureLoader.load('./textures/terrain/water.png', resolve, undefined, reject);
+            });
+            this.waterTexture.wrapS = THREE.RepeatWrapping;
+            this.waterTexture.wrapT = THREE.RepeatWrapping;
+            this.waterTexture.magFilter = THREE.LinearFilter;
+            this.waterTexture.minFilter = THREE.LinearFilter;
 
-            this.textureArraysReady = true;
-            console.log('✅ Texture arrays loaded successfully');
+            console.log('Textures loaded successfully');
         } catch (error) {
-            console.error('❌ Failed to load texture arrays:', error);
-            console.error('⚠️ Falling back to atlas shader');
-            this.textureArraysReady = false;
+            console.error('Failed to load textures:', error);
         }
     }
 }

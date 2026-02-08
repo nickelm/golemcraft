@@ -1,13 +1,12 @@
 /**
  * TextureArrayLoader
  *
- * Loads images into WebGL2 DataArrayTexture (texture array) objects.
+ * Loads images into a WebGL2 DataArrayTexture (texture array).
  * Supports parallel loading via ImageBitmapLoader with strict dimension validation.
  *
  * Usage:
  *   const loader = new TextureArrayLoader();
  *   const diffuseArray = await loader.loadDiffuseArray(paths);
- *   const normalArray = await loader.loadNormalArray(paths);
  */
 
 import * as THREE from 'three';
@@ -25,25 +24,12 @@ export class TextureArrayLoader {
      *
      * @param {string[]} paths - Array of image paths relative to public/ directory
      * @param {Function} onProgress - Optional progress callback
-     * @returns {Promise<THREE.DataArrayTexture>} 1024×1024×N sRGB texture array
+     * @returns {Promise<THREE.DataArrayTexture>} 128×128×N sRGB texture array
      */
     async loadDiffuseArray(paths, onProgress) {
         const imageBitmaps = await this._loadImagesInParallel(paths, onProgress);
         if (onProgress) onProgress({ loaded: paths.length, total: paths.length });
-        return this._createTextureArray(imageBitmaps, 1024, 1024, THREE.SRGBColorSpace);
-    }
-
-    /**
-     * Load normal map texture array (linear color space)
-     *
-     * @param {string[]} paths - Array of image paths relative to public/ directory
-     * @param {Function} onProgress - Optional progress callback
-     * @returns {Promise<THREE.DataArrayTexture>} 512×512×N linear texture array
-     */
-    async loadNormalArray(paths, onProgress) {
-        const imageBitmaps = await this._loadImagesInParallel(paths, onProgress);
-        if (onProgress) onProgress({ loaded: paths.length, total: paths.length });
-        return this._createTextureArray(imageBitmaps, 512, 512, THREE.LinearSRGBColorSpace);
+        return this._createTextureArray(imageBitmaps, 128, 128, THREE.SRGBColorSpace);
     }
 
     /**

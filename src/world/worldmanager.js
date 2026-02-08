@@ -36,15 +36,16 @@ export { WATER_LEVEL };
 export class WorldManager {
     /**
      * @param {THREE.Scene} scene
-     * @param {THREE.Texture} terrainTexture
      * @param {number} seed
      * @param {string} worldId
      * @param {Object} options - Graphics options
      * @param {string} options.textureBlending - 'high' | 'medium' | 'low'
      * @param {string} options.drawDistance - 'far' | 'medium' | 'near'
      * @param {Object} options.continent - Continental mode config { enabled: boolean, baseRadius: number }
+     * @param {THREE.DataArrayTexture} options.diffuseArray - Texture array for terrain
+     * @param {THREE.Texture} options.waterTexture - Water texture
      */
-    constructor(scene, terrainTexture, seed, worldId, options = {}) {
+    constructor(scene, seed, worldId, options = {}) {
         this.scene = scene;
         this.seed = seed;
         this.worldId = worldId;
@@ -56,32 +57,23 @@ export class WorldManager {
         // Continental mode config
         this.continentConfig = options.continent || null;
 
-        // Texture arrays (for desktop shader)
+        // Textures
         this.diffuseArray = options.diffuseArray || null;
-        this.normalArray = options.normalArray || null;
-        this.useTextureArrays = options.useTextureArrays || false;
-
-        // Legacy isMobile detection - now derived from textureBlending
-        this.isMobile = this.textureBlending !== 'high';
+        this.waterTexture = options.waterTexture || null;
 
         this.initialized = false;
 
-        console.log(`Creating world: seed=${seed}, id=${worldId}, textureBlending=${this.textureBlending}, useTextureArrays=${this.useTextureArrays}`);
+        console.log(`Creating world: seed=${seed}, id=${worldId}, textureBlending=${this.textureBlending}`);
 
         // Block modifications - tracked locally and synced to worker
         this.destroyedBlocks = new Set();
 
-        // Create chunked terrain renderer (pass texture array options)
+        // Create chunked terrain renderer
         this.chunkedTerrain = new ChunkedTerrain(
             this.scene,
             null,
-            terrainTexture,
-            this.textureBlending,
-            {
-                diffuseArray: this.diffuseArray,
-                normalArray: this.normalArray,
-                useTextureArrays: this.useTextureArrays
-            }
+            this.diffuseArray,
+            this.waterTexture
         );
 
         // Create object generator (mesh factory only - positions come from worker)

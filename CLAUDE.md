@@ -185,20 +185,23 @@ src/
 
 ### Texture System
 
-8 base textures in WebGL2 texture arrays (no atlas):
+9 painterly 128×128 PNG textures in a WebGL2 texture array (`sampler2DArray`). No atlas, no normal maps, no PBR. Single unified Lambert shader path for all platforms.
 
-| Index | Texture | Used By |
+| Layer | Texture | Used By |
 |-------|---------|---------|
 | 0 | grass | Plains, meadow, savanna |
 | 1 | forest_floor | Forests, jungle |
 | 2 | dirt | Subsurface, paths |
 | 3 | sand | Desert, beach |
-| 4 | rock | Mountains, cliffs |
+| 4 | rock | Mountains, cliffs, landmarks |
 | 5 | snow | Tundra, peaks |
 | 6 | ice | Glacier, frozen water |
 | 7 | gravel | Riverbeds, paths |
+| 8 | water | Water surfaces |
 
-Biomes differentiate via RGB tint multiplied in shader. 4-texture splatting blends per quad on desktop, 2-texture on mobile.
+Files: `public/textures/terrain/{name}.png`. Registry: `src/world/terrain/textureregistry.js`.
+
+All meshes (surface heightfield, voxels, water) use the texture array. Biomes differentiate via RGB tint multiplied in shader. 4-texture splatting blends per quad for terrain surfaces. Voxels use per-vertex `aSelectedTile` attribute for layer selection.
 
 ---
 
@@ -443,7 +446,6 @@ Separate core simulation from GolemCraft-specific content:
 |-----|------|
 | `P` | Performance monitor (FPS, draw calls, worker stats) |
 | `C` | Collision debug overlay |
-| `N` | Normal debug |
 | `F3` | Landmark debug |
 | `B` | Debug block column |
 
@@ -494,9 +496,10 @@ Performance monitor shows:
 
 ### Adding a New Block Type
 
-1. Add texture to texture array (update `textureregistry.js`)
-2. Add to `BLOCK_TYPE_IDS` in `chunkdatagenerator.js`
-3. Add rendering logic if special (like water transparency)
+1. Add texture PNG to `public/textures/terrain/`
+2. Add to `TEXTURE_LAYERS` and `DIFFUSE_PATHS` in `textureregistry.js`
+3. Add to `BLOCK_TEXTURE_LAYER` and `BLOCK_TYPE_IDS` in `chunkdatagenerator.js`
+4. Add rendering logic if special (like water transparency)
 
 ### Modifying Terrain Generation
 

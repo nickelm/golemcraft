@@ -1,15 +1,15 @@
 /**
  * Texture Registry
  *
- * Central registry mapping texture names to integer layer indices (0-7)
- * and providing file path manifests for diffuse and normal maps.
+ * Central registry mapping texture names to integer layer indices (0-8)
+ * and providing file path manifests for diffuse textures.
  *
  * Pure functions only - worker-thread compatible.
  * No Three.js or DOM dependencies.
  */
 
-// Texture name → layer index mapping (0-7)
-// This ordering is deterministic and matches future texture array layers
+// Texture name → layer index mapping (0-8)
+// This ordering is deterministic and matches the texture array layers
 export const TEXTURE_LAYERS = {
     grass: 0,
     forest_floor: 1,
@@ -18,41 +18,29 @@ export const TEXTURE_LAYERS = {
     rock: 4,
     snow: 5,
     ice: 6,
-    pebbles: 7
+    gravel: 7,
+    water: 8
 };
 
-// Diffuse texture paths (1024×1024 resolution)
+// Diffuse texture paths (128×128 painterly PNGs)
 // Array index corresponds to layer index
 // Paths are relative to public/ directory
 export const DIFFUSE_PATHS = [
-    'textures/terrain/diffuse/grass_diff_1k.jpg',         // Layer 0
-    'textures/terrain/diffuse/forest_floor_diff_1k.jpg',  // Layer 1
-    'textures/terrain/diffuse/dirt_diff_1k.jpg',          // Layer 2
-    'textures/terrain/diffuse/sand_diff_1k.jpg',          // Layer 3
-    'textures/terrain/diffuse/rock_diff_1k.jpg',          // Layer 4
-    'textures/terrain/diffuse/snow_diff_1k.jpg',          // Layer 5
-    'textures/terrain/diffuse/ice_diff_1k.jpg',           // Layer 6
-    'textures/terrain/diffuse/pebbles_diff_1k.jpg'        // Layer 7
-];
-
-// Normal map paths (512×512 resolution, downscaled from 1K)
-// Array index corresponds to layer index
-// Paths are relative to public/ directory
-export const NORMAL_PATHS = [
-    'textures/terrain/normal/grass_nor_512.jpg',          // Layer 0
-    'textures/terrain/normal/forest_floor_nor_512.jpg',   // Layer 1
-    'textures/terrain/normal/dirt_nor_512.jpg',           // Layer 2
-    'textures/terrain/normal/sand_nor_512.jpg',           // Layer 3
-    'textures/terrain/normal/rock_nor_512.jpg',           // Layer 4
-    'textures/terrain/normal/snow_nor_512.jpg',           // Layer 5
-    'textures/terrain/normal/ice_nor_512.jpg',            // Layer 6
-    'textures/terrain/normal/pebbles_nor_512.jpg'         // Layer 7
+    'textures/terrain/grass.png',         // Layer 0
+    'textures/terrain/forest_floor.png',  // Layer 1
+    'textures/terrain/dirt.png',          // Layer 2
+    'textures/terrain/sand.png',          // Layer 3
+    'textures/terrain/rock.png',          // Layer 4
+    'textures/terrain/snow.png',          // Layer 5
+    'textures/terrain/ice.png',           // Layer 6
+    'textures/terrain/gravel.png',        // Layer 7
+    'textures/terrain/water.png'          // Layer 8
 ];
 
 /**
  * Get the layer index for a texture name
  * @param {string} textureName - Name of the texture (e.g., 'grass', 'rock')
- * @returns {number} Layer index (0-7), or -1 if not found
+ * @returns {number} Layer index (0-8), or -1 if not found
  */
 export function getTextureLayer(textureName) {
     return TEXTURE_LAYERS[textureName] ?? -1;
@@ -73,29 +61,7 @@ export function getTextureNames() {
 export function validateRegistry() {
     const layerCount = Object.keys(TEXTURE_LAYERS).length;
     return layerCount === DIFFUSE_PATHS.length &&
-           layerCount === NORMAL_PATHS.length &&
-           layerCount === 8;
-}
-
-// Legacy atlas tile index → texture array layer index mapping
-// This bridges the old SURFACE_TILE_INDICES system with the new texture arrays
-export const ATLAS_TILE_TO_LAYER = {
-    0: 0,  // grass → grass
-    1: 4,  // stone → rock
-    2: 5,  // snow → snow
-    3: 2,  // dirt → dirt
-    5: 3,  // sand → sand
-    6: 6,  // ice → ice
-    // Note: 4 (water) not used in splatting, 7 (mayan_stone) needs mapping decision
-};
-
-/**
- * Convert legacy atlas tile index to texture array layer index
- * @param {number} tileIndex - Atlas tile index (0-99)
- * @returns {number} Texture array layer index (0-7), or 0 if unmapped
- */
-export function tileIndexToLayer(tileIndex) {
-    return ATLAS_TILE_TO_LAYER[tileIndex] ?? 0;
+           layerCount === 9;
 }
 
 // Default tint colors for each texture layer (RGB in linear space, 0-1 range)
@@ -108,12 +74,13 @@ export const DEFAULT_TINT_COLORS = [
     [0.92, 0.92, 0.95],   // Layer 4: rock (slight cool grey tint)
     [1.0, 1.0, 1.0],      // Layer 5: snow (neutral white, already bright)
     [0.9, 0.95, 1.0],     // Layer 6: ice (slight cool blue tint)
-    [0.95, 0.95, 0.92]    // Layer 7: pebbles (slight warm grey tint)
+    [0.95, 0.95, 0.92],   // Layer 7: gravel (slight warm grey tint)
+    [1.0, 1.0, 1.0]       // Layer 8: water (neutral white)
 ];
 
 /**
  * Get default tint color for a texture layer
- * @param {number} layerIndex - Texture array layer index (0-7)
+ * @param {number} layerIndex - Texture array layer index (0-8)
  * @returns {Array<number>} RGB color [r, g, b] in linear space (0-1)
  */
 export function getDefaultTintColor(layerIndex) {

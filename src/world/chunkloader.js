@@ -82,8 +82,7 @@ export class ChunkLoader {
             this.chunkedTerrain.opaqueMaterial,
             this.chunkedTerrain.waterMaterial,
             (chunkX, chunkZ, meshes, staticObjects) => this.onChunkReady(chunkX, chunkZ, meshes, staticObjects),
-            this.chunkedTerrain.surfaceMaterial,  // Splatting shader for smooth terrain
-            this.chunkedTerrain.useTextureArrays  // Whether to convert tile indices
+            this.chunkedTerrain.surfaceMaterial
         );
 
         await this.workerManager.init(seed, textureBlending, continentConfig);

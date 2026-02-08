@@ -23,19 +23,16 @@ import { ChunkBlockCache, CHUNK_SIZE } from '../world/chunkblockcache.js';
 import { LandmarkRegistry } from '../world/landmarks/landmarkregistry.js';
 import { MainThreadTerrainProvider } from '../world/terrain/mainthreadterrainprovider.js';
 import { generateSurfaceMesh, generateVoxelMesh, generateWaterMesh } from '../world/terrain/chunkdatagenerator.js';
-import { tileIndexToLayer } from '../world/terrain/textureregistry.js';
-
 // DEBUG: Set to true to see cancellation logging
 const DEBUG_CANCELLATION = false;
 
 export class TerrainWorkerManager {
-    constructor(scene, opaqueMaterial, waterMaterial, onChunkReady, surfaceMaterial = null, useTextureArrays = false) {
+    constructor(scene, opaqueMaterial, waterMaterial, onChunkReady, surfaceMaterial = null) {
         this.scene = scene;
         this.opaqueMaterial = opaqueMaterial;
         this.waterMaterial = waterMaterial;
         this.surfaceMaterial = surfaceMaterial || opaqueMaterial;  // Fallback to opaque if not provided
         this.onChunkReady = onChunkReady;
-        this.useTextureArrays = useTextureArrays;  // Whether to convert tile indices for texture arrays
 
         // Worker state
         this.worker = null;
@@ -226,6 +223,12 @@ export class TerrainWorkerManager {
         geometry.setAttribute('normal', new THREE.BufferAttribute(data.normals, 3));
         geometry.setAttribute('uv', new THREE.BufferAttribute(data.uvs, 2));
         geometry.setAttribute('color', new THREE.BufferAttribute(data.colors, 3));
+
+        // Add per-vertex texture layer index for voxel meshes
+        if (data.tileIndices) {
+            geometry.setAttribute('aSelectedTile', new THREE.BufferAttribute(data.tileIndices, 1));
+        }
+
         geometry.setIndex(new THREE.BufferAttribute(data.indices, 1));
 
         geometry.computeBoundingSphere();
@@ -249,11 +252,7 @@ export class TerrainWorkerManager {
         // Check which mode the data was generated in
         if (data.selectedTiles) {
             // Dithering mode: single tile per vertex
-            // Convert tile indices only if using texture arrays
-            const tiles = this.useTextureArrays
-                ? this._convertTileIndicesToLayers(data.selectedTiles)
-                : data.selectedTiles;
-            geometry.setAttribute('aSelectedTile', new THREE.BufferAttribute(tiles, 1));
+            geometry.setAttribute('aSelectedTile', new THREE.BufferAttribute(data.selectedTiles, 1));
 
             // Add tint attribute (3 floats per vertex: RGB)
             if (data.selectedTints) {
@@ -261,11 +260,7 @@ export class TerrainWorkerManager {
             }
         } else if (data.tileIndices && data.blendWeights) {
             // Splatting mode: 4 tiles + weights per vertex
-            // Convert tile indices only if using texture arrays
-            const indices = this.useTextureArrays
-                ? this._convertTileIndicesToLayers(data.tileIndices)
-                : data.tileIndices;
-            geometry.setAttribute('aTileIndices', new THREE.BufferAttribute(indices, 4));
+            geometry.setAttribute('aTileIndices', new THREE.BufferAttribute(data.tileIndices, 4));
             geometry.setAttribute('aBlendWeights', new THREE.BufferAttribute(data.blendWeights, 4));
 
             // Add tint attributes (4 vec3 per vertex, stored interleaved: 12 floats total)
@@ -558,20 +553,5 @@ export class TerrainWorkerManager {
             worldX,
             worldZ
         });
-    }
-
-    /**
-     * Convert tile indices from atlas space (0-99) to texture array layer space (0-7)
-     * This enables backward compatibility with existing chunk data generation
-     * @param {Float32Array} tileIndices - Original tile indices from worker
-     * @returns {Float32Array} Converted layer indices
-     * @private
-     */
-    _convertTileIndicesToLayers(tileIndices) {
-        const converted = new Float32Array(tileIndices.length);
-        for (let i = 0; i < tileIndices.length; i++) {
-            converted[i] = tileIndexToLayer(tileIndices[i]);
-        }
-        return converted;
     }
 }
