@@ -29,7 +29,9 @@ export class MapOverlay {
         if (continentConfig?.enabled) {
             // Derive continental seeds (same as in ContinentState)
             this.shapeSeed = Math.floor(hash(0, 0, seed + 111111) * 0x7FFFFFFF);
+            this.climateSeed = Math.floor(hash(0, 0, seed + 555555) * 0x7FFFFFFF);
             this.baseRadius = continentConfig.baseRadius || 2000;
+            this.template = continentConfig.template || 'default';
         }
 
         // View state
@@ -83,7 +85,7 @@ export class MapOverlay {
         // Tile cache and manager
         this.tileCache = new TileCache(TILE_SIZE, MAX_TILES);
         if (continentConfig?.enabled) {
-            this.tileCache.setCoastlineParams(this.shapeSeed, this.baseRadius);
+            this.tileCache.setCoastlineParams(this.shapeSeed, this.baseRadius, this.template);
         }
         this.tileManager = null;
         this.tileManagerReady = false;
@@ -135,7 +137,7 @@ export class MapOverlay {
             if (success) {
                 this.tileManager.setMode(this.mode);
                 if (this.continentConfig?.enabled) {
-                    this.tileManager.setCoastlineParams(this.shapeSeed, this.baseRadius);
+                    this.tileManager.setCoastlineParams(this.shapeSeed, this.baseRadius, this.template, this.climateSeed);
                 }
                 this.tileManagerReady = true;
             }

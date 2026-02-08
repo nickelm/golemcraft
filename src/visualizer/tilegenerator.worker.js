@@ -8,8 +8,20 @@
 import { getTerrainParams } from '../world/terrain/terraincore.js';
 import { getColorForMode } from '../tools/mapvisualizer/colors.js';
 import { getNominalRadius } from '../world/terrain/continentshape.js';
+import { generateEnvelopeParams } from '../world/terrain/elevationenvelope.js';
+import { generateClimateParams } from '../world/terrain/climategeography.js';
 
 const TILE_SIZE = 128;
+
+// Cached envelope params (regenerated when shapeSeed or template changes)
+let cachedEnvelopeParams = null;
+let cachedEnvelopeSeed = null;
+let cachedEnvelopeTemplate = null;
+
+// Cached climate params (regenerated when climateSeed or template changes)
+let cachedClimateParams = null;
+let cachedClimateSeed = null;
+let cachedClimateTemplate = null;
 
 // Ocean color for positions outside the coastline
 const OCEAN_COLOR = [15, 30, 80];
@@ -40,12 +52,44 @@ function isOutsideCoastline(wx, wz, shapeSeed, baseRadius) {
 }
 
 /**
+ * Get or generate cached envelope params for the current coastline config.
+ * @param {number} shapeSeed - Seed for continent shape
+ * @param {number} baseRadius - Base island radius
+ * @param {string} template - Continent template name
+ * @returns {Object|null} Envelope params, or null if no coastline
+ */
+function getEnvelopeParams(shapeSeed, baseRadius, template) {
+    if (shapeSeed === undefined || baseRadius === undefined) return null;
+    if (cachedEnvelopeParams && cachedEnvelopeSeed === shapeSeed && cachedEnvelopeTemplate === template) return cachedEnvelopeParams;
+    cachedEnvelopeParams = generateEnvelopeParams(shapeSeed, baseRadius, template || 'default');
+    cachedEnvelopeSeed = shapeSeed;
+    cachedEnvelopeTemplate = template;
+    return cachedEnvelopeParams;
+}
+
+/**
+ * Get or generate cached climate params for the current continent config.
+ * @param {number} climateSeed - Seed for climate geography
+ * @param {number} baseRadius - Base island radius
+ * @param {string} template - Continent template name
+ * @returns {Object|null} ClimateParams, or null if no climate config
+ */
+function getClimateParams(climateSeed, baseRadius, template) {
+    if (climateSeed === undefined || baseRadius === undefined) return null;
+    if (cachedClimateParams && cachedClimateSeed === climateSeed && cachedClimateTemplate === template) return cachedClimateParams;
+    cachedClimateParams = generateClimateParams(climateSeed, baseRadius, template || 'default');
+    cachedClimateSeed = climateSeed;
+    cachedClimateTemplate = template;
+    return cachedClimateParams;
+}
+
+/**
  * Generate a tile at a specific refinement level (progressive rendering)
  * @param {Object} params - Tile generation parameters
  * @returns {{buffer: ArrayBuffer, width: number, height: number}}
  */
 function generateProgressiveTile(params) {
-    const { tileX, tileZ, lodLevel, refinementLevel, seed, mode, shapeSeed, baseRadius } = params;
+    const { tileX, tileZ, lodLevel, refinementLevel, seed, mode, shapeSeed, baseRadius, template, climateSeed } = params;
     const hasCoastline = shapeSeed !== undefined && baseRadius !== undefined;
 
     const config = REFINEMENT_CONFIG[refinementLevel] || REFINEMENT_CONFIG[5];
@@ -56,6 +100,8 @@ function generateProgressiveTile(params) {
     const data = new Uint8ClampedArray(buffer);
 
     const needsNeighbors = mode === 'elevation' || mode === 'composite';
+    const envelopeParams = hasCoastline ? getEnvelopeParams(shapeSeed, baseRadius, template) : null;
+    const climateParams = climateSeed !== undefined ? getClimateParams(climateSeed, baseRadius, template) : null;
 
     // LOD step combined with refinement sampling
     const lodStep = 1 << lodLevel;
@@ -78,15 +124,15 @@ function generateProgressiveTile(params) {
                 continue;
             }
 
-            const terrainParams = getTerrainParams(wx, wz, seed);
+            const terrainParams = getTerrainParams(wx, wz, seed, envelopeParams, climateParams);
 
             let rgb;
 
             if (needsNeighbors) {
-                const leftParams = getTerrainParams(wx - totalStep, wz, seed);
-                const rightParams = getTerrainParams(wx + totalStep, wz, seed);
-                const upParams = getTerrainParams(wx, wz - totalStep, seed);
-                const downParams = getTerrainParams(wx, wz + totalStep, seed);
+                const leftParams = getTerrainParams(wx - totalStep, wz, seed, envelopeParams, climateParams);
+                const rightParams = getTerrainParams(wx + totalStep, wz, seed, envelopeParams, climateParams);
+                const upParams = getTerrainParams(wx, wz - totalStep, seed, envelopeParams, climateParams);
+                const downParams = getTerrainParams(wx, wz + totalStep, seed, envelopeParams, climateParams);
 
                 const neighbors = {
                     left: leftParams.height,
@@ -116,7 +162,7 @@ function generateProgressiveTile(params) {
  * @returns {ArrayBuffer} RGBA pixel data buffer
  */
 function generateTile(params) {
-    const { tileX, tileZ, lodLevel, seed, mode, shapeSeed, baseRadius } = params;
+    const { tileX, tileZ, lodLevel, seed, mode, shapeSeed, baseRadius, template, climateSeed } = params;
     const hasCoastline = shapeSeed !== undefined && baseRadius !== undefined;
 
     // Create pixel buffer (128 x 128 x 4 bytes RGBA)
@@ -124,6 +170,8 @@ function generateTile(params) {
     const data = new Uint8ClampedArray(buffer);
 
     const needsNeighbors = mode === 'elevation' || mode === 'composite';
+    const envelopeParams = hasCoastline ? getEnvelopeParams(shapeSeed, baseRadius, template) : null;
+    const climateParams = climateSeed !== undefined ? getClimateParams(climateSeed, baseRadius, template) : null;
 
     // LOD step: sample every 2^lodLevel blocks
     const step = 1 << lodLevel;
@@ -145,16 +193,16 @@ function generateTile(params) {
                 continue;
             }
 
-            const terrainParams = getTerrainParams(wx, wz, seed);
+            const terrainParams = getTerrainParams(wx, wz, seed, envelopeParams, climateParams);
 
             let rgb;
 
             if (needsNeighbors) {
                 // Scale neighbor offsets by LOD step for consistent hillshade appearance
-                const leftParams = getTerrainParams(wx - step, wz, seed);
-                const rightParams = getTerrainParams(wx + step, wz, seed);
-                const upParams = getTerrainParams(wx, wz - step, seed);
-                const downParams = getTerrainParams(wx, wz + step, seed);
+                const leftParams = getTerrainParams(wx - step, wz, seed, envelopeParams, climateParams);
+                const rightParams = getTerrainParams(wx + step, wz, seed, envelopeParams, climateParams);
+                const upParams = getTerrainParams(wx, wz - step, seed, envelopeParams, climateParams);
+                const downParams = getTerrainParams(wx, wz + step, seed, envelopeParams, climateParams);
 
                 const neighbors = {
                     left: leftParams.height,
@@ -186,7 +234,7 @@ self.onmessage = function(e) {
 
     switch (type) {
         case 'generate': {
-            const { requestId, tileX, tileZ, lodLevel, seed, mode, shapeSeed, baseRadius } = data;
+            const { requestId, tileX, tileZ, lodLevel, seed, mode, shapeSeed, baseRadius, template, climateSeed } = data;
 
             try {
                 const buffer = generateTile({
@@ -196,7 +244,9 @@ self.onmessage = function(e) {
                     seed,
                     mode,
                     shapeSeed,
-                    baseRadius
+                    baseRadius,
+                    template,
+                    climateSeed
                 });
 
                 // Send response with transferred buffer (zero-copy)
@@ -226,7 +276,7 @@ self.onmessage = function(e) {
 
         case 'generate_progressive': {
             // Progressive refinement tile generation
-            const { requestId, tileX, tileZ, lodLevel, refinementLevel, seed, mode, shapeSeed, baseRadius } = data;
+            const { requestId, tileX, tileZ, lodLevel, refinementLevel, seed, mode, shapeSeed, baseRadius, template, climateSeed } = data;
 
             try {
                 const result = generateProgressiveTile({
@@ -237,7 +287,9 @@ self.onmessage = function(e) {
                     seed,
                     mode,
                     shapeSeed,
-                    baseRadius
+                    baseRadius,
+                    template,
+                    climateSeed
                 });
 
                 // Send response with refinement metadata

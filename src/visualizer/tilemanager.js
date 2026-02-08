@@ -55,6 +55,8 @@ export class TileManager {
         // Coastline parameters passed to worker for per-pixel ocean check
         this.shapeSeed = undefined;
         this.baseRadius = undefined;
+        this.template = undefined;
+        this.climateSeed = undefined;
     }
 
     /**
@@ -594,7 +596,9 @@ export class TileManager {
                         seed: this.seed,
                         mode: item.mode,
                         shapeSeed: this.shapeSeed,
-                        baseRadius: this.baseRadius
+                        baseRadius: this.baseRadius,
+                        template: this.template,
+                        climateSeed: this.climateSeed
                     }
                 });
             } else {
@@ -610,7 +614,9 @@ export class TileManager {
                         seed: this.seed,
                         mode: item.mode,
                         shapeSeed: this.shapeSeed,
-                        baseRadius: this.baseRadius
+                        baseRadius: this.baseRadius,
+                        template: this.template,
+                        climateSeed: this.climateSeed
                     }
                 });
             }
@@ -637,9 +643,17 @@ export class TileManager {
      * Set coastline parameters for per-pixel ocean override in the worker.
      * @param {number} shapeSeed - Seed for silhouette shape
      * @param {number} baseRadius - Base island radius in world blocks
+     * @param {string} [template] - Continent template for elevation envelope
+     * @param {number} [climateSeed] - Seed for climate geography
      */
-    setCoastlineParams(shapeSeed, baseRadius) {
+    setCoastlineParams(shapeSeed, baseRadius, template, climateSeed) {
         this.shapeSeed = shapeSeed;
         this.baseRadius = baseRadius;
+        if (template !== undefined) {
+            this.template = template;
+        }
+        if (climateSeed !== undefined) {
+            this.climateSeed = climateSeed;
+        }
     }
 }

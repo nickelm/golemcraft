@@ -70,7 +70,8 @@ export class Game {
         // Continental mode: bounded island instead of infinite terrain
         this.continentConfig = {
             enabled: true,
-            baseRadius: 2000  // ~4km diameter island
+            baseRadius: 2000,  // ~4km diameter island
+            template: 'verdania'  // Starting continent template
         };
         
         this.entities = [];

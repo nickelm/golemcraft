@@ -50,11 +50,15 @@ export class TileCache {
    * When set, pixels outside the coastline will render as ocean.
    * @param {number} shapeSeed - Seed for silhouette shape
    * @param {number} baseRadius - Base island radius in world blocks
+   * @param {string} [template] - Continent template for elevation envelope
    */
-  setCoastlineParams(shapeSeed, baseRadius) {
+  setCoastlineParams(shapeSeed, baseRadius, template) {
     this.coastlineEnabled = true;
     this.shapeSeed = shapeSeed;
     this.baseRadius = baseRadius;
+    if (template !== undefined) {
+      this.template = template;
+    }
   }
 
   /**

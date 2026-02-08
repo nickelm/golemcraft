@@ -15,6 +15,8 @@ import {
     COAST_ZONES
 } from './continentshape.js';
 import { hash } from './terraincore.js';
+import { generateEnvelopeParams, evaluateEnvelope } from './elevationenvelope.js';
+import { generateClimateParams } from './climategeography.js';
 
 // Re-export COAST_ZONES for convenience
 export { COAST_ZONES };
@@ -30,10 +32,12 @@ export class ContinentState {
      *
      * @param {number} seed - World seed
      * @param {number} baseRadius - Island radius in blocks (default 2000 = ~4km diameter)
+     * @param {string} template - Continent template ('verdania', 'grausland', 'petermark', 'default')
      */
-    constructor(seed, baseRadius = 2000) {
+    constructor(seed, baseRadius = 2000, template = 'default') {
         this.seed = seed;
         this.baseRadius = baseRadius;
+        this.template = template;
         this.enabled = true;
 
         // Derive sub-seeds for different noise layers
@@ -41,6 +45,8 @@ export class ContinentState {
         this.shapeSeed = Math.floor(hash(0, 0, seed + 111111) * 0x7FFFFFFF);
         this.coastSeed = Math.floor(hash(0, 0, seed + 222222) * 0x7FFFFFFF);
         this.startSeed = Math.floor(hash(0, 0, seed + 333333) * 0x7FFFFFFF);
+        this.envelopeSeed = Math.floor(hash(0, 0, seed + 444444) * 0x7FFFFFFF);
+        this.climateSeed = Math.floor(hash(0, 0, seed + 555555) * 0x7FFFFFFF);
 
         // SDF configuration
         this.sdfResolution = CONTINENT_SHAPE_CONFIG.sdfResolution;
@@ -64,6 +70,23 @@ export class ContinentState {
             this.baseRadius
         );
         console.log(`[ContinentState] Start position: (${this.startPosition.x.toFixed(0)}, ${this.startPosition.z.toFixed(0)}) at angle ${(this.startPosition.angle * 180 / Math.PI).toFixed(0)}deg`);
+
+        // Generate elevation envelope params
+        this.envelopeParams = generateEnvelopeParams(
+            this.envelopeSeed,
+            this.baseRadius,
+            template,
+            this.startPosition.angle
+        );
+        console.log(`[ContinentState] Elevation envelope generated (template=${template}, ${this.envelopeParams.controlPoints.length} control points, ${this.envelopeParams.angularLobes.length} lobes, spine=${this.envelopeParams.spineStrength > 0 ? 'yes' : 'no'})`);
+
+        // Generate climate geography params
+        this.climateParams = generateClimateParams(
+            this.climateSeed,
+            this.baseRadius,
+            template
+        );
+        console.log(`[ContinentState] Climate geography generated (template=${template}, windAngle=${(this.climateParams.windAngle * 180 / Math.PI).toFixed(0)}deg, warmAngle=${(this.climateParams.warmAngle * 180 / Math.PI).toFixed(0)}deg)`);
 
         // Cache for detailed coast queries (LRU-style)
         this.detailCache = new Map();

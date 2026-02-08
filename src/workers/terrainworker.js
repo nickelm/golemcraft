@@ -64,6 +64,8 @@ import {
 } from '../world/terrain/terraincore.js';
 import { ContinentState, COAST_ZONES } from '../world/terrain/continentstate.js';
 import { smoothstep, lerp } from '../world/terrain/continentshape.js';
+import { evaluateEnvelope } from '../world/terrain/elevationenvelope.js';
+import { evaluateClimate } from '../world/terrain/climategeography.js';
 import { WorkerLandmarkSystem } from '../world/landmarks/workerlandmarksystem.js';
 import { generateSpawnPoints } from './spawnpointgenerator.js';
 import { generateObjectInstances } from './objectspawner.js';
@@ -142,7 +144,8 @@ class WorkerTerrainProvider {
         if (continentConfig?.enabled) {
             this.continentState = new ContinentState(
                 seed,
-                continentConfig.baseRadius || 2000
+                continentConfig.baseRadius || 2000,
+                continentConfig.template || 'default'
             );
         }
     }
@@ -276,6 +279,16 @@ class WorkerTerrainProvider {
                     return 'ocean';
                 }
             }
+
+            // DEEP_INLAND zone: check for low-frequency inland seas
+            // These large-scale ocean features from continental noise create organic
+            // inland bays and seas that break up the landmass naturally
+            if (coastInfo.zone === COAST_ZONES.DEEP_INLAND) {
+                if (this.hasRawOcean(x, z)) {
+                    this.biomeCache.set(key, 'ocean');
+                    return 'ocean';
+                }
+            }
             // COASTAL_TAPER and DEEP_INLAND continue to normal biome selection below
         }
 
@@ -303,11 +316,19 @@ class WorkerTerrainProvider {
 
         // Normalize to [0, 1] with smoothstep redistribution
         const elevation = normalizeNoise(elevationNoise);
-        const temp = normalizeNoise(tempNoise);
-        const humidity = normalizeNoise(humidityNoise);
+        let temp = normalizeNoise(tempNoise);
+        let humidity = normalizeNoise(humidityNoise);
 
-        // Whittaker-based selection using continuous values
-        let biome = selectBiomeFromWhittaker(temp, humidity, elevation);
+        // Apply climate geography modulation (continental mode only)
+        const tempFloor = this.continentState?.climateParams ? this.continentState.climateParams.tempRange[0] : 0;
+        if (this.continentState?.climateParams) {
+            const climate = evaluateClimate(x, z, temp, humidity, this.continentState.climateParams, elevation);
+            temp = climate.temperature;
+            humidity = climate.humidity;
+        }
+
+        // Whittaker-based selection (tempFloor prevents elevation cooling below template minimum)
+        let biome = selectBiomeFromWhittaker(temp, humidity, elevation, tempFloor);
 
         // Apply sub-biome variation for natural patchiness
         biome = applySubBiomeVariation(biome, x, z, this.seed);
@@ -474,17 +495,28 @@ class WorkerTerrainProvider {
 
         // Micro-detail for surface variation
         const microDetail = octaveNoise2D(x, z, 2, 0.12, (nx, nz) => hash2(nx, nz, this.seed)) * 0.25;
-        
+
         let height = getBiomeBaseHeight(biomeData) + heightNoise * getBiomeHeightScale(biomeData) + microDetail;
         let debugLog = null;
+
+        // Apply elevation envelope (continental mode only)
+        let envelopeAmpScale = 1.0;
+        if (this.continentState?.envelopeParams) {
+            const envelope = evaluateEnvelope(x, z, this.continentState.envelopeParams);
+            const biomeBase = getBiomeBaseHeight(biomeData);
+            const noiseComponent = height - biomeBase;
+            height = envelope.baseElevation + biomeBase * envelope.amplitudeScale
+                     + noiseComponent * envelope.amplitudeScale;
+            envelopeAmpScale = envelope.amplitudeScale;
+        }
 
         // Apply peak variation to all high-elevation biomes (mountains, glacier, alpine, badlands, highlands)
         if (PEAK_BIOMES.includes(biome)) {
             const peakNoise = octaveNoise2D(x, z, 3, 0.04, (nx, nz) => hash(nx, nz, this.seed));  // 0.06 → 0.04 (larger, less frequent peaks)
 
             // Use FULL range of peak noise (0-1) for dramatic height variation
-            // Increased multiplier to push peaks to 50-60 range
-            const peakBonus = peakNoise * 50;  // Max +50 blocks when peakNoise=1.0 (total max: 18+20+0.25+50=88.25 - EXCEEDS 64!)
+            // Scaled by envelope amplitude so peaks respect continental structure
+            const peakBonus = peakNoise * 50 * envelopeAmpScale;
             height += peakBonus;
 
             // DEBUG: Track significant peaks
@@ -497,6 +529,7 @@ class WorkerTerrainProvider {
                     microDetail: microDetail.toFixed(3),
                     peakNoise: peakNoise.toFixed(3),
                     peakBonus: peakBonus.toFixed(2),
+                    envelopeAmpScale: envelopeAmpScale.toFixed(3),
                     heightBeforeWater: height.toFixed(2)
                 };
             }
@@ -504,7 +537,7 @@ class WorkerTerrainProvider {
 
         if (biome === 'jungle') {
             const jungleHillNoise = octaveNoise2D(x, z, 4, 0.08, (nx, nz) => hash(nx, nz, this.seed));
-            height += jungleHillNoise * 4;
+            height += jungleHillNoise * 4 * envelopeAmpScale;
         }
 
         // River valley carving (graduated with sloped banks, proportional depth)
@@ -665,21 +698,34 @@ class WorkerTerrainProvider {
             for (let dz = -radius; dz <= radius; dz += radius) {
                 if (dx === 0 && dz === 0) continue;
 
-                const neighborBiome = this.getBiome(x + dx, z + dz);
+                const nx = x + dx;
+                const nz = z + dz;
+                const neighborBiome = this.getBiome(nx, nz);
                 const neighborData = BIOMES[neighborBiome];
-                const neighborNoise = octaveNoise2D(x + dx, z + dz, 5, 0.03, (nx, nz) => hash(nx, nz, this.seed));
+                const neighborNoise = octaveNoise2D(nx, nz, 5, 0.03, (nnx, nnz) => hash(nnx, nnz, this.seed));
                 let neighborHeight = getBiomeBaseHeight(neighborData) + neighborNoise * getBiomeHeightScale(neighborData);
+
+                // Apply elevation envelope to neighbor heights
+                let nEnvAmpScale = 1.0;
+                if (this.continentState?.envelopeParams) {
+                    const nEnv = evaluateEnvelope(nx, nz, this.continentState.envelopeParams);
+                    const nBiomeBase = getBiomeBaseHeight(neighborData);
+                    const nNoiseComp = neighborHeight - nBiomeBase;
+                    neighborHeight = nEnv.baseElevation + nBiomeBase * nEnv.amplitudeScale
+                                     + nNoiseComp * nEnv.amplitudeScale;
+                    nEnvAmpScale = nEnv.amplitudeScale;
+                }
 
                 // Apply peak variation to neighbors in high-elevation biomes
                 if (PEAK_BIOMES.includes(neighborBiome)) {
-                    const peakNoise = octaveNoise2D(x + dx, z + dz, 3, 0.04, (nx, nz) => hash(nx, nz, this.seed));  // Match updated params
-                    const peakBonus = peakNoise * 50;                            // Match updated params
+                    const peakNoise = octaveNoise2D(nx, nz, 3, 0.04, (nnx, nnz) => hash(nnx, nnz, this.seed));
+                    const peakBonus = peakNoise * 50 * nEnvAmpScale;
                     neighborHeight += peakBonus;
                 }
 
                 if (neighborBiome === 'jungle') {
-                    const jungleHillNoise = octaveNoise2D(x + dx, z + dz, 4, 0.08, (nx, nz) => hash(nx, nz, this.seed));
-                    neighborHeight += jungleHillNoise * 4;
+                    const jungleHillNoise = octaveNoise2D(nx, nz, 4, 0.08, (nnx, nnz) => hash(nnx, nnz, this.seed));
+                    neighborHeight += jungleHillNoise * 4 * nEnvAmpScale;
                 }
 
                 totalHeight += neighborHeight;

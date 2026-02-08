@@ -43,6 +43,7 @@ class TerrainVisualizer {
         this.seed = seed;
         this.continentIndex = 0;
         this.baseRadius = 2000;  // Same as game.js continent config
+        this.template = 'verdania';  // Default template for continent 0
         this.viewX = 0;
         this.viewZ = 0;
         this.zoom = 2.0;  // Pixels per world block
@@ -56,7 +57,7 @@ class TerrainVisualizer {
         // At zoom=0.3 on 1920x1080, we can have ~400+ visible tiles
         // Use larger cache to avoid thrashing
         this.tileCache = new TileCache(128, 512);
-        this.tileCache.setCoastlineParams(this.shapeSeed, this.baseRadius);
+        this.tileCache.setCoastlineParams(this.shapeSeed, this.baseRadius, this.template);
 
         // Persistent terrain cache (IndexedDB)
         this.terrainCache = new TerrainCache();
@@ -122,7 +123,7 @@ class TerrainVisualizer {
             const success = await this.tileManager.initWorker(this._getEffectiveSeed());
             if (success) {
                 this.tileManager.setMode(this.mode);
-                this.tileManager.setCoastlineParams(this.shapeSeed, this.baseRadius);
+                this.tileManager.setCoastlineParams(this.shapeSeed, this.baseRadius, this.template, this.climateSeed);
                 this._updateTileFilter();
                 this.tileManagerReady = true;
                 this.useAsyncRendering = true;
@@ -583,6 +584,10 @@ class TerrainVisualizer {
 
     setContinentIndex(index) {
         this.continentIndex = Math.max(0, index);
+        // Continent 0 uses named template; continent 1+ uses seed-derived
+        if (this.continentIndex > 0) {
+            this.template = 'default';
+        }
         this._updateDerivedSeeds();
         this._centerOnStartPosition();
 
@@ -601,6 +606,19 @@ class TerrainVisualizer {
         this.render();
     }
 
+    setTemplate(template) {
+        this.template = template;
+        this._updateDerivedSeeds();
+
+        if (this.tileManager) {
+            this.tileManager.updateConfig(this._getEffectiveSeed(), this.mode);
+        }
+
+        this._updateTileFilter();
+        this.tileCache.invalidate();
+        this.render();
+    }
+
     _getEffectiveSeed() {
         return this.continentIndex === 0
             ? this.seed
@@ -611,6 +629,7 @@ class TerrainVisualizer {
         const effectiveSeed = this._getEffectiveSeed();
         this.shapeSeed = Math.floor(hash(0, 0, effectiveSeed + 111111) * 0x7FFFFFFF);
         this.startSeed = Math.floor(hash(0, 0, effectiveSeed + 333333) * 0x7FFFFFFF);
+        this.climateSeed = Math.floor(hash(0, 0, effectiveSeed + 555555) * 0x7FFFFFFF);
         this.startPosition = computeStartPosition(this.startSeed, this.shapeSeed, this.baseRadius);
     }
 
@@ -649,7 +668,7 @@ class TerrainVisualizer {
      */
     _updateTileFilter() {
         // Update coastline params on TileCache (for sync rendering)
-        this.tileCache.setCoastlineParams(this.shapeSeed, this.baseRadius);
+        this.tileCache.setCoastlineParams(this.shapeSeed, this.baseRadius, this.template);
 
         if (this.tileManager) {
             // Update tile filter (skip entire tiles far outside coastline)
@@ -657,7 +676,7 @@ class TerrainVisualizer {
                 return this._isTileInsideCoastline(tileX, tileZ, worldTileSize);
             });
             // Update coastline params (for per-pixel ocean check in worker)
-            this.tileManager.setCoastlineParams(this.shapeSeed, this.baseRadius);
+            this.tileManager.setCoastlineParams(this.shapeSeed, this.baseRadius, this.template, this.climateSeed);
         }
     }
 
@@ -974,6 +993,7 @@ window.addEventListener('DOMContentLoaded', () => {
     const seedInput = document.getElementById('seed-input');
     const modeSelect = document.getElementById('mode-select');
     const continentInput = document.getElementById('continent-input');
+    const templateSelect = document.getElementById('template-select');
 
     // Create visualizer with default seed
     const visualizer = new TerrainVisualizer(canvas, parseInt(seedInput.value));
@@ -991,10 +1011,21 @@ window.addEventListener('DOMContentLoaded', () => {
     continentInput.addEventListener('change', (e) => {
         const index = parseInt(e.target.value) || 0;
         visualizer.setContinentIndex(Math.max(0, index));
+        // Sync template dropdown: continent 1+ forces 'default'
+        if (index > 0) {
+            templateSelect.value = 'default';
+            templateSelect.disabled = true;
+        } else {
+            templateSelect.disabled = false;
+        }
     });
 
     modeSelect.addEventListener('change', (e) => {
         visualizer.setMode(e.target.value);
+    });
+
+    templateSelect.addEventListener('change', (e) => {
+        visualizer.setTemplate(e.target.value);
     });
 
     // Clear cache button

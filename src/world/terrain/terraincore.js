@@ -10,6 +10,8 @@
  */
 
 import { BIOMES } from './biomesystem.js';
+import { evaluateEnvelope } from './elevationenvelope.js';
+import { evaluateClimate } from './climategeography.js';
 
 // ============================================================================
 // NOISE FUNCTIONS
@@ -161,16 +163,18 @@ export const PEAK_BIOMES = ['mountains', 'glacier', 'alpine', 'badlands', 'highl
  * @param {number} elevation - Terrain elevation [0, 1]
  * @returns {string} Biome name
  */
-export function selectBiomeFromWhittaker(temp, precip, elevation) {
+export function selectBiomeFromWhittaker(temp, precip, elevation, tempFloor = 0) {
     // Apply elevation cooling (one-directional, above tree line only)
     const TREE_LINE = 0.55;
-    const COOLING_RATE = 0.30;  // Reduced from 0.45 to avoid pushing too many areas cold
+    const COOLING_RATE = 0.30;
 
     let effectiveTemp = temp;
     if (elevation > TREE_LINE) {
         effectiveTemp = temp - (elevation - TREE_LINE) * COOLING_RATE;
     }
-    effectiveTemp = Math.max(0, effectiveTemp);
+    // tempFloor prevents elevation cooling from pushing below template minimum
+    // (e.g. Petermark floor=0.4 means no glaciers on a hot continent)
+    effectiveTemp = Math.max(tempFloor, effectiveTemp);
 
     // High elevation overrides (above 0.75)
     if (elevation > 0.75) {
@@ -251,9 +255,10 @@ export function applySubBiomeVariation(baseBiome, x, z, seed = 12345) {
  * @param {number} x - World X coordinate
  * @param {number} z - World Z coordinate
  * @param {number} seed - World seed
+ * @param {Object|null} climateParams - Optional climate geography params (for continental mode)
  * @returns {string} Biome name
  */
-export function getBiome(x, z, seed = 12345) {
+export function getBiome(x, z, seed = 12345, climateParams = null) {
     const continentalness = getContinentalNoise(x, z, seed);
 
     // Deep ocean
@@ -273,11 +278,19 @@ export function getBiome(x, z, seed = 12345) {
 
     // Normalize to [0, 1] with smoothstep redistribution
     const elevation = normalizeNoise(elevationNoise);
-    const temp = normalizeNoise(tempNoise);
-    const humidity = normalizeNoise(humidityNoise);
+    let temp = normalizeNoise(tempNoise);
+    let humidity = normalizeNoise(humidityNoise);
 
-    // Whittaker-based selection
-    let biome = selectBiomeFromWhittaker(temp, humidity, elevation);
+    // Apply climate geography modulation when available
+    const tempFloor = climateParams ? climateParams.tempRange[0] : 0;
+    if (climateParams) {
+        const climate = evaluateClimate(x, z, temp, humidity, climateParams, elevation);
+        temp = climate.temperature;
+        humidity = climate.humidity;
+    }
+
+    // Whittaker-based selection (tempFloor prevents elevation cooling below template minimum)
+    let biome = selectBiomeFromWhittaker(temp, humidity, elevation, tempFloor);
 
     // Apply sub-biome variation
     biome = applySubBiomeVariation(biome, x, z, seed);
@@ -319,10 +332,12 @@ function getBiomeHeightScale(biomeData, maxHeight) {
  * @param {number} z - World Z coordinate
  * @param {number} seed - World seed
  * @param {number} maxHeight - Maximum terrain height (default 63)
+ * @param {Object|null} envelopeParams - Optional elevation envelope params (for continental mode)
+ * @param {Object|null} climateParams - Optional climate geography params (for continental mode)
  * @returns {number} Height in blocks
  */
-export function getContinuousHeight(x, z, seed = 12345, maxHeight = 63) {
-    const biome = getBiome(x, z, seed);
+export function getContinuousHeight(x, z, seed = 12345, maxHeight = 63, envelopeParams = null, climateParams = null) {
+    const biome = getBiome(x, z, seed, climateParams);
     const biomeData = BIOMES[biome];
 
     // Deep ocean: bottomless abyss
@@ -343,23 +358,34 @@ export function getContinuousHeight(x, z, seed = 12345, maxHeight = 63) {
 
     let height = getBiomeBaseHeight(biomeData, maxHeight) + heightNoise * getBiomeHeightScale(biomeData, maxHeight) + microDetail;
 
+    // Apply elevation envelope (continental mode)
+    let envelopeAmpScale = 1.0;
+    if (envelopeParams) {
+        const envelope = evaluateEnvelope(x, z, envelopeParams);
+        const biomeBase = getBiomeBaseHeight(biomeData, maxHeight);
+        const noiseComponent = height - biomeBase;
+        height = envelope.baseElevation + biomeBase * envelope.amplitudeScale
+                 + noiseComponent * envelope.amplitudeScale;
+        envelopeAmpScale = envelope.amplitudeScale;
+    }
+
     // Apply peak variation to high-elevation biomes
     if (PEAK_BIOMES.includes(biome)) {
         const peakNoise = octaveNoise2D(x, z, 3, 0.04, (nx, nz) => hash(nx, nz, seed));
-        const peakBonus = peakNoise * 50;
+        const peakBonus = peakNoise * 50 * envelopeAmpScale;
         height += peakBonus;
     }
 
     if (biome === 'jungle') {
         const jungleHillNoise = octaveNoise2D(x, z, 4, 0.08, (nx, nz) => hash(nx, nz, seed));
-        height += jungleHillNoise * 4;
+        height += jungleHillNoise * 4 * envelopeAmpScale;
     }
 
     const WATER_LEVEL = 6;
 
     // River valley carving (graduated with sloped banks, proportional depth)
     if (biome !== 'ocean' && biome !== 'deep_ocean') {
-        const riverInfo = getRiverInfluence(x, z, seed);
+        const riverInfo = getRiverInfluence(x, z, seed, climateParams);
         if (riverInfo && riverInfo.influence > 0) {
             // Carve depth proportional to height: 20% of height, min 3, max 8 blocks
             const carveDepth = Math.min(Math.max(3, height * 0.2), 8);
@@ -373,7 +399,7 @@ export function getContinuousHeight(x, z, seed = 12345, maxHeight = 63) {
     }
 
     // Lake carving (isLake handles its own biome/elevation filtering)
-    if (isLake(x, z, seed)) {
+    if (isLake(x, z, seed, climateParams)) {
         height = Math.min(height, WATER_LEVEL - 2);
     }
 
@@ -405,10 +431,11 @@ export function getContinuousHeight(x, z, seed = 12345, maxHeight = 63) {
  * @param {number} x - World X coordinate
  * @param {number} z - World Z coordinate
  * @param {number} seed - World seed
+ * @param {Object|null} climateParams - Optional climate geography params (for continental mode)
  * @returns {{ isRiver: boolean, influence: number } | null}
  */
-export function getRiverInfluence(x, z, seed = 12345) {
-    const biome = getBiome(x, z, seed);
+export function getRiverInfluence(x, z, seed = 12345, climateParams = null) {
+    const biome = getBiome(x, z, seed, climateParams);
 
     // Blocked biomes: no rivers at all
     if (biome === 'ocean' || biome === 'deep_ocean' ||
@@ -475,10 +502,11 @@ export function getRiverInfluence(x, z, seed = 12345) {
  * @param {number} x - World X coordinate
  * @param {number} z - World Z coordinate
  * @param {number} seed - World seed
+ * @param {Object|null} climateParams - Optional climate geography params (for continental mode)
  * @returns {boolean}
  */
-export function isRiver(x, z, seed = 12345) {
-    const info = getRiverInfluence(x, z, seed);
+export function isRiver(x, z, seed = 12345, climateParams = null) {
+    const info = getRiverInfluence(x, z, seed, climateParams);
     return info !== null && info.isRiver;
 }
 
@@ -488,10 +516,11 @@ export function isRiver(x, z, seed = 12345) {
  * @param {number} x - World X coordinate
  * @param {number} z - World Z coordinate
  * @param {number} seed - World seed
+ * @param {Object|null} climateParams - Optional climate geography params (for continental mode)
  * @returns {boolean}
  */
-export function isLake(x, z, seed = 12345) {
-    const biome = getBiome(x, z, seed);
+export function isLake(x, z, seed = 12345, climateParams = null) {
+    const biome = getBiome(x, z, seed, climateParams);
 
     // No lakes in ocean or on high mountains
     if (biome === 'ocean' || biome === 'deep_ocean') return false;
@@ -522,9 +551,11 @@ export function isLake(x, z, seed = 12345) {
  * @param {number} x - World X coordinate
  * @param {number} z - World Z coordinate
  * @param {number} seed - World seed
+ * @param {Object|null} envelopeParams - Optional elevation envelope params (for continental mode)
+ * @param {Object|null} climateParams - Optional climate geography params (for continental mode)
  * @returns {Object} Terrain parameters
  */
-export function getTerrainParams(x, z, seed = 12345) {
+export function getTerrainParams(x, z, seed = 12345, envelopeParams = null, climateParams = null) {
     const maxHeight = 63;
 
     // Sample all noise values
@@ -533,20 +564,29 @@ export function getTerrainParams(x, z, seed = 12345) {
     const humidityNoise = octaveNoise2D(x, z, 3, 0.012, (nx, nz) => hash(nx, nz, seed + 77777));
 
     // Normalize with smoothstep redistribution
-    const temperature = normalizeNoise(tempNoise);
-    const humidity = normalizeNoise(humidityNoise);
+    let temperature = normalizeNoise(tempNoise);
+    let humidity = normalizeNoise(humidityNoise);
 
-    // Get biome and height
-    const biome = getBiome(x, z, seed);
-    const height = getContinuousHeight(x, z, seed, maxHeight);
+    // Apply climate geography modulation for effective values
+    if (climateParams) {
+        const elevationNoise = octaveNoise2D(x, z, 4, 0.015, (nx, nz) => hash(nx, nz, seed));
+        const elevation = normalizeNoise(elevationNoise);
+        const climate = evaluateClimate(x, z, temperature, humidity, climateParams, elevation);
+        temperature = climate.temperature;
+        humidity = climate.humidity;
+    }
+
+    // Get biome and height (with optional envelope and climate)
+    const biome = getBiome(x, z, seed, climateParams);
+    const height = getContinuousHeight(x, z, seed, maxHeight, envelopeParams, climateParams);
     const heightNormalized = height / maxHeight;
 
     // River detection
-    const river = isRiver(x, z, seed);
+    const river = isRiver(x, z, seed, climateParams);
 
     return {
         continental,
-        effectiveContinental: continental,  // No island perturbation in simplified version
+        effectiveContinental: continental,
         temperature,
         humidity,
         biome,
